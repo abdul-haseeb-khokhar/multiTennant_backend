@@ -19,7 +19,7 @@ model Tenant {
   name String 
   plan String @default("free")
   status String @default("trial")
-  createdAt DateTime @default((now)) @map("created_at)
+  createdAt DateTime @default(now()) @map("created_at")
 
   @@map("tenants")
 }
