@@ -1,5 +1,8 @@
+-- CreateSchema
+CREATE SCHEMA IF NOT EXISTS "tenant_core";
+
 -- CreateTable
-CREATE TABLE "tenants" (
+CREATE TABLE "tenant_core"."tenants" (
     "id" TEXT NOT NULL,
     "name" TEXT NOT NULL,
     "plan" TEXT NOT NULL DEFAULT 'free',
