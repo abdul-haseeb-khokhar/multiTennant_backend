@@ -3,8 +3,11 @@ import { TenantUsersService } from './tenant-users.service';
 import { CreateTenantUserDto } from './dto/create-tenant-user.dto';
 import { UpdateTenantUserDto } from './dto/update-tenant-user.dto';
 import { QueryTenantDto } from '../tenants/dto/query-tenant.dto';
+import { UseGuards } from '@nestjs/common';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 
 @Controller('tenants/:tenantId/users')
+@UseGuards(JwtAuthGuard)
 export class TenantUsersController {
   constructor(private readonly tenantUsersService: TenantUsersService) {}
 

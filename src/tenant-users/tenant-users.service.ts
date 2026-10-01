@@ -73,4 +73,8 @@ export class TenantUsersService {
       omit: {passwordHash: true}
     });
   }
+
+  findByEmailForAuth(tenantId: string, email: string) {
+    return this.prisma.tenantUser.findFirst({where: {tenantId, email}});
+  }
 }
