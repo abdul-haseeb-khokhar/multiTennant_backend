@@ -11,29 +11,29 @@ generator client {
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
-  schemas = ["tenant_core"]
+  schemas  = ["tenant_core"]
 }
 
 model Tenant {
-  id String @id @default(uuid())
-  name String 
-  plan String @default("free")
-  status String @default("trial")
+  id        String   @id @default(uuid())
+  name      String
+  plan      String   @default("free")
+  status    String   @default("trial")
   createdAt DateTime @default(now()) @map("created_at")
 
   tenantUsers TenantUser[]
-  
+
   @@map("tenants")
   @@schema("tenant_core")
 }
 
 model TenantUser {
-  id String @id @default(uuid())
-  tenantId String @map("tenant_id")
-  email String 
-  passwordHash String @map("password_hash")
-  role String @default("agent")
-  createdAt DateTime @default(now()) @map("created_at")
+  id           String   @id @default(uuid())
+  tenantId     String   @map("tenant_id")
+  email        String
+  passwordHash String   @map("password_hash")
+  role         String   @default("agent")
+  createdAt    DateTime @default(now()) @map("created_at")
 
   tenant Tenant @relation(fields: [tenantId], references: [id])
 
