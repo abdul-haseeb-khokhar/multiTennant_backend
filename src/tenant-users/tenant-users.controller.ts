@@ -1,7 +1,8 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, Query } from '@nestjs/common';
 import { TenantUsersService } from './tenant-users.service';
 import { CreateTenantUserDto } from './dto/create-tenant-user.dto';
 import { UpdateTenantUserDto } from './dto/update-tenant-user.dto';
+import { QueryTenantDto } from '../tenants/dto/query-tenant.dto';
 
 @Controller('tenants/:tenantId/users')
 export class TenantUsersController {
@@ -13,8 +14,8 @@ export class TenantUsersController {
   }
 
   @Get()
-  findAll(@Param('tenantId') tenantId: string) {
-    return this.tenantUsersService.findAll(tenantId);
+  findAll(@Param('tenantId') tenantId: string, @Query() query: QueryTenantDto) {
+    return this.tenantUsersService.findAll(tenantId, query);
   }
 
   @Get(':id')

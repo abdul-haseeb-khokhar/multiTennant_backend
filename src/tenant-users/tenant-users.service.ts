@@ -1,6 +1,7 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { CreateTenantUserDto } from './dto/create-tenant-user.dto';
 import { UpdateTenantUserDto } from './dto/update-tenant-user.dto';
+import { QueryTenantDto } from '../tenants/dto/query-tenant.dto';
 import { Prisma } from '@prisma/client';
 import * as bcrypt from "bcrypt";
 import { PrismaService } from '../prisma/prisma.service';
@@ -31,9 +32,11 @@ export class TenantUsersService {
     }
   }
 
-  findAll(tenantId: string) {
+  findAll(tenantId: string, query: QueryTenantDto) {
     return this.prisma.tenantUser.findMany({
       where: {tenantId},
+      skip: query.skip,
+      take: query.take,
       omit: {passwordHash: true},
     })
   }
