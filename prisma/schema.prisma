@@ -21,7 +21,8 @@ model Tenant {
   status    String   @default("trial")
   createdAt DateTime @default(now()) @map("created_at")
 
-  tenantUsers TenantUser[]
+  tenantUsers  TenantUser[]
+  endCustomers EndCustomer[]
 
   @@map("tenants")
   @@schema("tenant_core")
@@ -39,5 +40,20 @@ model TenantUser {
 
   @@unique([tenantId, email])
   @@map("tenant_user")
+  @@schema("tenant_core")
+}
+
+model EndCustomer {
+  id         String   @id @default(uuid())
+  tenantId   String   @map("tenant_id")
+  externalId String   @map("external_id")
+  name       String?
+  metadata   Json?
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@unique([tenantId, externalId])
+  @@map("end_customers")
   @@schema("tenant_core")
 }

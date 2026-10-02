@@ -44,7 +44,7 @@ export class TenantsService {
 
   async remove(id: string) {
     try{
-      return this.prisma.tenant.delete({where: {id}});
+      return await this.prisma.tenant.delete({where: {id}});
     } catch(error) {
       if(error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
         throw new NotFoundException(`Tenant ${id} not found`);
