@@ -1,34 +1,55 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, Query } from '@nestjs/common';
-import { TenantsService } from './tenants.service';
-import { CreateTenantDto } from './dto/create-tenant.dto';
-import { UpdateTenantDto } from './dto/update-tenant.dto';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
+import {
+  ApiBearerAuth,
+  ApiOkResponse,
+  ApiOperation,
+  ApiTags,
+} from '@nestjs/swagger';
+import { PlatformJwtAuthGuard } from '../auth/platform-jwt-auth.guard';
+import { ApiPaginatedResponse } from '../common/pagination/api-paginated-response.decorator';
 import { QueryTenantDto } from './dto/query-tenant.dto';
+import { UpdateTenantDto } from './dto/update-tenant.dto';
+import { Tenant } from './entities/tenant.entity';
+import { TenantsService } from './tenants.service';
 
-@Controller('tenants')
+@ApiTags('platform-admin')
+@ApiBearerAuth()
+@Controller('admin/tenants')
+@UseGuards(PlatformJwtAuthGuard)
 export class TenantsController {
   constructor(private readonly tenantsService: TenantsService) {}
 
-  @Post()
-  create(@Body() createTenantDto: CreateTenantDto) {
-    return this.tenantsService.create(createTenantDto);
-  }
-
   @Get()
+  @ApiOperation({ summary: 'List all tenants' })
+  @ApiPaginatedResponse(Tenant)
   findAll(@Query() query: QueryTenantDto) {
     return this.tenantsService.findAll(query);
   }
 
   @Get(':id')
+  @ApiOkResponse({ type: Tenant })
   findOne(@Param('id') id: string) {
     return this.tenantsService.findOne(id);
   }
 
   @Patch(':id')
+  @ApiOperation({ summary: 'Rename a tenant, change its plan or suspend it' })
+  @ApiOkResponse({ type: Tenant })
   update(@Param('id') id: string, @Body() updateTenantDto: UpdateTenantDto) {
     return this.tenantsService.update(id, updateTenantDto);
   }
 
   @Delete(':id')
+  @ApiOkResponse({ type: Tenant })
   remove(@Param('id') id: string) {
     return this.tenantsService.remove(id);
   }

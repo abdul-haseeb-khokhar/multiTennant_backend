@@ -26,16 +26,18 @@ Phases 1 and 2 run **in parallel**: Phase 1 needs nobody, so do it while waiting
 **Goal:** a trustworthy base. No known security holes, stable API conventions, tests and CI.
 
 Scope:
-- [ ] Lock down `/tenants`; add `platform_admins` and `/v1/admin/...` (B1); stop callers setting `plan`/`status` on create
-- [ ] `RolesGuard` and the role matrix (B2); owner-only owner creation
-- [ ] Fix `TenantUsersService.remove` argument order (user delete always 404s today)
-- [ ] Handle `P2002`/`P2025` on update paths and signup; cap `take` (max 100, default 20)
-- [ ] Response envelope `{data,total,skip,take}` for lists (G1)
-- [ ] `/v1` prefix, `@nestjs/swagger` OpenAPI at `/docs`, error body `{statusCode, code, message}` with stable codes (F5)
-- [ ] `@nestjs/config` with env validation (fail fast on a missing `JWT_SECRET`); `.env.example`; remove stray imports (`node:test`, `typescript`); use `QueryTenantUserDto`
-- [ ] `tenants.slug`, login by slug (B3); tenant `suspended` check in the guard (B6, basic)
-- [ ] Health endpoint, request-id middleware, JSON logging with `tenantId` (F3)
-- [ ] Tests: unit tests for every service (mocked Prisma, including tenant-isolation cases), e2e tests against a test database (auth, tenant mismatch → 403, role denials); CI running lint + test + build
+- [x] Lock down `/tenants`; add `platform_admins` and `/v1/admin/...` (B1); stop callers setting `plan`/`status` on create
+- [x] `RolesGuard` and the role matrix (B2); owner-only owner creation
+- [x] Fix `TenantUsersService.remove` argument order (user delete always 404s today)
+- [x] Handle `P2002`/`P2025` on update paths and signup; cap `take` (max 100, default 20)
+- [x] Response envelope `{data,total,skip,take}` for lists (G1)
+- [x] `/v1` prefix, `@nestjs/swagger` OpenAPI at `/docs`, error body `{statusCode, code, message}` with stable codes (F5)
+- [x] `@nestjs/config` with env validation (fail fast on a missing `JWT_SECRET`); `.env.example`; remove stray imports (`node:test`, `typescript`); use `QueryTenantUserDto`
+- [x] `tenants.slug`, login by slug (B3); tenant `suspended` check in the guard (B6, basic)
+- [x] Health endpoint, request-id middleware, JSON logging with `tenantId` (F3)
+- [x] Tests: unit tests for every service (mocked Prisma, including tenant-isolation cases), e2e tests against a test database (auth, tenant mismatch → 403, role denials); CI running lint + test + build
+
+Implementation status (branch `phase-0-foundation`, not committed): all items are built; `npm test` (127), `npm run test:e2e` (67), `npm run build` and a full `tsc --noEmit` pass locally. Caveats, details in `CLAUDE.md` known issues 6, 8 and 9: the e2e suite uses **mocked Prisma** (the database-backed check is the CI `migrations` job), the new migration is **not applied** anywhere yet, the CI workflow has **not run yet**, and `oxlint` could not run on the build machine (blocked native binary), so lint is unverified locally. The static OpenAPI document is `docs/openapi.json` (served live at `/docs`).
 
 Depends on: nothing. Decisions needed: B1, B2, B3, F5, G1 (all backend-owned; frontend should review G1).
 **Done when:** known issues 1–9 in `CLAUDE.md` are closed, CI is green, and the OpenAPI document is published for the frontend.

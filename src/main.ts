@@ -1,11 +1,15 @@
 import { NestFactory } from '@nestjs/core';
+import { ConfigService } from '@nestjs/config';
 import { AppModule } from './app.module';
-import { ValidationPipe } from '@nestjs/common';
+import { configureApp, setupSwagger } from './app.setup';
+import { JsonLogger } from './common/logging/json-logger';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
-  app.useGlobalPipes(new ValidationPipe({whitelist: true, transform: true}));
-  app.enableCors({origin: process.env.FRONTEND_URL});
-  await app.listen(process.env.PORT ?? 3000);
+  const app = await NestFactory.create(AppModule, { bufferLogs: true });
+  app.useLogger(new JsonLogger());
+  configureApp(app);
+  setupSwagger(app);
+  app.enableShutdownHooks();
+  await app.listen(app.get(ConfigService).get<number>('PORT', 3000));
 }
 void bootstrap();

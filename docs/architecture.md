@@ -55,15 +55,15 @@ Principles:
 ### 4.1 `tenant_core` (backend). Exists today
 | Table | Columns | Notes |
 |---|---|---|
-| `tenants` | id, name, plan (`free`/`pro`/`enterprise`), status (`trial`/`active`/`suspended`), created_at | |
+| `tenants` | id, name, slug (unique), plan (`free`/`pro`/`enterprise`), status (`trial`/`active`/`suspended`), created_at | |
+| `platform_admins` | id, email (unique), password_hash, created_at | our own staff; created with `npm run platform-admin:create` |
 | `tenant_user` | id, tenant_id, email, password_hash, role (`owner`/`admin`/`agent`), created_at | unique (tenant_id, email), FK RESTRICT |
 | `end_customers` | id, tenant_id, external_id, name?, metadata jsonb?, created_at | unique (tenant_id, external_id), FK RESTRICT |
 
 ### 4.2 `tenant_core`: **Proposed** additions
 | Table / change | Purpose |
 |---|---|
-| `tenants.slug` (unique), `tenants.deleted_at`, `updated_at` | Friendly login/embed identifier, soft delete |
-| `platform_admins` | Our own staff, separate from tenant users (see B1) |
+| `tenants.deleted_at`, `updated_at` | Soft delete (`tenants.slug` and `platform_admins` are built, see 4.1) |
 | `api_keys` (tenant_id, type `widget`/`server`, key_prefix, key_hash, allowed_origins[], revoked_at) | Resolve a public widget key to a tenant, with per-tenant origin allow-list |
 | `channel_connections` (tenant_id, channel, provider, external_account_id, credentials_ref, status) | Map a WhatsApp number or phone number to a tenant for inbound webhooks |
 | `agent_configs` (tenant_id, version, config jsonb) | Persona, tone, language, greeting, escalation rules, working hours, allowed actions |
@@ -95,7 +95,7 @@ Details and reasoning are in [team-alignment.md](team-alignment.md) (C and E sec
 ## 5. Key flows
 
 ### 5.1 Staff sign-up and login (exists)
-`POST /auth/signup` creates tenant plus owner in one transaction and returns a JWT. `POST /auth/login` takes `tenantId`, email and password and returns a JWT with `sub`, `tenantId`, `role`. Tenant-scoped routes are `/tenants/:tenantId/...` and the guard rejects a token whose `tenantId` differs from the URL.
+`POST /v1/auth/signup` creates tenant plus owner in one transaction (the tenant `slug` is the caller's or derived from the name) and returns a JWT. `POST /v1/auth/login` takes `tenantSlug`, email and password and returns a JWT with `sub`, `tenantId`, `role`, `scope: "tenant"`. Tenant-scoped routes are `/v1/tenants/:tenantId/...` and the guard rejects a token whose `tenantId` differs from the URL (403 `TENANT_MISMATCH`) or whose tenant is suspended (403 `TENANT_SUSPENDED`). Platform admins log in at `POST /v1/admin/auth/login` and get a token with `scope: "platform"` for `/v1/admin/...`.
 
 ### 5.2 Customer chat from the widget (**Proposed**)
 1. The widget loads with the tenant's public `widgetKey` and a locally stored `visitorId`.
@@ -122,13 +122,13 @@ Default is **soft delete** (`status=suspended`, `deleted_at`). Hard delete is a 
 
 | Module | Routes | Auth |
 |---|---|---|
-| `auth` | `POST /auth/signup`, `POST /auth/login` | public |
-| `tenants` | `POST/GET /tenants`, `GET/PATCH/DELETE /tenants/:id` | **none** (to be locked down, see B1) |
-| `tenant-users` | CRUD `/tenants/:tenantId/users` | JWT + tenant match |
-| `end-customers` | CRUD `/tenants/:tenantId/customers` | JWT + tenant match |
-| `app` | `GET /` ("Hello World") | public |
+| `auth` | `POST /v1/auth/signup`, `POST /v1/auth/login`, `POST /v1/admin/auth/login` | public |
+| `tenants` | `GET /v1/admin/tenants`, `GET/PATCH/DELETE /v1/admin/tenants/:id` (no create: signup is the only way in) | platform-admin token |
+| `tenant-users` | CRUD `/v1/tenants/:tenantId/users` | JWT + tenant match + role (B2) |
+| `end-customers` | CRUD `/v1/tenants/:tenantId/customers` | JWT + tenant match + role (B2) |
+| `health` | `GET /health`, `GET /health/ready` (unversioned) | public |
 
-Global `ValidationPipe` (whitelist + transform), CORS limited to `FRONTEND_URL`, `PrismaModule` is global. Known defects are listed in `CLAUDE.md`.
+Global `ValidationPipe` (whitelist + transform), `/v1` prefix, error body `{statusCode, code, message}` (plus `details` for validation and `requestId`), list envelope `{data,total,skip,take}`, request-id middleware and JSON logs, CORS limited to `FRONTEND_URL`, OpenAPI at `/docs`, `PrismaModule` is global. Known defects are listed in `CLAUDE.md`.
 
 ## 7. Roadmap (backend)
 

@@ -17,6 +17,7 @@ datasource db {
 model Tenant {
   id        String   @id @default(uuid())
   name      String
+  slug      String   @unique
   plan      String   @default("free")
   status    String   @default("trial")
   createdAt DateTime @default(now()) @map("created_at")
@@ -55,5 +56,15 @@ model EndCustomer {
 
   @@unique([tenantId, externalId])
   @@map("end_customers")
+  @@schema("tenant_core")
+}
+
+model PlatformAdmin {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@map("platform_admins")
   @@schema("tenant_core")
 }

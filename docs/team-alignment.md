@@ -65,6 +65,7 @@ Status: ☐
 ### B1. Platform admin and the open `/tenants` routes: BE
 `/tenants` currently has no authentication: anyone can list, edit or delete any tenant.
 **Proposal:** move to `/v1/admin/tenants`, guarded by a separate **platform-admin** identity (own table `platform_admins`, own login `POST /v1/admin/auth/login`, token claim `scope: "platform"`). Tenants are created only through `POST /auth/signup` (plan and status are not caller-settable).
+**Built (Phase 0):** as proposed. `/v1/admin/tenants` has list, get, patch (name, plan, status) and delete; there is no create route. Platform admins are created from a shell with `npm run platform-admin:create`.
 Status: ☐
 
 ### B2. Roles: BE (FE and AI review)
@@ -80,11 +81,13 @@ Status: ☐
 | Approve high-risk AI actions (E4) | ✓ | ✓ | |
 
 Enforced by a `RolesGuard` on the backend; the engine receives the acting `userId` and `role` for audit only.
+**Built (Phase 0), for the rows that exist today:** owner and admin create, change and delete users (an admin cannot touch an owner or promote anyone to owner; a tenant keeps at least one owner, else 409 `LAST_OWNER`). All roles read users, and read, create and edit customers; only owner and admin delete customers. Errors: `INSUFFICIENT_ROLE`, `OWNER_REQUIRED`. Other rows arrive with their features.
 Status: ☐
 
 ### B3. How a staff member identifies their tenant at login: BE + FE
 Login currently needs a `tenantId` UUID, which users do not know.
 **Proposal:** add `tenants.slug` (unique); login takes `{ tenantSlug, email, password }`. The dashboard can derive the slug from a subdomain (`acme.app.example.com`) or a field.
+**Built (Phase 0):** `POST /v1/auth/signup` accepts an optional `tenantSlug` (3-40 chars, `a-z 0-9 -`); when omitted it is derived from the tenant name. Taken or reserved slugs give 409 `SLUG_TAKEN`. Login takes `{ tenantSlug, email, password }`; the tenant UUID is no longer accepted.
 Status: ☐
 
 ### B4. End-customer identity per channel: BE + AI
@@ -107,6 +110,7 @@ Status: ☐
 
 ### B6. Tenant status and plan enforcement: BE
 **Proposal:** the backend gateway rejects work for `suspended` or soft-deleted tenants (403) and enforces plan limits (monthly messages, KB size, seats) from `usage_daily`. The engine does not check plans; it trusts the gateway. It does cost-protection itself (F6).
+**Built (Phase 0), suspended only:** the staff guard answers 403 `TENANT_SUSPENDED` for a suspended tenant, and so does login. Soft delete and plan limits come later (Phase 3 and 5).
 Status: ☐
 
 ---
@@ -233,6 +237,7 @@ Status: ☐
 
 ### F3. Observability: BE + AI
 **Proposal:** `X-Request-Id` created at the gateway, propagated to the engine and included in every log line; JSON logs with `tenantId`, `conversationId`, `endCustomerId`; `GET /health` on both services; error tracking later.
+**Built (Phase 0):** `X-Request-Id` accepted or generated and echoed on every response and error body; one JSON access-log line per request with `requestId`, `tenantId`, `userId`, path (no query string), status and duration; `GET /health` (liveness) and `GET /health/ready` (database). `conversationId` and `endCustomerId` fields arrive with the gateway.
 Status: ☐
 
 ### F4. Secrets and environment variables: BE + AI
@@ -251,6 +256,7 @@ Status: ☐
 
 ### F5. API conventions and versioning: BE
 **Proposal:** all public routes under `/v1`; OpenAPI published via `@nestjs/swagger` at `/docs`; error body `{ "statusCode", "code", "message" }` where `code` is a stable machine string (`TENANT_SUSPENDED`, `PLAN_LIMIT_REACHED`, …). The engine follows the same error shape.
+**Built (Phase 0):** body is `{ statusCode, code, message }`, plus `details` (list of strings) for validation errors and `requestId`. `/health` and `/health/ready` are the only unversioned routes. OpenAPI: `/docs` (UI), `/docs-json`, and a static copy in `docs/openapi.json`. The current codes are in `src/common/errors/error-codes.ts`; the frontend should map each to `errors.<code>`.
 Status: ☐
 
 ### F6. Abuse and cost protection: BE + AI
@@ -267,6 +273,7 @@ Status: ☐
 
 ### G1. Lists and pagination: BE (change affects FE)
 Lists currently return a bare array. **Proposal (changing now is cheap, later it is a breaking change):** `GET` lists return `{ "data": [...], "total": n, "skip": 0, "take": 20 }`, default `take=20`, maximum 100.
+**Built (Phase 0):** as proposed, for users, customers and admin tenants. `take` above 100, or a negative `skip`, returns 400 `VALIDATION_ERROR` instead of being clamped. Lists are ordered by `createdAt`, then `id`, so paging is stable. **FE: please review this one.**
 Status: ☐
 
 ### G2. Dashboard authentication: BE + FE
