@@ -1,6 +1,6 @@
 # CLAUDE.md: multiTennant_backend
 
-Backend core of a multi-tenant **AI customer-support platform** (call centres and businesses put an AI agent in front of their customers; humans take over when needed). This repo is the **backend core** only. Full design: [docs/architecture.md](docs/architecture.md). Open decisions with the other teams: [docs/team-alignment.md](docs/team-alignment.md). Read both before building features.
+Backend core of a multi-tenant **AI customer-support platform** (call centres and businesses put an AI agent in front of their customers; humans take over when needed). This repo is the **backend core** only. Full design: [docs/architecture.md](docs/architecture.md). Open decisions with the other teams: [docs/team-alignment.md](docs/team-alignment.md). Read both before building features; the phase plan is in [docs/backend-roadmap.md](docs/backend-roadmap.md).
 
 ## Team split
 - **Backend core (this repo, Abdul Haseeb):** tenants, auth, users/roles, end customers, keys, channel connections, agent config, plans/usage, gateway + dashboard API.
@@ -32,6 +32,7 @@ src/
   tenant-users/           CRUD /tenants/:tenantId/users      (guarded)
   end-customers/          CRUD /tenants/:tenantId/customers  (guarded)
 prisma/schema.prisma      Tenant, TenantUser, EndCustomer (schema tenant_core)
+src/lang/<locale>/<ns>.json   (planned, H7) UI translations with stable keys, `en` is the source; served at /v1/i18n
 docs/                     architecture + team alignment
 ```
 Each feature: `*.module.ts`, `*.controller.ts`, `*.service.ts`, `dto/` (`Create*`, `Update*` = `PartialType(Create*)`, `Query*` with `skip`/`take`), `entities/` (empty scaffolds, unused).
@@ -61,10 +62,11 @@ Each feature: `*.module.ts`, `*.controller.ts`, `*.service.ts`, `dto/` (`Create*
 7. `src/auth/auth.module.ts:13` reads `JWT_SECRET` at import time and nothing loads `.env` explicitly (needs a runtime check); `prisma.config.ts` imports `dotenv`, which is not in `package.json`.
 8. Stray imports: `node:test` in `end-customers.service.ts:7`; `typescript` in `tenant-users/dto/query-tenant-user.dto.ts:3`; `tenant-users.controller.ts` uses `QueryTenantDto` instead of `QueryTenantUserDto`.
 9. Tests: only `tenants.service.spec.ts` is real. The tenant-user and end-customer specs lack a `PrismaService` provider (DI failure); the e2e test expects "Hello World!" and needs a DB.
-10. Login needs a tenant UUID (B3); no refresh tokens, throttling, password reset or email verification.
+10. Login needs a tenant UUID (B3); no refresh tokens, throttling, password reset or email verification. Planned: invites (H1), reset (H2), verification (H4), user status, audit log (H6), in-app notifications (H5).
+11. `POST /tenants/:tenantId/users` takes a password for another person. It is to be replaced by invites where staff set their own password (H1).
 
 ## Roadmap
-Phase 0 foundation fixes → 1 shared infra → 2 widget keys + gateway → 3 human-agent flow → 4 agent config / knowledge / usage → 5 WhatsApp + voice → 6 hardening. Details in docs/architecture.md §7.
+Phase 0 foundation and hardening → 1 account and team management → 2 shared infra and engine contract (parallel with 1) → 3 gateway and widget entry → 4 human-agent flow and notifications → 5 tenant config, knowledge, actions, usage → 6 WhatsApp and voice → 7 agent productivity (deferred) → 8 production hardening. Scope checklists and exit criteria: [docs/backend-roadmap.md](docs/backend-roadmap.md). Tick boxes there as work completes.
 
 ## Working notes
 - Do not invent facts about the AI engine's code beyond its schema (shared in chat, see docs); ask or record a question in team-alignment instead.

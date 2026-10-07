@@ -72,7 +72,8 @@ Status: ☐
 | Capability | owner | admin | agent |
 |---|---|---|---|
 | Delete tenant, change plan/billing | ✓ | | |
-| Manage users (create/delete/change role); only owners can create or change owners | ✓ | ✓ (not owners) | |
+| Invite, disable, delete users and change roles (H1); only owners can invite or change owners | ✓ | ✓ (not owners) | |
+| View the staff audit log (H6) | ✓ | ✓ | |
 | Agent config, knowledge base, integrations, API keys | ✓ | ✓ | read-only |
 | See all conversations and customers | ✓ | ✓ | ✓ |
 | Claim, reply, release, resolve conversations | ✓ | ✓ | ✓ |
@@ -282,6 +283,70 @@ Status: ☐
 
 ---
 
+## H. Staff lifecycle, notifications, audit log and languages (backend)
+
+### H1. Staff invitations: BE (FE builds the screens)
+An owner or admin never sets another person's password. They invite by email and role; the invitee sets their own password.
+**Proposal:**
+- Table `staff_invites` (tenant_id, email, role, token_hash, expires_at (7 days), invited_by, accepted_at, revoked_at). The token is 32 random bytes, stored **hashed**, single use.
+- `POST /v1/tenants/:tenantId/invites` `{ email, role }` creates it; `GET` lists pending; `DELETE …/:id` revokes. An admin can invite `admin`/`agent`; only an owner can invite `owner`.
+- `POST /v1/auth/invites/accept` `{ token, password, name? }` creates the `tenant_user` and returns a JWT.
+- The current `POST /tenants/:tenantId/users` (which takes a password) is replaced by invites; `PATCH` keeps role/status changes only, never another user's password.
+Status: ☐
+
+### H2. Password reset and disabled/changed credentials: BE
+**Proposal:** `POST /v1/auth/password-reset/request` `{ tenantSlug, email }` always answers 202 (no account enumeration); `POST /v1/auth/password-reset/confirm` `{ token, password }`. Reset tokens: hashed, single use, 1 hour. Throttled per IP and per email.
+Add `tenant_user.status` (`active`/`disabled`) and `password_changed_at`; `JwtStrategy.validate` rejects tokens issued before `password_changed_at` and for disabled users. This costs one lookup per request and makes "remove access now" real.
+Status: ☐
+
+### H3. Email delivery: BE (**needs a decision from Abdul**)
+Invites, resets and verification need to reach a person, even though notifications themselves are in-app only.
+**Proposal:** a `Mailer` interface with two implementations: `ConsoleMailer` (logs the link; used in dev) and a real provider (SMTP, SES or Resend) chosen later. Until a provider is chosen, the invite and reset-request responses can also return the link to the owner/admin to pass on manually (flag `MAIL_MODE=link`), and that mode is **disabled in production**.
+Open: which provider and sender domain.
+Status: ☐
+
+### H4. Email verification: BE
+**Proposal:** `tenant_user.email_verified_at`. Signup sends a verification link; an unverified owner can use the trial but cannot invite staff or move to a paid plan. A user who accepts an **emailed** invite is verified at once (they proved access to the address). Lower priority than H1–H2.
+Status: ☐
+
+### H5. In-app notifications: BE (FE shows them)
+Notifications are shown in the app only (no push, no email).
+**Proposal:**
+- Table `notifications` (id, tenant_id, user_id, type, title_key, body_key, params jsonb, link, read_at, created_at); one row per recipient (staff teams are small), purged after 90 days. Text is stored as **translation keys plus params** so it renders in each user's language (H7).
+- Created by the backend from engine events (D5) and its own events: `conversation.escalated` (all agents), `conversation.assigned` (assignee), `action.proposed` (owners/admins), `ingestion.failed`, `invite.accepted`, `usage.threshold` (80% and 100% of plan limit).
+- API: `GET /v1/tenants/:tenantId/notifications?unread=true`, `POST …/:id/read`, `POST …/read-all`; unread count in `GET /me`; live delivery over the existing SSE stream as `notification.created`.
+Status: ☐
+
+### H6. Staff audit log: BE
+Distinct from `ai_engine.agent_actions`, which records what the AI did.
+**Proposal:** append-only `audit_logs` (id, tenant_id, actor_user_id, actor_role, action, target_type, target_id, before jsonb, after jsonb, ip, user_agent, request_id, created_at). Actions include `user.invited`, `user.role_changed`, `user.disabled`, `user.deleted`, `config.updated`, `knowledge.deleted`, `apikey.created`, `apikey.revoked`, `integration.updated`, `action.approved`, `tenant.suspended`. Secrets are never stored in `before`/`after`. The application role has INSERT and SELECT only. Visible to `owner` and `admin` at `GET /v1/tenants/:tenantId/audit-logs?actor=&action=&from=&to=`; retained at least 12 months. Implemented with a `@Audit('user.deleted')` decorator and interceptor.
+Status: ☐
+
+### H7. Languages (i18n): BE serves, FE consumes
+**Proposal (Abdul's design, with refinements):**
+- Files live in `src/lang/<locale>/<namespace>.json`, for example `src/lang/en/common.json` and `src/lang/ur/common.json`. Locale codes are BCP-47 (`en`, `ur`, …). Namespaces: `common`, `errors`, `notifications`, `widget`.
+- Each file is key/value. **Keys are stable ids** (`conversation.status.escalated`), not English sentences, so rewording English never breaks other languages. `en` is the source of truth. Placeholders and plurals use ICU syntax (`"{count, plural, one {# new message} other {# new messages}}"`).
+- API (public, cacheable, no auth, because the embedded widget needs it): `GET /v1/i18n/locales` → `[{ code, name, dir: "ltr"|"rtl" }]` (Urdu is `rtl`); `GET /v1/i18n/:locale/:namespace` → the JSON, with `ETag` and `Cache-Control`. A missing key falls back to `en`.
+- Errors: every API error already carries a stable `code` (F5); the frontend translates it through `errors.<code>`. The backend `message` stays English for logs.
+- Which language applies: `tenants.default_locale`, `tenant_user.locale` (dashboard), `end_customers.locale` (nullable), widget uses the browser language falling back to the tenant default. Languages the AI may reply in are `agent_config.languages` (E1). The reply language itself is the AI engine's job.
+- Tenant-specific wording (the greeting, fallback message, handoff text) belongs in `agent_config`, **not** in these files.
+- A script checks in CI that every locale has all `en` keys (a warning, not a failure). Launch locales: `en`, `ur`.
+- Build note: `nest build` only compiles TypeScript, so `src/lang/**/*.json` must be listed under `assets` in `nest-cli.json`.
+Status: ☐
+
+### H8. Deliberately deferred or owned elsewhere
+| Topic | Decision |
+|---|---|
+| Attachments (images/files in chat) | Out of scope: text chat only for now |
+| Email as a customer channel | Out of scope |
+| Conversation analytics (resolution rate, escalation rate, satisfaction) | **AI engine owns** it. The backend keeps only usage metering for plans (`usage_daily`) |
+| Routing rules and SLAs | Deferred. **Owner: backend + frontend** (who gets an escalated conversation, queue, timers, alerts all depend on staff data). The AI engine only decides *when* to escalate (C6). For now agents claim from one shared queue and `escalated_at` gives waiting time |
+| Agent tooling (internal notes, tags, canned replies, transfer) | Deferred, undecided. **Owner: backend + frontend**; tables would live in `tenant_core` with a plain `conversation_id` column (no FK). Transfer = reassign via the engine's assign/claim API. **AI-assisted extras** (suggested draft replies, auto-tags, sentiment) would be owned by the AI engine, also deferred |
+| Billing and payments | Out of scope |
+Status: ☐
+
+---
+
 ## Appendix A: Proposed engine internal API (called by the backend)
 
 All calls carry `Authorization`, `X-Tenant-Id`, `X-Request-Id` (D2) and, for commands, `Idempotency-Key`.
@@ -320,6 +385,11 @@ Engine → backend: `POST /internal/events` (D5), `GET /internal/tenants/:id/age
 | Realtime | `GET /tenants/:tenantId/events` (SSE) |
 | Widget | `POST /widget/sessions`, `POST /widget/messages`, `GET /widget/messages/stream` |
 | Platform admin | `/admin/auth/login`, `/admin/tenants…` |
+| Invites | `POST/GET /tenants/:tenantId/invites`, `DELETE …/:id`, `POST /auth/invites/accept` (H1) |
+| Password reset | `POST /auth/password-reset/request`, `POST /auth/password-reset/confirm` (H2) |
+| Notifications | `GET /tenants/:tenantId/notifications`, `POST …/:id/read`, `POST …/read-all` (H5) |
+| Audit log | `GET /tenants/:tenantId/audit-logs` (H6) |
+| Languages | `GET /i18n/locales`, `GET /i18n/:locale/:namespace` (H7, public) |
 
 ## Appendix C: Response checklist (copy into your reply)
 
@@ -331,5 +401,6 @@ D1 ☐  D2 ☐  D3 ☐  D4 ☐  D5 ☐  D6 ☐  D7 ☐  D8 ☐
 E1 ☐  E2 ☐  E3 ☐  E4 ☐  E5 ☐
 F1 ☐  F2 ☐  F3 ☐  F4 ☐  F5 ☐  F6 ☐  F7 ☐
 G1 ☐  G2 ☐  G3 ☐  G4 ☐
+H1 ☐  H2 ☐  H3 ☐  H4 ☐  H5 ☐  H6 ☐  H7 ☐  H8 ☐
 ```
 Blocking items for the next sprint: **A1, A2, A5, B5, C1, C2, D1, D2**.

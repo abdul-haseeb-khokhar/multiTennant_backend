@@ -70,6 +70,13 @@ Principles:
 | `tenant_integrations` (tenant_id, kind, credentials_encrypted) | Credentials for the tenant's own systems that agent actions call |
 | `knowledge_sources` (tenant_id, name, type, storage_key, status, error, created_at) | Uploaded docs/URLs and their ingestion state (chunks live in `ai_engine`) |
 | `usage_daily` (tenant_id, day, messages, tokens_in, tokens_out, call_minutes) | Plan limits and billing |
+| `staff_invites` (tenant_id, email, role, token_hash, expires_at, invited_by, accepted_at, revoked_at) | Staff set their own password via an invite (H1) |
+| `password_resets` (user_id, token_hash, expires_at, used_at) | Self-service password reset (H2) |
+| `notifications` (tenant_id, user_id, type, title_key, body_key, params, link, read_at) | In-app notifications, stored as translation keys (H5) |
+| `audit_logs` (tenant_id, actor_user_id, action, target_type, target_id, before, after, ip, request_id) | Append-only record of staff and admin actions (H6) |
+| `tenant_user` + `status`, `email_verified_at`, `password_changed_at`, `locale`; `tenants.default_locale`; `end_customers.locale` | Account state and language preferences (H2, H4, H7) |
+
+Translations are files, not tables: `src/lang/<locale>/<namespace>.json`, served at `/v1/i18n/...` (H7).
 
 ### 4.3 `ai_engine` (Abdullah). Exists today
 `conversations`, `messages`, `knowledge_chunks` (`vector(768)`), `call_logs`, `agent_actions`; `tenant_id` is a plain indexed column, with the foreign key to `tenant_core.tenants(id)` added as raw SQL.
@@ -125,15 +132,19 @@ Global `ValidationPipe` (whitelist + transform), CORS limited to `FRONTEND_URL`,
 
 ## 7. Roadmap (backend)
 
-| Phase | Scope | Depends on |
-|---|---|---|
-| 0 | Foundation fixes: lock down `/tenants`, role guard, fix user delete, duplicate-error handling, `take` cap, config module, real tests | nothing |
-| 1 | Shared infra agreement: one DB, per-project `?schema=`, compose file + init SQL, migration order, FK and delete rule, seed tenant | A1–A6 |
-| 2 | Widget keys, widget sessions, gateway to the engine, end-customer linking | B4, B5, D1–D3 |
-| 3 | Human-agent flow: escalated queue, claim/release, reply, SSE to the dashboard | C1–C4, D5 |
-| 4 | Agent config, knowledge-source management, integrations/secrets, usage and plan limits, admin API | E1–E4 |
-| 5 | WhatsApp and voice channels, webhooks, recordings | D4, E5 |
-| 6 | Hardening: RLS, rate limits, retention/erasure, observability, CI/CD | F1–F7 |
+Full plan with scope checklists, dependencies and exit criteria: [backend-roadmap.md](backend-roadmap.md).
+
+| Phase | Name |
+|---|---|
+| 0 | Foundation and hardening |
+| 1 | Account and team management (invites, reset, audit log, i18n) |
+| 2 | Shared infrastructure and engine contract (runs in parallel with 1) |
+| 3 | Gateway and widget entry |
+| 4 | Human-agent flow and notifications |
+| 5 | Tenant configuration, knowledge, actions and usage |
+| 6 | Channels: WhatsApp and voice |
+| 7 | Human-agent productivity: routing, SLAs, notes, transfer (deferred) |
+| 8 | Production hardening and launch |
 
 ## 8. Out of scope for now
-Billing/payment processing, SSO/SAML, multi-region, mobile apps, analytics dashboards beyond basic usage.
+Chat attachments (text chat only), email as a customer channel, push/email notifications (in-app only), conversation analytics (owned by the AI engine; the backend keeps plan usage metering only), routing rules/SLAs and agent tooling such as notes, tags and canned replies (deferred), billing/payment processing, SSO/SAML, multi-region, mobile apps. See H8 in [team-alignment.md](team-alignment.md).
