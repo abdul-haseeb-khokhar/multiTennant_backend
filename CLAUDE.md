@@ -75,7 +75,7 @@ Phase 0 closed the original issues 1-9 (unprotected `/tenants`, unenforced roles
 5. Tenant hard delete (`DELETE /v1/admin/tenants/:id`) only succeeds for a tenant with no users or customers (`RESTRICT`); the real offboarding procedure (architecture §5.6) is Phase 8.
 6. The e2e tests run against mocked Prisma, so SQL, constraints and migrations are exercised only by the CI `migrations` job (`migrate deploy` plus a drift check on a throwaway Postgres), not by the HTTP tests.
 7. Email addresses are case-sensitive (`A@x.com` and `a@x.com` are different users). Decide on normalisation together with H1.
-8. Migration `20261007100000_add_tenant_slug_and_platform_admins` is written but **not applied** to any database yet. Review and apply it with `prisma migrate dev` / `migrate deploy`. It backfills `slug` for existing tenants as `<name>-<first 8 chars of id>`; log in with that slug or rename via the platform-admin route (rename of slug is not exposed yet).
+8. Migration `20261007100000_add_tenant_slug_and_platform_admins` is applied to the local `multitenant` database (`prisma migrate status` says up to date; a pre-migration dump is in the Phase 0 session's scratchpad). Any other database needs `prisma migrate deploy`. It backfills `slug` for existing tenants as `<name>-<first 8 chars of id>`; log in with that slug or rename via the platform-admin route (rename of slug is not exposed yet).
 9. `oxlint` could not run on the Windows machine that built Phase 0 (an Application Control policy blocks its native binary). Lint there was checked only by `tsc --noUnusedLocals` and Prettier; CI runs the real linter.
 
 ## Roadmap
