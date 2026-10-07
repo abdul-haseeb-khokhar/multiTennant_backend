@@ -1,14 +1,21 @@
-import { IsString, IsOptional, IsObject } from "class-validator";
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { IsObject, IsOptional, IsString } from 'class-validator';
 
 export class CreateEndCustomerDto {
-    @IsString()
-    externalId: string;
+  @ApiProperty({
+    example: 'web_5f1c...',
+    description: 'Unique per tenant (B4)',
+  })
+  @IsString()
+  externalId: string;
 
-    @IsOptional()
-    @IsString()
-    name?: string;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  name?: string;
 
-    @IsOptional()
-    @IsObject()
-    metadata?: Record<string, unknown>;
+  @ApiPropertyOptional({ type: 'object', additionalProperties: true })
+  @IsOptional()
+  @IsObject()
+  metadata?: Record<string, unknown>;
 }

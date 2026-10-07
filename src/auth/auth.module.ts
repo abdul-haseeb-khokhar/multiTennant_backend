@@ -1,21 +1,40 @@
-import { Module, forwardRef } from '@nestjs/common';
-import { JwtModule } from '@nestjs/jwt';
+import { Module } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { JwtModule, JwtModuleOptions } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
-import { JwtStrategy } from './jwt.strategy';
-import { JwtAuthGuard } from './jwt-auth.guard';
-import { AuthService } from './auth.service';
 import { AuthController } from './auth.controller';
-import { TenantUsersModule } from '../tenant-users/tenant-users.module';
+import { AuthService } from './auth.service';
+import { JwtAuthGuard } from './jwt-auth.guard';
+import { JwtStrategy } from './jwt.strategy';
+import { PlatformAuthController } from './platform-auth.controller';
+import { PlatformAuthService } from './platform-auth.service';
+import { PlatformJwtAuthGuard } from './platform-jwt-auth.guard';
+import { PlatformJwtStrategy } from './platform-jwt.strategy';
+import { RolesGuard } from './roles.guard';
 
 @Module({
   imports: [
-    forwardRef(() => TenantUsersModule), PassportModule.register({defaultStrategy: 'jwt'}), JwtModule.register({
-      secret:process.env.JWT_SECRET,
-      signOptions: {expiresIn: (process.env.JWT_EXPIRES_IN ?? '1d') as any},
+    PassportModule.register({ defaultStrategy: 'jwt' }),
+    JwtModule.registerAsync({
+      inject: [ConfigService],
+      useFactory: (config: ConfigService): JwtModuleOptions => ({
+        secret: config.getOrThrow<string>('JWT_SECRET'),
+        signOptions: {
+          expiresIn: config.get('JWT_EXPIRES_IN', '1d') as any,
+        },
+      }),
     }),
   ],
-  providers: [AuthService, JwtStrategy, JwtAuthGuard],
-  controllers: [AuthController],
-  exports: [JwtAuthGuard, PassportModule]
+  providers: [
+    AuthService,
+    PlatformAuthService,
+    JwtStrategy,
+    PlatformJwtStrategy,
+    JwtAuthGuard,
+    PlatformJwtAuthGuard,
+    RolesGuard,
+  ],
+  controllers: [AuthController, PlatformAuthController],
+  exports: [JwtAuthGuard, PlatformJwtAuthGuard, RolesGuard, PassportModule],
 })
 export class AuthModule {}
