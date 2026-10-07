@@ -20,6 +20,7 @@ export class EndCustomersService {
           tenantId,
           externalId: dto.externalId,
           name: dto.name,
+          locale: dto.locale,
           metadata: dto.metadata as Prisma.InputJsonValue,
         },
       });
@@ -70,6 +71,7 @@ export class EndCustomersService {
         data: {
           externalId: dto.externalId,
           name: dto.name,
+          locale: dto.locale,
           metadata: dto.metadata as Prisma.InputJsonValue,
         },
       });

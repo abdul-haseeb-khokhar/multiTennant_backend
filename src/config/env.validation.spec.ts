@@ -14,6 +14,7 @@ describe('validateEnv', () => {
       PLATFORM_JWT_EXPIRES_IN: '1h',
       PORT: 3000,
       NODE_ENV: 'development',
+      MAIL_MODE: 'console',
     });
   });
 
@@ -62,5 +63,49 @@ describe('validateEnv', () => {
     expect(() => validateEnv({ ...valid, NODE_ENV: 'staging' })).toThrow(
       /NODE_ENV/,
     );
+  });
+
+  describe('MAIL_MODE (H3)', () => {
+    it('accepts console and link outside production', () => {
+      expect(validateEnv({ ...valid, MAIL_MODE: 'link' })).toMatchObject({
+        MAIL_MODE: 'link',
+      });
+      expect(
+        validateEnv({ ...valid, NODE_ENV: 'test', MAIL_MODE: 'link' }),
+      ).toMatchObject({ MAIL_MODE: 'link' });
+    });
+
+    it('refuses an unknown mode', () => {
+      expect(() => validateEnv({ ...valid, MAIL_MODE: 'smtp' })).toThrow(
+        /MAIL_MODE/,
+      );
+    });
+
+    it('refuses MAIL_MODE=link when NODE_ENV=production, so a link never leaks into a live response', () => {
+      expect(() =>
+        validateEnv({
+          ...valid,
+          NODE_ENV: 'production',
+          FRONTEND_URL: 'https://app.example.com',
+          MAIL_MODE: 'link',
+        }),
+      ).toThrow(/MAIL_MODE=link is not allowed/);
+    });
+
+    it('allows the console mode in production, with FRONTEND_URL set', () => {
+      expect(
+        validateEnv({
+          ...valid,
+          NODE_ENV: 'production',
+          FRONTEND_URL: 'https://app.example.com',
+        }),
+      ).toMatchObject({ NODE_ENV: 'production', MAIL_MODE: 'console' });
+    });
+
+    it('requires FRONTEND_URL in production because emailed links point at it', () => {
+      expect(() => validateEnv({ ...valid, NODE_ENV: 'production' })).toThrow(
+        /FRONTEND_URL is required/,
+      );
+    });
   });
 });

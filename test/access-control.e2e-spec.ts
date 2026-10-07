@@ -1,6 +1,6 @@
 import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
-import { PrismaMock, prismaError } from './utils/prisma-mock';
+import { mockTransaction, PrismaMock, prismaError } from './utils/prisma-mock';
 import { createTestApp } from './utils/test-app';
 
 type Role = 'owner' | 'admin' | 'agent';
@@ -14,12 +14,14 @@ describe('Access control (e2e)', () => {
     role: string;
   }) => string;
   let platformToken: () => string;
+  let allowStaff: () => void;
 
   const asRole = (role: Role, tenantId = 'tenant-a') =>
     `Bearer ${staffToken({ userId: `${role}-1`, tenantId, role })}`;
 
   beforeAll(async () => {
-    ({ app, prisma, staffToken, platformToken } = await createTestApp());
+    ({ app, prisma, staffToken, platformToken, allowStaff } =
+      await createTestApp());
   });
 
   afterAll(async () => {
@@ -28,6 +30,8 @@ describe('Access control (e2e)', () => {
 
   beforeEach(() => {
     jest.resetAllMocks();
+    allowStaff();
+    mockTransaction(prisma);
     prisma.tenant.findUnique.mockResolvedValue({ status: 'active' });
   });
 
@@ -82,12 +86,31 @@ describe('Access control (e2e)', () => {
         () => request(app.getHttpServer()).get('/v1/tenants/tenant-b/users/u1'),
       ],
       [
-        'POST users',
-        'tenantUser',
+        'POST invites',
+        'staffInvite',
         () =>
           request(app.getHttpServer())
-            .post('/v1/tenants/tenant-b/users')
-            .send({ email: 'x@y.com', password: 'password123' }),
+            .post('/v1/tenants/tenant-b/invites')
+            .send({ email: 'x@y.com' }),
+      ],
+      [
+        'GET invites',
+        'staffInvite',
+        () => request(app.getHttpServer()).get('/v1/tenants/tenant-b/invites'),
+      ],
+      [
+        'DELETE invite',
+        'staffInvite',
+        () =>
+          request(app.getHttpServer()).delete(
+            '/v1/tenants/tenant-b/invites/i1',
+          ),
+      ],
+      [
+        'GET audit logs',
+        'auditLog',
+        () =>
+          request(app.getHttpServer()).get('/v1/tenants/tenant-b/audit-logs'),
       ],
       [
         'PATCH user',
@@ -151,7 +174,12 @@ describe('Access control (e2e)', () => {
           statusCode: 403,
           code: 'TENANT_MISMATCH',
         });
-        for (const fn of Object.values(prisma[model as 'tenantUser'])) {
+        // The only lookup allowed before the tenant check is the one that authenticates the
+        // token's own user (`tenantUser.findUnique`, scoped to the token's tenant).
+        const touched = Object.entries(prisma[model as 'tenantUser']).filter(
+          ([name]) => !(model === 'tenantUser' && name === 'findUnique'),
+        );
+        for (const [, fn] of touched) {
           expect(fn).not.toHaveBeenCalled();
         }
       },
@@ -182,17 +210,13 @@ describe('Access control (e2e)', () => {
   });
 
   describe('role matrix (B2) on users', () => {
-    const newUser = { email: 'new@acme.com', password: 'password123' };
-
     beforeEach(() => {
-      // like Prisma with `omit: { passwordHash: true }`
-      prisma.tenantUser.create.mockImplementation(
-        ({ data: { passwordHash: _omitted, ...data } }) =>
-          Promise.resolve({ id: 'new-id', ...data }),
+      prisma.staffInvite.create.mockImplementation(({ data }) =>
+        Promise.resolve({ id: 'inv-1', ...data }),
       );
     });
 
-    it('agents can read the team but not change it', async () => {
+    it('agents can read the team but not change it or invite anyone', async () => {
       prisma.tenantUser.findMany.mockResolvedValue([]);
       prisma.tenantUser.count.mockResolvedValue(0);
       await request(app.getHttpServer())
@@ -203,8 +227,15 @@ describe('Access control (e2e)', () => {
       const writes = [
         () =>
           request(app.getHttpServer())
-            .post('/v1/tenants/tenant-a/users')
-            .send(newUser),
+            .post('/v1/tenants/tenant-a/invites')
+            .send({ email: 'new@acme.com' }),
+        () => request(app.getHttpServer()).get('/v1/tenants/tenant-a/invites'),
+        () =>
+          request(app.getHttpServer()).delete(
+            '/v1/tenants/tenant-a/invites/inv-1',
+          ),
+        () =>
+          request(app.getHttpServer()).get('/v1/tenants/tenant-a/audit-logs'),
         () =>
           request(app.getHttpServer())
             .patch('/v1/tenants/tenant-a/users/u1')
@@ -218,37 +249,21 @@ describe('Access control (e2e)', () => {
           .expect(403);
         expect(res.body.code).toBe('INSUFFICIENT_ROLE');
       }
-      expect(prisma.tenantUser.create).not.toHaveBeenCalled();
+      expect(prisma.staffInvite.create).not.toHaveBeenCalled();
+      expect(prisma.staffInvite.findMany).not.toHaveBeenCalled();
+      expect(prisma.auditLog.findMany).not.toHaveBeenCalled();
       expect(prisma.tenantUser.update).not.toHaveBeenCalled();
       expect(prisma.tenantUser.delete).not.toHaveBeenCalled();
     });
 
-    it('an admin can create an agent or another admin', async () => {
-      for (const role of ['agent', 'admin']) {
-        const res = await request(app.getHttpServer())
-          .post('/v1/tenants/tenant-a/users')
-          .set('Authorization', asRole('admin'))
-          .send({ ...newUser, role })
-          .expect(201);
-        expect(res.body).toMatchObject({ role, tenantId: 'tenant-a' });
-        expect(res.body).not.toHaveProperty('passwordHash');
-      }
-    });
-
-    it('an admin cannot create an owner (403 OWNER_REQUIRED); an owner can', async () => {
-      const denied = await request(app.getHttpServer())
-        .post('/v1/tenants/tenant-a/users')
-        .set('Authorization', asRole('admin'))
-        .send({ ...newUser, role: 'owner' })
-        .expect(403);
-      expect(denied.body.code).toBe('OWNER_REQUIRED');
-      expect(prisma.tenantUser.create).not.toHaveBeenCalled();
-
-      await request(app.getHttpServer())
+    it('there is no way to create a user with a password any more: POST /users is gone', async () => {
+      const res = await request(app.getHttpServer())
         .post('/v1/tenants/tenant-a/users')
         .set('Authorization', asRole('owner'))
-        .send({ ...newUser, role: 'owner' })
-        .expect(201);
+        .send({ email: 'new@acme.com', password: 'password123' })
+        .expect(404);
+      expect(res.body.code).toBe('NOT_FOUND');
+      expect(prisma.tenantUser.create).not.toHaveBeenCalled();
     });
 
     it('an admin cannot promote anyone to owner or touch an existing owner', async () => {
@@ -272,7 +287,7 @@ describe('Access control (e2e)', () => {
       const edit = await request(app.getHttpServer())
         .patch('/v1/tenants/tenant-a/users/o1')
         .set('Authorization', asRole('admin'))
-        .send({ password: 'new-password-123' })
+        .send({ email: 'changed@acme.com' })
         .expect(403);
       expect(edit.body.code).toBe('OWNER_REQUIRED');
       const del = await request(app.getHttpServer())
@@ -307,13 +322,15 @@ describe('Access control (e2e)', () => {
       );
     });
 
-    it('409 LAST_OWNER when the only owner would be deleted or demoted', async () => {
+    it('409 LAST_OWNER when the only active owner would be deleted, demoted or disabled', async () => {
       prisma.tenantUser.findFirst.mockResolvedValue({
         id: 'o1',
         tenantId: 'tenant-a',
         role: 'owner',
+        status: 'active',
       });
-      prisma.tenantUser.count.mockResolvedValue(1);
+      // no OTHER active owner
+      prisma.tenantUser.count.mockResolvedValue(0);
 
       const del = await request(app.getHttpServer())
         .delete('/v1/tenants/tenant-a/users/o1')

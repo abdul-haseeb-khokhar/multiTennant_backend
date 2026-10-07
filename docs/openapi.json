@@ -1,6 +1,125 @@
 {
   "openapi": "3.0.0",
   "paths": {
+    "/v1/tenants/{tenantId}/audit-logs": {
+      "get": {
+        "description": "Filters: `actor` (user id), `action`, `from` and `to` (ISO-8601 instants).",
+        "operationId": "AuditLogsController_findAll",
+        "parameters": [
+          {
+            "name": "tenantId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "skip",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 0,
+              "default": 0,
+              "type": "number"
+            }
+          },
+          {
+            "name": "take",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "actor",
+            "required": false,
+            "in": "query",
+            "description": "Id of the acting user",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "action",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": "user.role_changed",
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "required": false,
+            "in": "query",
+            "description": "Entries at or after this instant (ISO-8601)",
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "required": false,
+            "in": "query",
+            "description": "Entries at or before this instant (ISO-8601)",
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data",
+                    "total",
+                    "skip",
+                    "take"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/AuditLog"
+                      }
+                    },
+                    "total": {
+                      "type": "integer"
+                    },
+                    "skip": {
+                      "type": "integer"
+                    },
+                    "take": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Staff audit log, newest first (owner/admin)",
+        "tags": [
+          "audit"
+        ]
+      }
+    },
     "/v1/auth/login": {
       "post": {
         "operationId": "AuthController_login",
@@ -94,6 +213,118 @@
         "summary": "Platform-admin login (our own staff, not tenant users)",
         "tags": [
           "platform-admin"
+        ]
+      }
+    },
+    "/v1/auth/password-reset/request": {
+      "post": {
+        "description": "Always answers 202, whether or not the account exists. Limited per IP (429) and per email.",
+        "operationId": "PasswordResetController_request",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasswordResetRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PasswordResetRequested"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Ask for a password-reset email",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/v1/auth/password-reset/confirm": {
+      "post": {
+        "description": "The token is single use and valid for one hour. Tokens issued before this call stop working.",
+        "operationId": "PasswordResetController_confirm",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasswordResetConfirmDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": ""
+          }
+        },
+        "summary": "Set a new password with the emailed token",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/v1/auth/verify-email": {
+      "post": {
+        "operationId": "EmailVerificationController_verify",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerifyEmailDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": ""
+          }
+        },
+        "summary": "Confirm an email address with the emailed token",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/v1/auth/verify-email/resend": {
+      "post": {
+        "description": "Does nothing when the address is already verified.",
+        "operationId": "EmailVerificationController_resend",
+        "parameters": [],
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VerificationSent"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Send a new verification email to the signed-in user",
+        "tags": [
+          "auth"
         ]
       }
     },
@@ -282,50 +513,6 @@
       }
     },
     "/v1/tenants/{tenantId}/users": {
-      "post": {
-        "operationId": "TenantUsersController_create",
-        "parameters": [
-          {
-            "name": "tenantId",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CreateTenantUserDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TenantUser"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "bearer": []
-          }
-        ],
-        "summary": "Create a staff user (owner/admin; only an owner can create an owner)",
-        "tags": [
-          "users"
-        ]
-      },
       "get": {
         "operationId": "TenantUsersController_findAll",
         "parameters": [
@@ -493,7 +680,7 @@
             "bearer": []
           }
         ],
-        "summary": "Change email, role or password (owner/admin; only an owner can touch an owner)",
+        "summary": "Change email, role or status (owner/admin; only an owner can touch an owner)",
         "tags": [
           "users"
         ]
@@ -537,6 +724,208 @@
         ],
         "tags": [
           "users"
+        ]
+      }
+    },
+    "/v1/tenants/{tenantId}/invites": {
+      "post": {
+        "description": "An admin may invite admin or agent; only an owner may invite an owner. The caller must have a verified email (403 EMAIL_NOT_VERIFIED). Re-inviting the same address replaces the pending invite.",
+        "operationId": "InvitesController_create",
+        "parameters": [
+          {
+            "name": "tenantId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateInviteDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StaffInvite"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Invite a staff member by email (owner/admin)",
+        "tags": [
+          "invites"
+        ]
+      },
+      "get": {
+        "operationId": "InvitesController_findAll",
+        "parameters": [
+          {
+            "name": "tenantId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "skip",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 0,
+              "default": 0,
+              "type": "number"
+            }
+          },
+          {
+            "name": "take",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data",
+                    "total",
+                    "skip",
+                    "take"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/StaffInvite"
+                      }
+                    },
+                    "total": {
+                      "type": "integer"
+                    },
+                    "skip": {
+                      "type": "integer"
+                    },
+                    "take": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "List pending invites (owner/admin)",
+        "tags": [
+          "invites"
+        ]
+      }
+    },
+    "/v1/tenants/{tenantId}/invites/{id}": {
+      "delete": {
+        "operationId": "InvitesController_revoke",
+        "parameters": [
+          {
+            "name": "tenantId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StaffInvite"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Revoke a pending invite (owner/admin; only an owner for an owner invite)",
+        "tags": [
+          "invites"
+        ]
+      }
+    },
+    "/v1/auth/invites/accept": {
+      "post": {
+        "description": "Public. The token comes from the emailed link, is single use and valid for seven days. The new user is created with the invited role and a verified email.",
+        "operationId": "InviteAcceptController_accept",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AcceptInviteDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AcceptInviteResponse"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Accept an invitation: choose a password and sign in",
+        "tags": [
+          "auth"
         ]
       }
     },
@@ -797,6 +1186,149 @@
         ]
       }
     },
+    "/v1/me": {
+      "get": {
+        "operationId": "MeController_get",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Me"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Who am I: profile, role, tenant (slug, plan, status) and language",
+        "tags": [
+          "me"
+        ]
+      },
+      "patch": {
+        "operationId": "MeController_update",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateMeDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Me"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Change my own name or dashboard language",
+        "tags": [
+          "me"
+        ]
+      }
+    },
+    "/v1/i18n/locales": {
+      "get": {
+        "operationId": "I18nController_locales",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/LocaleEntry"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "summary": "Available languages (public)",
+        "tags": [
+          "i18n"
+        ]
+      }
+    },
+    "/v1/i18n/{locale}/{namespace}": {
+      "get": {
+        "description": "A flat map of stable dot-notation keys to ICU message strings. Keys missing in the requested language are filled in from `en`. Supports `If-None-Match` (304). For API errors use namespace `errors` with the error `code` as key.",
+        "operationId": "I18nController_namespace",
+        "parameters": [
+          {
+            "name": "locale",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "enum": [
+                "en",
+                "ur"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "namespace",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "enum": [
+                "common",
+                "errors",
+                "notifications",
+                "widget"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "LOCALE_NOT_FOUND / NAMESPACE_NOT_FOUND"
+          }
+        },
+        "summary": "Translations of one namespace (public, cacheable)",
+        "tags": [
+          "i18n"
+        ]
+      }
+    },
     "/health": {
       "get": {
         "operationId": "HealthController_live",
@@ -830,7 +1362,7 @@
   },
   "info": {
     "title": "Multi-tenant support platform: backend core",
-    "description": "Tenants, staff authentication and roles, end customers. Errors always have the shape `{ statusCode, code, message }`; lists are `{ data, total, skip, take }`.",
+    "description": "Tenants, staff authentication, invitations and roles, audit log, translations, end customers. Errors always have the shape `{ statusCode, code, message }`; lists are `{ data, total, skip, take }`.",
     "version": "0.1",
     "contact": {}
   },
@@ -845,6 +1377,79 @@
       }
     },
     "schemas": {
+      "AuditLog": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "tenantId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "actorUserId": {
+            "type": "string",
+            "nullable": true,
+            "description": "Tenant user id, or platform admin id when actorRole is platform_admin"
+          },
+          "actorRole": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "owner",
+              "admin",
+              "agent",
+              "platform_admin"
+            ]
+          },
+          "action": {
+            "type": "string",
+            "example": "user.role_changed"
+          },
+          "targetType": {
+            "type": "string",
+            "nullable": true,
+            "example": "user"
+          },
+          "targetId": {
+            "type": "string",
+            "nullable": true
+          },
+          "before": {
+            "type": "object",
+            "additionalProperties": true,
+            "nullable": true
+          },
+          "after": {
+            "type": "object",
+            "additionalProperties": true,
+            "nullable": true
+          },
+          "ip": {
+            "type": "string",
+            "nullable": true
+          },
+          "userAgent": {
+            "type": "string",
+            "nullable": true
+          },
+          "requestId": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "tenantId",
+          "action",
+          "createdAt"
+        ]
+      },
       "LoginDto": {
         "type": "object",
         "properties": {
@@ -898,6 +1503,15 @@
           "ownerPassword": {
             "type": "string",
             "minLength": 8
+          },
+          "locale": {
+            "type": "string",
+            "enum": [
+              "en",
+              "ur"
+            ],
+            "default": "en",
+            "description": "The tenant's default language (H7)."
           }
         },
         "required": [
@@ -936,6 +1550,11 @@
               "suspended"
             ]
           },
+          "defaultLocale": {
+            "type": "string",
+            "example": "en",
+            "description": "Default language (H7)"
+          },
           "createdAt": {
             "type": "string",
             "format": "date-time"
@@ -947,6 +1566,7 @@
           "slug",
           "plan",
           "status",
+          "defaultLocale",
           "createdAt"
         ]
       },
@@ -962,7 +1582,13 @@
             "format": "uuid"
           },
           "email": {
-            "type": "string"
+            "type": "string",
+            "example": "agent@acme.com",
+            "description": "Lower-case"
+          },
+          "name": {
+            "type": "string",
+            "nullable": true
           },
           "role": {
             "type": "string",
@@ -971,6 +1597,31 @@
               "admin",
               "agent"
             ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "disabled"
+            ],
+            "description": "A disabled user is refused on the next request."
+          },
+          "emailVerifiedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "passwordChangedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "Tokens issued before this instant are rejected."
+          },
+          "locale": {
+            "type": "string",
+            "nullable": true,
+            "example": "ur",
+            "description": "Dashboard language; null means the tenant default."
           },
           "createdAt": {
             "type": "string",
@@ -982,6 +1633,7 @@
           "tenantId",
           "email",
           "role",
+          "status",
           "createdAt"
         ]
       },
@@ -997,6 +1649,10 @@
           "access_token": {
             "type": "string",
             "description": "Send as `Authorization: Bearer <access_token>`"
+          },
+          "verificationLink": {
+            "type": "string",
+            "description": "Only with MAIL_MODE=link (development): the email-verification link."
           }
         },
         "required": [
@@ -1021,6 +1677,72 @@
           "password"
         ]
       },
+      "PasswordResetRequestDto": {
+        "type": "object",
+        "properties": {
+          "tenantSlug": {
+            "type": "string",
+            "example": "acme",
+            "description": "The tenant slug"
+          },
+          "email": {
+            "type": "string",
+            "example": "agent@acme.com"
+          }
+        },
+        "required": [
+          "tenantSlug",
+          "email"
+        ]
+      },
+      "PasswordResetRequested": {
+        "type": "object",
+        "properties": {
+          "link": {
+            "type": "string",
+            "description": "Only with MAIL_MODE=link (development): the reset link, so it can be passed on by hand."
+          }
+        }
+      },
+      "PasswordResetConfirmDto": {
+        "type": "object",
+        "properties": {
+          "token": {
+            "type": "string",
+            "description": "The token from the emailed reset link"
+          },
+          "password": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 72
+          }
+        },
+        "required": [
+          "token",
+          "password"
+        ]
+      },
+      "VerifyEmailDto": {
+        "type": "object",
+        "properties": {
+          "token": {
+            "type": "string",
+            "description": "The token from the emailed verification link"
+          }
+        },
+        "required": [
+          "token"
+        ]
+      },
+      "VerificationSent": {
+        "type": "object",
+        "properties": {
+          "link": {
+            "type": "string",
+            "description": "Only with MAIL_MODE=link (development): the verification link."
+          }
+        }
+      },
       "UpdateTenantDto": {
         "type": "object",
         "properties": {
@@ -1042,46 +1764,50 @@
               "active",
               "suspended"
             ]
-          }
-        }
-      },
-      "CreateTenantUserDto": {
-        "type": "object",
-        "properties": {
-          "email": {
-            "type": "string",
-            "example": "agent@acme.com"
           },
-          "password": {
-            "type": "string",
-            "minLength": 8
-          },
-          "role": {
+          "defaultLocale": {
             "type": "string",
             "enum": [
-              "owner",
-              "admin",
-              "agent"
+              "en",
+              "ur"
             ],
-            "default": "agent",
-            "description": "Only an owner may create another owner."
+            "description": "The tenant's default language (H7)."
           }
-        },
-        "required": [
-          "email",
-          "password"
-        ]
+        }
       },
       "UpdateTenantUserDto": {
         "type": "object",
         "properties": {
           "email": {
             "type": "string",
-            "example": "agent@acme.com"
+            "example": "agent@acme.com",
+            "description": "A new address must be verified again."
           },
-          "password": {
+          "role": {
             "type": "string",
-            "minLength": 8
+            "enum": [
+              "owner",
+              "admin",
+              "agent"
+            ],
+            "description": "Only an owner may promote to or change an owner."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "disabled"
+            ],
+            "description": "`disabled` takes effect on the very next request. The last active owner cannot be disabled."
+          }
+        }
+      },
+      "CreateInviteDto": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "example": "agent@acme.com"
           },
           "role": {
             "type": "string",
@@ -1091,9 +1817,100 @@
               "agent"
             ],
             "default": "agent",
-            "description": "Only an owner may create another owner."
+            "description": "Only an owner may invite another owner."
           }
-        }
+        },
+        "required": [
+          "email"
+        ]
+      },
+      "StaffInvite": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "tenantId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "email": {
+            "type": "string",
+            "example": "agent@acme.com"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "owner",
+              "admin",
+              "agent"
+            ]
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "invitedBy": {
+            "type": "string",
+            "nullable": true,
+            "description": "Id of the user who sent the invite"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "link": {
+            "type": "string",
+            "description": "Only on creation and only with MAIL_MODE=link (development): the invite link, so it can be passed on by hand."
+          }
+        },
+        "required": [
+          "id",
+          "tenantId",
+          "email",
+          "role",
+          "expiresAt",
+          "createdAt"
+        ]
+      },
+      "AcceptInviteDto": {
+        "type": "object",
+        "properties": {
+          "token": {
+            "type": "string",
+            "description": "The token from the emailed invite link"
+          },
+          "password": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 72
+          },
+          "name": {
+            "type": "string",
+            "example": "Sana Malik"
+          }
+        },
+        "required": [
+          "token",
+          "password"
+        ]
+      },
+      "AcceptInviteResponse": {
+        "type": "object",
+        "properties": {
+          "access_token": {
+            "type": "string",
+            "description": "Send as `Authorization: Bearer <access_token>`"
+          },
+          "user": {
+            "$ref": "#/components/schemas/TenantUser"
+          }
+        },
+        "required": [
+          "access_token",
+          "user"
+        ]
       },
       "CreateEndCustomerDto": {
         "type": "object",
@@ -1105,6 +1922,14 @@
           },
           "name": {
             "type": "string"
+          },
+          "locale": {
+            "type": "string",
+            "enum": [
+              "en",
+              "ur"
+            ],
+            "description": "The customer's language (H7); unset means unknown."
           },
           "metadata": {
             "type": "object",
@@ -1132,6 +1957,11 @@
           "name": {
             "type": "string",
             "nullable": true
+          },
+          "locale": {
+            "type": "string",
+            "nullable": true,
+            "example": "ur"
           },
           "metadata": {
             "type": "object",
@@ -1161,11 +1991,169 @@
           "name": {
             "type": "string"
           },
+          "locale": {
+            "type": "string",
+            "enum": [
+              "en",
+              "ur"
+            ],
+            "description": "The customer's language (H7); unset means unknown."
+          },
           "metadata": {
             "type": "object",
             "additionalProperties": true
           }
         }
+      },
+      "MeUser": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "email": {
+            "type": "string",
+            "example": "agent@acme.com"
+          },
+          "name": {
+            "type": "string",
+            "nullable": true
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "owner",
+              "admin",
+              "agent"
+            ]
+          },
+          "emailVerified": {
+            "type": "boolean",
+            "description": "False until the emailed link is used (H4)"
+          },
+          "locale": {
+            "type": "string",
+            "nullable": true,
+            "description": "The language the user chose, if any"
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "role",
+          "emailVerified"
+        ]
+      },
+      "MeTenant": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string",
+            "example": "acme"
+          },
+          "plan": {
+            "type": "string",
+            "enum": [
+              "free",
+              "pro",
+              "enterprise"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "trial",
+              "active",
+              "suspended"
+            ]
+          },
+          "defaultLocale": {
+            "type": "string",
+            "example": "en"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "slug",
+          "plan",
+          "status",
+          "defaultLocale"
+        ]
+      },
+      "Me": {
+        "type": "object",
+        "properties": {
+          "user": {
+            "$ref": "#/components/schemas/MeUser"
+          },
+          "tenant": {
+            "$ref": "#/components/schemas/MeTenant"
+          },
+          "locale": {
+            "type": "string",
+            "example": "ur",
+            "description": "The language to render the dashboard in: the user's own, else the tenant default"
+          }
+        },
+        "required": [
+          "user",
+          "tenant",
+          "locale"
+        ]
+      },
+      "UpdateMeDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "example": "Sana Malik"
+          },
+          "locale": {
+            "type": "string",
+            "enum": [
+              "en",
+              "ur"
+            ],
+            "nullable": true,
+            "description": "Dashboard language. `null` clears it, so the tenant default applies."
+          }
+        }
+      },
+      "LocaleEntry": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "example": "ur",
+            "description": "BCP-47 code"
+          },
+          "name": {
+            "type": "string",
+            "example": "اردو",
+            "description": "The language's own name"
+          },
+          "dir": {
+            "type": "string",
+            "enum": [
+              "ltr",
+              "rtl"
+            ]
+          }
+        },
+        "required": [
+          "code",
+          "name",
+          "dir"
+        ]
       }
     }
   }

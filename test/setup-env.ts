@@ -3,3 +3,5 @@ process.env.JWT_SECRET = 'e2e-test-secret-at-least-16-chars';
 process.env.JWT_EXPIRES_IN = '1h';
 process.env.DATABASE_URL = 'postgresql://unused:unused@localhost:5432/unused';
 process.env.FRONTEND_URL = 'http://localhost:5173';
+// Development mode that also returns emailed links in responses, so flows can be driven over HTTP.
+process.env.MAIL_MODE = 'link';

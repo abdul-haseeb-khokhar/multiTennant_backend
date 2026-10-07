@@ -19,8 +19,10 @@
     "test:cov": "node --experimental-vm-modules ./node_modules/jest/bin/jest.js --coverage",
     "test:debug": "node --inspect-brk --experimental-vm-modules -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "node --experimental-vm-modules ./node_modules/jest/bin/jest.js --config ./test/jest-e2e.json",
+    "test:db": "node --experimental-vm-modules ./node_modules/jest/bin/jest.js --config ./test/jest-db.json --runInBand",
     "openapi:export": "ts-node scripts/export-openapi.ts",
     "platform-admin:create": "ts-node scripts/create-platform-admin.ts",
+    "i18n:check": "ts-node scripts/check-i18n.ts",
     "postinstall": "prisma skills sync || exit 0"
   },
   "dependencies": {

@@ -1,13 +1,15 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 import {
-  IsEmail,
+  IsIn,
   IsOptional,
   IsString,
   Matches,
   MaxLength,
   MinLength,
 } from 'class-validator';
+import { NormalizedEmailProperty } from '../../common/validation/email';
+import { LOCALE_CODES } from '../../i18n/locales';
 import { SLUG_PATTERN } from '../../tenants/slug';
 
 export class SignupDto {
@@ -33,12 +35,20 @@ export class SignupDto {
   })
   tenantSlug?: string;
 
-  @ApiProperty({ example: 'owner@acme.com' })
-  @IsEmail()
+  @NormalizedEmailProperty({ example: 'owner@acme.com' })
   ownerEmail: string;
 
   @ApiProperty({ minLength: 8 })
   @IsString()
   @MinLength(8)
   ownerPassword: string;
+
+  @ApiPropertyOptional({
+    enum: LOCALE_CODES,
+    default: 'en',
+    description: "The tenant's default language (H7).",
+  })
+  @IsOptional()
+  @IsIn(LOCALE_CODES)
+  locale?: string;
 }

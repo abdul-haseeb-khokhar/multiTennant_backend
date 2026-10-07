@@ -81,6 +81,43 @@ describe('AllExceptionsFilter', () => {
     });
   });
 
+  it('answers an Express body-parser client error (413) with its status instead of a 500', () => {
+    const tooLarge = Object.assign(new Error('request entity too large'), {
+      status: 413,
+      expose: true,
+    });
+    expect(run(tooLarge)).toMatchObject({
+      status: 413,
+      body: {
+        statusCode: 413,
+        code: 'PAYLOAD_TOO_LARGE',
+        message: 'request entity too large',
+      },
+    });
+
+    const other = Object.assign(new Error('unsupported charset'), {
+      status: 415,
+      expose: true,
+    });
+    expect(run(other)).toMatchObject({
+      status: 415,
+      body: { code: 'BAD_REQUEST' },
+    });
+  });
+
+  it('still hides errors that merely carry a status but are not safe to expose', () => {
+    const hidden = Object.assign(new Error('internal detail'), { status: 400 });
+    expect(run(hidden)).toMatchObject({
+      status: 500,
+      body: { code: 'INTERNAL_ERROR' },
+    });
+    const server = Object.assign(new Error('boom'), {
+      status: 502,
+      expose: true,
+    });
+    expect(run(server)).toMatchObject({ status: 500 });
+  });
+
   it('hides the details of unexpected errors and logs them', () => {
     const { status, body } = run(new Error('password=hunter2 leaked'));
     expect(status).toBe(500);

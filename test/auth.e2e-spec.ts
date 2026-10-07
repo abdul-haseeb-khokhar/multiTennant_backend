@@ -1,7 +1,7 @@
 import { INestApplication } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
 import request from 'supertest';
-import { PrismaMock, prismaError } from './utils/prisma-mock';
+import { mockTransaction, PrismaMock, prismaError } from './utils/prisma-mock';
 import { createTestApp } from './utils/test-app';
 
 const PASSWORD = 'correct-horse-battery';
@@ -10,9 +10,10 @@ describe('Auth (e2e)', () => {
   let app: INestApplication;
   let prisma: PrismaMock;
   let passwordHash: string;
+  let allowStaff: () => void;
 
   beforeAll(async () => {
-    ({ app, prisma } = await createTestApp());
+    ({ app, prisma, allowStaff } = await createTestApp());
     passwordHash = bcrypt.hashSync(PASSWORD, 4);
   });
 
@@ -22,10 +23,9 @@ describe('Auth (e2e)', () => {
 
   beforeEach(() => {
     jest.resetAllMocks();
-    // Run the signup transaction callback against the same mock client.
-    prisma.$transaction.mockImplementation((cb: (tx: unknown) => unknown) =>
-      cb(prisma),
-    );
+    // Run transaction callbacks against the same mock client.
+    mockTransaction(prisma);
+    allowStaff();
   });
 
   describe('POST /v1/auth/signup', () => {
@@ -67,7 +67,19 @@ describe('Auth (e2e)', () => {
         expect.objectContaining({ omit: { passwordHash: true } }),
       );
 
-      // the token is accepted by a guarded route
+      // MAIL_MODE=link (development): the verification link comes back in the response
+      expect(res.body.verificationLink).toMatch(
+        /^http:\/\/localhost:5173\/verify-email\?token=[A-Za-z0-9_-]{43}$/,
+      );
+      expect(prisma.emailVerification.create).toHaveBeenCalledTimes(1);
+
+      // the token is accepted by a guarded route (the strategy finds the new owner)
+      prisma.tenantUser.findUnique.mockResolvedValue({
+        role: 'owner',
+        status: 'active',
+        emailVerifiedAt: null,
+        passwordChangedAt: null,
+      });
       prisma.tenant.findUnique.mockResolvedValue({ status: 'trial' });
       prisma.tenantUser.findMany.mockResolvedValue([]);
       prisma.tenantUser.count.mockResolvedValue(0);
@@ -84,7 +96,11 @@ describe('Auth (e2e)', () => {
         .expect(201);
 
       expect(prisma.tenant.create).toHaveBeenCalledWith({
-        data: { name: 'Acme Support', slug: 'acme-support' },
+        data: {
+          name: 'Acme Support',
+          slug: 'acme-support',
+          defaultLocale: 'en',
+        },
       });
       expect(prisma.tenantUser.create).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -161,6 +177,7 @@ describe('Auth (e2e)', () => {
         tenantId: 't1',
         email: 'owner@acme.com',
         role: 'owner',
+        status: 'active',
         passwordHash,
       });
     });

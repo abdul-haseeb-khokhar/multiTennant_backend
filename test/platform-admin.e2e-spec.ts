@@ -1,12 +1,13 @@
 import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
-import { PrismaMock, prismaError } from './utils/prisma-mock';
+import { mockTransaction, PrismaMock, prismaError } from './utils/prisma-mock';
 import { createTestApp } from './utils/test-app';
 
 describe('Platform admin routes (e2e)', () => {
   let app: INestApplication;
   let prisma: PrismaMock;
   let platformToken: (id?: string) => string;
+  let allowStaff: () => void;
   let staffToken: (u: {
     userId: string;
     tenantId: string;
@@ -16,7 +17,8 @@ describe('Platform admin routes (e2e)', () => {
   const asAdmin = () => `Bearer ${platformToken()}`;
 
   beforeAll(async () => {
-    ({ app, prisma, platformToken, staffToken } = await createTestApp());
+    ({ app, prisma, platformToken, staffToken, allowStaff } =
+      await createTestApp());
   });
 
   afterAll(async () => {
@@ -25,6 +27,8 @@ describe('Platform admin routes (e2e)', () => {
 
   beforeEach(() => {
     jest.resetAllMocks();
+    allowStaff();
+    mockTransaction(prisma);
     prisma.platformAdmin.findUnique.mockResolvedValue({ id: 'admin-1' });
   });
 
@@ -82,6 +86,7 @@ describe('Platform admin routes (e2e)', () => {
   });
 
   it('PATCH changes plan and status (suspending a tenant)', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ id: 't1', status: 'active' });
     prisma.tenant.update.mockResolvedValue({
       id: 't1',
       plan: 'pro',
@@ -95,7 +100,32 @@ describe('Platform admin routes (e2e)', () => {
     expect(res.body).toMatchObject({ plan: 'pro', status: 'suspended' });
     expect(prisma.tenant.update).toHaveBeenCalledWith({
       where: { id: 't1' },
-      data: { name: undefined, plan: 'pro', status: 'suspended' },
+      data: {
+        name: undefined,
+        plan: 'pro',
+        status: 'suspended',
+        defaultLocale: undefined,
+      },
+    });
+  });
+
+  it("suspending a tenant is written to that tenant's audit log with the platform admin as actor (H6)", async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ id: 't1', status: 'active' });
+    prisma.tenant.update.mockResolvedValue({ id: 't1', status: 'suspended' });
+    await request(app.getHttpServer())
+      .patch('/v1/admin/tenants/t1')
+      .set('Authorization', asAdmin())
+      .send({ status: 'suspended' })
+      .expect(200);
+    expect(prisma.auditLog.create).toHaveBeenCalledTimes(1);
+    expect(prisma.auditLog.create.mock.calls[0][0].data).toMatchObject({
+      tenantId: 't1',
+      actorUserId: 'admin-1',
+      actorRole: 'platform_admin',
+      action: 'tenant.suspended',
+      before: { status: 'active' },
+      after: { status: 'suspended' },
+      requestId: expect.any(String),
     });
   });
 

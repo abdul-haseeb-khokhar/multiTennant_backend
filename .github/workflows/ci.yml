@@ -29,6 +29,8 @@ jobs:
       # The e2e suite boots the real AppModule with Prisma mocked, so it needs no database.
       - run: npm run test:e2e
       - run: npm run build
+      # Warns (never fails) about translation keys missing in a locale; the API falls back to en.
+      - run: npm run i18n:check
 
   migrations:
     name: Migrations apply and match schema.prisma
@@ -66,3 +68,11 @@ jobs:
             --to-schema-datamodel prisma/schema.prisma \
             --shadow-database-url "$SHADOW_DATABASE_URL" \
             --exit-code
+      # Real SQL: unique and CHECK constraints, the append-only audit trigger, serializable
+      # transactions and the account flows over HTTP. The suite refuses anything but
+      # TEST_DATABASE_URL, and this database is thrown away with the job.
+      - run: npx prisma generate
+      - name: Database-backed tests
+        run: npm run test:db
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/app

@@ -4,11 +4,17 @@ import { SetMetadata } from '@nestjs/common';
 export const ROLES = ['owner', 'admin', 'agent'] as const;
 export type Role = (typeof ROLES)[number];
 
-/** What the JWT strategies put on `request.user` for a tenant staff member. */
+/**
+ * What the JWT strategy puts on `request.user` for a tenant staff member. `role` and
+ * `emailVerified` are read from the database on every request, not from the token, so a role
+ * change or a verification takes effect immediately.
+ */
 export interface AuthUser {
   userId: string;
   tenantId: string;
   role: Role;
+  /** Whether the user has confirmed their email address (H4); gates inviting staff and plan changes. */
+  emailVerified: boolean;
 }
 
 export const ROLES_KEY = 'roles';

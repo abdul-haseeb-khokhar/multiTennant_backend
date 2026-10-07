@@ -82,6 +82,7 @@ Status: ☐
 
 Enforced by a `RolesGuard` on the backend; the engine receives the acting `userId` and `role` for audit only.
 **Built (Phase 0), for the rows that exist today:** owner and admin create, change and delete users (an admin cannot touch an owner or promote anyone to owner; a tenant keeps at least one owner, else 409 `LAST_OWNER`). All roles read users, and read, create and edit customers; only owner and admin delete customers. Errors: `INSUFFICIENT_ROLE`, `OWNER_REQUIRED`. Other rows arrive with their features.
+**Built (Phase 1):** users are no longer created by owner/admin but invited (H1): admin may invite `admin`/`agent`, only an owner may invite or revoke an invite for an `owner`. "Change" now means email, role or **status** (`active`/`disabled`); an admin still cannot touch an owner. The tenant keeps at least one **active** owner (demoting, disabling or deleting the last one gives 409 `LAST_OWNER`; the check runs in a serializable transaction). Owners and admins read the audit log (H6). A password can only be set by its owner (invite, reset).
 Status: ☐
 
 ### B3. How a staff member identifies their tenant at login: BE + FE
@@ -299,21 +300,25 @@ An owner or admin never sets another person's password. They invite by email and
 - `POST /v1/tenants/:tenantId/invites` `{ email, role }` creates it; `GET` lists pending; `DELETE …/:id` revokes. An admin can invite `admin`/`agent`; only an owner can invite `owner`.
 - `POST /v1/auth/invites/accept` `{ token, password, name? }` creates the `tenant_user` and returns a JWT.
 - The current `POST /tenants/:tenantId/users` (which takes a password) is replaced by invites; `PATCH` keeps role/status changes only, never another user's password.
+**Built (Phase 1):** as proposed, with these details. `POST /v1/tenants/:tenantId/invites` `{ email, role? }` (role defaults to `agent`), `GET` (pending only, paged), `DELETE …/:id` (revoke; only an owner may revoke an owner invite). Inviting an address that already has a pending invite replaces it (the old link stops working, so this is also "resend"); inviting an existing user gives 409 `EMAIL_TAKEN`. `POST /v1/auth/invites/accept` `{ token, password (8-72 chars), name? }` returns `{ access_token, user }`; bad, used, revoked or expired tokens give 400 `INVITE_INVALID`. The emailed link points at the frontend page `{FRONTEND_URL}/accept-invite?token=…` (**FE: please build that page; it posts the token back**). `POST /tenants/:tenantId/users` is **removed**; `PATCH …/users/:id` takes `{ email?, role?, status? }` only (a new address must be verified again). `staff_invites.invited_by` is a plain column (no foreign key) so deleting the inviter is not blocked.
 Status: ☐
 
 ### H2. Password reset and disabled/changed credentials: BE
 **Proposal:** `POST /v1/auth/password-reset/request` `{ tenantSlug, email }` always answers 202 (no account enumeration); `POST /v1/auth/password-reset/confirm` `{ token, password }`. Reset tokens: hashed, single use, 1 hour. Throttled per IP and per email.
 Add `tenant_user.status` (`active`/`disabled`) and `password_changed_at`; `JwtStrategy.validate` rejects tokens issued before `password_changed_at` and for disabled users. This costs one lookup per request and makes "remove access now" real.
+**Built (Phase 1):** `POST /v1/auth/password-reset/request` answers 202 whether or not the account exists (with `MAIL_MODE=link` the body carries `link` for a real account only, a development convenience); throttled at 10 requests per IP per hour (429 `TOO_MANY_REQUESTS`) and 3 per tenant+email per hour (further ones are silently ignored). Counters are in process memory, so they are per instance until Phase 8. `POST …/confirm` `{ token, password }` answers 204; a bad token gives 400 `RESET_TOKEN_INVALID`; it sets `password_changed_at`. `JwtStrategy.validate` now loads the user on every request: a deleted user gives 401, a disabled user 401 `ACCOUNT_DISABLED` (login gives 403 `ACCOUNT_DISABLED` after the password checked out), a token whose `iat` second is earlier than `password_changed_at` gives 401, and **`role` for authorisation comes from the database, not the token**, so a demotion is immediate. The frontend page is `{FRONTEND_URL}/reset-password?token=…`.
 Status: ☐
 
 ### H3. Email delivery: BE (**needs a decision from Abdul**)
 Invites, resets and verification need to reach a person, even though notifications themselves are in-app only.
 **Proposal:** a `Mailer` interface with two implementations: `ConsoleMailer` (logs the link; used in dev) and a real provider (SMTP, SES or Resend) chosen later. Until a provider is chosen, the invite and reset-request responses can also return the link to the owner/admin to pass on manually (flag `MAIL_MODE=link`), and that mode is **disabled in production**.
 Open: which provider and sender domain.
+**Built (Phase 1):** `Mailer` (abstract class, injectable) with `ConsoleMailer` bound in `MailModule`; `MailService` builds the links and, with `MAIL_MODE=link`, also returns them (invite response `link`, reset request `link`, signup `verificationLink`). `MAIL_MODE=link` makes the app refuse to start when `NODE_ENV=production`, and production also requires `FRONTEND_URL`. Still open: the provider and sender domain. The message gives the recipient `locale` and a template name; a provider renders the `email.<template>.*` keys of the `notifications` namespace (already written in en and ur).
 Status: ☐
 
 ### H4. Email verification: BE
 **Proposal:** `tenant_user.email_verified_at`. Signup sends a verification link; an unverified owner can use the trial but cannot invite staff or move to a paid plan. A user who accepts an **emailed** invite is verified at once (they proved access to the address). Lower priority than H1–H2.
+**Built (Phase 1):** signup issues a 24-hour link (`{FRONTEND_URL}/verify-email?token=…`); `POST /v1/auth/verify-email` `{ token }` answers 204; `POST /v1/auth/verify-email/resend` (signed in) sends a new one and retires older ones. `EmailVerifiedGuard` (403 `EMAIL_NOT_VERIFIED`) protects `POST …/invites`; **there is no plan-change route for tenants yet, so the same guard must be put on it when it exists (Phase 5)**. Existing users were not backfilled as verified: they verify through the resend route. Changing a user's email resets verification and sends a new link.
 Status: ☐
 
 ### H5. In-app notifications: BE (FE shows them)
@@ -327,6 +332,7 @@ Status: ☐
 ### H6. Staff audit log: BE
 Distinct from `ai_engine.agent_actions`, which records what the AI did.
 **Proposal:** append-only `audit_logs` (id, tenant_id, actor_user_id, actor_role, action, target_type, target_id, before jsonb, after jsonb, ip, user_agent, request_id, created_at). Actions include `user.invited`, `user.role_changed`, `user.disabled`, `user.deleted`, `config.updated`, `knowledge.deleted`, `apikey.created`, `apikey.revoked`, `integration.updated`, `action.approved`, `tenant.suspended`. Secrets are never stored in `before`/`after`. The application role has INSERT and SELECT only. Visible to `owner` and `admin` at `GET /v1/tenants/:tenantId/audit-logs?actor=&action=&from=&to=`; retained at least 12 months. Implemented with a `@Audit('user.deleted')` decorator and interceptor.
+**Built (Phase 1):** the table, `@Audit(action, { targetType, snapshot })` + `AuditInterceptor` (used for `invite.revoked`), and `AuditService.record(entry, tx?)` for entries written in the same transaction as the change (used for everything else). Recorded now: `user.invited`, `invite.accepted`, `invite.revoked`, `user.role_changed`, `user.disabled`, `user.enabled`, `user.email_changed`, `user.deleted`, `password.reset`, `tenant.suspended`, `tenant.reactivated`. Keys named like `password`, `token`, `secret`, `hash`, `link` are stripped from `before`/`after` at any depth. A database trigger refuses UPDATE and DELETE (so a 12-month retention purge and tenant offboarding must run as a privileged step that drops the trigger first); per-service DB roles stay in Phase 8. `actor_user_id` has no foreign key: for platform-admin actions it holds the `platform_admins` id and `actor_role` is `platform_admin`. The list is newest first with the `{data,total,skip,take}` envelope; `from`/`to` are ISO-8601 instants.
 Status: ☐
 
 ### H7. Languages (i18n): BE serves, FE consumes
@@ -339,6 +345,7 @@ Status: ☐
 - Tenant-specific wording (the greeting, fallback message, handoff text) belongs in `agent_config`, **not** in these files.
 - A script checks in CI that every locale has all `en` keys (a warning, not a failure). Launch locales: `en`, `ur`.
 - Build note: `nest build` only compiles TypeScript, so `src/lang/**/*.json` must be listed under `assets` in `nest-cli.json`.
+**Built (Phase 1):** as proposed. Files are flat key/value JSON (`src/lang/<locale>/<namespace>.json`); `GET /v1/i18n/locales` and `GET /v1/i18n/:locale/:namespace` are public, send a strong `ETag` and `Cache-Control: public, max-age=300, stale-while-revalidate=3600`, answer 304 to `If-None-Match`, and fill missing keys from `en`. Unknown locale or namespace gives 404 `LOCALE_NOT_FOUND` / `NAMESPACE_NOT_FOUND`. The `errors` namespace has one key per API `code` (a unit test fails when a new `ErrorCode` has no translation). `npm run i18n:check` warns about missing and extra keys (CI runs it as a warning). Columns: `tenants.default_locale` (default `en`, set at signup or by a platform admin), `tenant_user.locale` and `end_customers.locale` (nullable). `GET/PATCH /v1/me` shows and changes the user's own `name` and `locale`; the effective language is the user's, else the tenant default. **The Urdu text was written by Claude and needs a native speaker's review.** Locale names and direction live in `src/i18n/locales.ts`.
 Status: ☐
 
 ### H8. Deliberately deferred or owned elsewhere
@@ -349,7 +356,97 @@ Status: ☐
 | Conversation analytics (resolution rate, escalation rate, satisfaction) | **AI engine owns** it. The backend keeps only usage metering for plans (`usage_daily`) |
 | Routing rules and SLAs | Deferred. **Owner: backend + frontend** (who gets an escalated conversation, queue, timers, alerts all depend on staff data). The AI engine only decides *when* to escalate (C6). For now agents claim from one shared queue and `escalated_at` gives waiting time |
 | Agent tooling (internal notes, tags, canned replies, transfer) | Deferred, undecided. **Owner: backend + frontend**; tables would live in `tenant_core` with a plain `conversation_id` column (no FK). Transfer = reassign via the engine's assign/claim API. **AI-assisted extras** (suggested draft replies, auto-tags, sentiment) would be owned by the AI engine, also deferred |
-| Billing and payments | Out of scope |
+| Billing and payments | **Specified in section I**: manual payments now, payment provider later behind one interface |
+Status: ☐
+
+---
+
+## I. Plans, trial, billing and use of customer data (backend)
+
+Decided by Abdul on 2026-10-07: Starter (hidden, 15 days) falls back to Free; Free is a small but usable plan; currency is PKR and the starting prices below are accepted; data is kept 60 days where the rules in I10 allow it; payments are manual at first. Every number in a table below is a starting value stored as data in the `plans` table, adjustable without code changes.
+
+### I1. Plan catalogue (data-driven): BE
+Plans are rows with `code`, `name`, `visibility` (`public` | `hidden`), `price_minor`, `currency`, `interval` (`month` | `year` | `none`), `duration_days` (null = no end), `fallback_plan_code`, `entitlements` JSON and `provider_price_ids` JSON. The pricing page lists only `public` plans.
+
+| | Starter (hidden) | Free (public) | Pro (public) | Enterprise (public) |
+|---|---|---|---|---|
+| Price (excl. tax) | not sold, granted at signup | PKR 0 | PKR 19,999 per month, PKR 199,990 per year (10 months) | custom quote, set by a platform admin |
+| Duration | 15 days, then falls back to Free | no end | per period | per contract |
+| Staff seats | 3 | 1 | 10 | custom |
+| AI conversations | 100 in total | 30 per month | 1,500 per month, extra PKR 15 each | custom |
+| Knowledge base | 20 MB | 10 MB | 500 MB | custom |
+| Channels | chat | chat, "powered by" label | chat + WhatsApp | all |
+| Voice | none | none | add-on, about PKR 25 per minute | custom |
+
+Prices exclude tax; tax is a separate invoice line and its treatment needs an accountant (I7).
+Status: ☐
+
+### I2. Starter to Free lifecycle: BE
+Every new tenant starts on **Starter** with `current_period_end = signup + 15 days` (the length is `plans.duration_days`, not code). At the end it moves to **Free** automatically unless a paid plan is active. A tenant can buy Pro at any time, including during Starter. Existing tenants at deployment time start Starter from that day, not from their creation date. A platform admin can extend Starter or change any plan.
+Status: ☐
+
+### I3. Subscription state machine: BE
+`subscriptions.status`: `active` (includes Starter and Free), `past_due` (a paid period ended without renewal), `canceled` (ends at period end), `closed` (account closed), `suspended` (set by a platform admin).
+```
+Starter ─15 days─► Free ─payment─► Pro/Enterprise (active)
+Starter ─payment──────────────────► Pro (active)
+Pro active ─period ends, no renewal─► past_due ─7 days grace─► Free
+Pro active ─cancel─► canceled (keeps Pro until period end) ─► Free
+any ─admin─► suspended        any ─owner/admin request─► closed
+```
+`tenants.status` (`trial`/`active`/`suspended`) is replaced by this state; `tenants.plan` becomes derived from the subscription, and the existing `trial` and `free` values are migrated accordingly.
+Status: ☐
+
+### I4. Payment sources, manual now and a provider later: BE
+The rest of the system never knows who took the money. Everything that changes a subscription is a normalised **BillingEvent** (`payment.succeeded`, `payment.failed`, `subscription.canceled`, `plan.changed`, …) applied by one `SubscriptionService.applyEvent()` state machine, which is idempotent and audited (H6).
+- `BillingProvider` interface: `createCheckout`, `createPortalSession`, `cancel`, `handleWebhook(rawBody, headers) → BillingEvent[]`.
+- `ManualProvider` (launch): a platform admin records a payment, which emits the same event a webhook would.
+- Later: a `StripeProvider` or another one (provider choice depends on where the company is registered and is not decided). Adding it must not change the state machine, tables, enforcement or screens.
+- Tables (`tenant_core`): `plans`, `subscriptions` (tenant, plan, status, period start/end, `cancel_at_period_end`, `provider`, `provider_customer_id`, `provider_subscription_id`), `invoices` (number, amount, currency, status, period, method, reference, `recorded_by`, `provider_invoice_id`), `billing_events` (append-only, unique per provider event id).
+- Provider webhooks verify the raw-body signature and are processed once by event id. Card data never reaches our servers (hosted checkout).
+Status: ☐
+
+### I5. Entitlements and enforcement: BE (AI engine honours the result)
+`EntitlementsService.check(tenantId, limit | feature)` is the single answer to "may this tenant do this?", with a short cache. It is called by the gateway (D1), the knowledge upload, seat and invite creation, and channel connection. Stable error codes (translatable, H7): `PLAN_LIMIT_REACHED`, `PLAN_FEATURE_UNAVAILABLE`, `SUBSCRIPTION_PAST_DUE`, `TENANT_SUSPENDED`.
+At a limit the **end customer is never dropped**: the widget shows the tenant's configured fallback message and the conversation escalates to a human (D7). Over-limit conversations are counted but not answered by the AI.
+Status: ☐
+
+### I6. Manual billing API for platform admins (all audited): BE
+Under `/v1/admin/tenants/:id/subscription`: `POST activate` (plan, period end or interval, amount, currency, method, reference), `POST record-payment` (renewal), `POST extend` (extend the current period, for example Starter), `POST change-plan`, `POST cancel`, plus `GET` for the subscription, invoices and billing events. Each call writes an invoice or event and an audit entry.
+Status: ☐
+
+### I7. Money, invoices and tax: BE
+Amounts are integers in minor units plus a currency code (PKR at launch); never floats. Invoices have sequential numbers and a PDF/HTML view later. Tax is a separate line item; the applicable rate, registration and invoice wording need confirmation by an accountant before the first paid invoice.
+Status: ☐
+
+### I8. Reminders: BE
+In-app notifications (H5) and a dashboard banner: Starter ends in 7, 3 and 1 days; paid period ends in 7, 3 and 1 days; grace period started; plan limit at 80% and 100%; downgrade to Free happened; data deletion notices (I10). A daily job applies time-based transitions; request-time checks guarantee correctness if the job is late.
+Status: ☐
+
+### I9. Abuse and cost guards: BE
+No AI replies until the owner's email is verified (H4); signup rate limits per IP and per email; one Starter per organisation (matching verified email domain or company name, platform admin can override); hard caps from I1 on Starter and Free. Free-plan AI conversations are metered as carefully as paid ones because each costs LLM money.
+Status: ☐
+
+### I10. Data retention after a plan ends: BE (+ AI for engine data)
+- Free is an ongoing plan, so a Free tenant's data stays while the account is active.
+- When a paid plan ends and the tenant falls to Free, content **beyond the Free limits** (extra seats, knowledge over 10 MB, extra channels) is kept inactive and read-only for **60 days**, then deleted unless the tenant upgrades. Notices at day 30, 50 and 57, with an export offered.
+- A closed or abandoned account is deleted **60 days** after closure through the offboarding procedure (architecture §5.6) across both schemas, with the same notices.
+- Deletion is never silent. Legal retention (invoices, audit log) is the exception: invoices and tax records are kept for the period an accountant specifies.
+Status: ☐
+
+### I11. Using customer conversations to train our own model: BE + AI (**blocks any training use; needs legal review**)
+We intend to train our own model later. Customer conversations contain personal data about **third parties** (the tenants' own customers) that we hold on the tenants' behalf. Using that data for our own training is a different purpose from running the service, and generally needs a clear legal basis: an explicit clause in the terms or data-processing agreement, and in many jurisdictions consent. Keeping data "for some future use not yet defined" is not a safe basis, and retention beyond I10 must be tied to a stated purpose. This is not legal advice; a lawyer must review before launch (Pakistan's data-protection rules and any foreign customers' rules, such as the GDPR, can apply).
+**Proposal (privacy-by-design, so training stays possible later):**
+- Table `data_use_consents` (tenant_id, purpose `model_training`, status, terms version, accepted_by, accepted_at, revoked_at). **Default is off.** Consent is explicit, per tenant, revocable, and recorded; it is not hidden in a pre-ticked box. An optional benefit, such as extra Free-plan quota for opting in, is a business decision for the owner.
+- Only consenting tenants' data may enter a training dataset; the AI engine's export job filters by consent at export time.
+- Datasets contain **de-identified** text (names, phones, emails, ids and card numbers removed, free-text checked), are stored separately from live data with access control, and carry the source tenant id so revocation and erasure can be honoured for future exports.
+- Voice recordings are excluded unless separately consented, because voice is biometric-adjacent and its rules are stricter.
+- Be honest about erasure: a model that has already been trained cannot "unlearn" one tenant's data, so only de-identified, consented data is used.
+- Retention for training data is its own stated period in the terms; it does not extend I10 for non-consenting tenants.
+Status: ☐
+
+### I12. Self-hosted model readiness: AI + BE
+Moving from an API model to our own GPUs changes our costs (mostly fixed instead of per token) but must not change what customers pay. Each assistant message already records `model`, `tokens_in`, `tokens_out` and `latency_ms` (C5); add `provider` and an `estimated_cost_micros` so we can compare API and self-hosted cost per tenant with real data before buying hardware. The AI engine should keep the model behind one interface so it can be swapped (Abdullah's decision).
 Status: ☐
 
 ---
@@ -379,9 +476,9 @@ Engine → backend: `POST /internal/events` (D5), `GET /internal/tenants/:id/age
 
 | Area | Routes |
 |---|---|
-| Auth | `POST /auth/signup`, `POST /auth/login`, `GET /me` |
+| Auth | `POST /auth/signup`, `POST /auth/login`, `GET/PATCH /me` (built), `POST /auth/verify-email`, `POST /auth/verify-email/resend` (H4, built) |
 | Tenant | `GET/PATCH /tenants/:tenantId` (own tenant), usage: `GET /tenants/:tenantId/usage` |
-| Users | CRUD `/tenants/:tenantId/users` |
+| Users | `GET /tenants/:tenantId/users`, `GET/PATCH/DELETE …/users/:id` (no create: invites, H1) |
 | Customers | CRUD `/tenants/:tenantId/customers`, `GET …/customers/:id/conversations` |
 | Conversations | `GET /tenants/:tenantId/conversations?status=&assignedTo=`, `GET …/:id`, `POST …/:id/claim`, `POST …/:id/messages`, `POST …/:id/release`, `POST …/:id/resolve` |
 | Actions | `GET …/actions?status=proposed`, `POST …/actions/:id/approve`, `POST …/actions/:id/reject` |
@@ -409,5 +506,6 @@ E1 ☐  E2 ☐  E3 ☐  E4 ☐  E5 ☐
 F1 ☐  F2 ☐  F3 ☐  F4 ☐  F5 ☐  F6 ☐  F7 ☐
 G1 ☐  G2 ☐  G3 ☐  G4 ☐
 H1 ☐  H2 ☐  H3 ☐  H4 ☐  H5 ☐  H6 ☐  H7 ☐  H8 ☐
+I1 ☐  I2 ☐  I3 ☐  I4 ☐  I5 ☐  I6 ☐  I7 ☐  I8 ☐  I9 ☐  I10 ☐  I11 ☐  I12 ☐
 ```
 Blocking items for the next sprint: **A1, A2, A5, B5, C1, C2, D1, D2**.

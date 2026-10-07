@@ -1,6 +1,7 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
-import { IsEmail, IsString } from 'class-validator';
+import { IsString } from 'class-validator';
+import { NormalizedEmailProperty } from '../../common/validation/email';
 
 export class LoginDto {
   @ApiProperty({
@@ -13,8 +14,7 @@ export class LoginDto {
   @IsString()
   tenantSlug: string;
 
-  @ApiProperty({ example: 'owner@acme.com' })
-  @IsEmail()
+  @NormalizedEmailProperty({ example: 'owner@acme.com' })
   email: string;
 
   @ApiProperty()

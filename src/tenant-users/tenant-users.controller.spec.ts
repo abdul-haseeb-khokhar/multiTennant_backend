@@ -7,15 +7,16 @@ import { TenantUsersService } from './tenant-users.service';
 
 describe('TenantUsersController', () => {
   let controller: TenantUsersController;
-  let service: Record<
-    'create' | 'findAll' | 'findOne' | 'update' | 'remove',
-    jest.Mock
-  >;
-  const actor: AuthUser = { userId: 'u1', tenantId: 'tenant-a', role: 'admin' };
+  let service: Record<'findAll' | 'findOne' | 'update' | 'remove', jest.Mock>;
+  const actor: AuthUser = {
+    userId: 'u1',
+    tenantId: 'tenant-a',
+    role: 'admin',
+    emailVerified: true,
+  };
 
   beforeEach(async () => {
     service = {
-      create: jest.fn(),
       findAll: jest.fn(),
       findOne: jest.fn(),
       update: jest.fn(),
@@ -50,11 +51,11 @@ describe('TenantUsersController', () => {
     expect(service.findOne).toHaveBeenCalledWith('tenant-a', 'user-1');
   });
 
-  it('forwards create and list with the tenant first', () => {
-    const dto = { email: 'a@b.co', password: 'password123' };
-    void controller.create('tenant-a', dto, actor);
-    expect(service.create).toHaveBeenCalledWith('tenant-a', dto, actor);
+  it('has no create route: people join by invite', () => {
+    expect((controller as any).create).toBeUndefined();
+  });
 
+  it('forwards list with the tenant first', () => {
     void controller.findAll('tenant-a', { skip: 1, take: 2 });
     expect(service.findAll).toHaveBeenCalledWith('tenant-a', {
       skip: 1,

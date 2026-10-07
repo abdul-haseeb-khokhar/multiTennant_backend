@@ -1,0 +1,18 @@
+{
+  "agent.joined": "A human agent has joined the conversation.",
+  "agent.left": "The human agent has left. The assistant will continue.",
+  "ai.label": "Assistant",
+  "close": "Close chat",
+  "connecting": "Connecting…",
+  "error.generic": "Something went wrong. Please try again.",
+  "error.message_too_long": "Your message is too long.",
+  "error.rate_limited": "You are sending messages too quickly. Please wait a moment.",
+  "input.placeholder": "Type your message",
+  "minimise": "Minimise chat",
+  "powered_by": "Powered by {name}",
+  "reconnecting": "Connection lost. Reconnecting…",
+  "send": "Send",
+  "title": "Chat with us",
+  "typing": "Typing…",
+  "unread": "{count, plural, one {# unread message} other {# unread messages}}"
+}

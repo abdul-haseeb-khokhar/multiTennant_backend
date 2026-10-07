@@ -17,6 +17,9 @@ export class Tenant {
   @ApiProperty({ enum: ['trial', 'active', 'suspended'] })
   status: string;
 
+  @ApiProperty({ example: 'en', description: 'Default language (H7)' })
+  defaultLocale: string;
+
   @ApiProperty({ type: String, format: 'date-time' })
   createdAt: Date;
 }

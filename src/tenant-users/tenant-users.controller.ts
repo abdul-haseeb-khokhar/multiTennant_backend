@@ -5,13 +5,11 @@ import {
   Get,
   Param,
   Patch,
-  Post,
   Query,
   UseGuards,
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
-  ApiCreatedResponse,
   ApiOkResponse,
   ApiOperation,
   ApiTags,
@@ -22,7 +20,6 @@ import { Roles } from '../auth/roles';
 import type { AuthUser } from '../auth/roles';
 import { RolesGuard } from '../auth/roles.guard';
 import { ApiPaginatedResponse } from '../common/pagination/api-paginated-response.decorator';
-import { CreateTenantUserDto } from './dto/create-tenant-user.dto';
 import { QueryTenantUserDto } from './dto/query-tenant-user.dto';
 import { UpdateTenantUserDto } from './dto/update-tenant-user.dto';
 import { TenantUser } from './entities/tenant-user.entity';
@@ -34,21 +31,6 @@ import { TenantUsersService } from './tenant-users.service';
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class TenantUsersController {
   constructor(private readonly tenantUsersService: TenantUsersService) {}
-
-  @Post()
-  @Roles('owner', 'admin')
-  @ApiOperation({
-    summary:
-      'Create a staff user (owner/admin; only an owner can create an owner)',
-  })
-  @ApiCreatedResponse({ type: TenantUser })
-  create(
-    @Param('tenantId') tenantId: string,
-    @Body() dto: CreateTenantUserDto,
-    @CurrentUser() actor: AuthUser,
-  ) {
-    return this.tenantUsersService.create(tenantId, dto, actor);
-  }
 
   @Get()
   @Roles('owner', 'admin', 'agent')
@@ -71,7 +53,7 @@ export class TenantUsersController {
   @Roles('owner', 'admin')
   @ApiOperation({
     summary:
-      'Change email, role or password (owner/admin; only an owner can touch an owner)',
+      'Change email, role or status (owner/admin; only an owner can touch an owner)',
   })
   @ApiOkResponse({ type: TenantUser })
   update(

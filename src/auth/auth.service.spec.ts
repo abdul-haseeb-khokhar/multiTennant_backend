@@ -1,4 +1,3 @@
-import { JwtService } from '@nestjs/jwt';
 import { Test, TestingModule } from '@nestjs/testing';
 import * as bcrypt from 'bcrypt';
 import {
@@ -8,6 +7,8 @@ import {
 } from '../../test/utils/prisma-mock';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthService } from './auth.service';
+import { EmailVerificationService } from './email-verification.service';
+import { SessionTokenService } from './session-token.service';
 
 jest.mock('bcrypt', () => {
   const actual = jest.requireActual('bcrypt');
@@ -17,7 +18,8 @@ jest.mock('bcrypt', () => {
 describe('AuthService', () => {
   let service: AuthService;
   let prisma: PrismaMock;
-  let jwt: { sign: jest.Mock };
+  let sessionTokens: { sign: jest.Mock };
+  let verification: { issue: jest.Mock };
   let passwordHash: string;
 
   beforeAll(() => {
@@ -29,12 +31,14 @@ describe('AuthService', () => {
     prisma.$transaction.mockImplementation((cb: (tx: unknown) => unknown) =>
       cb(prisma),
     );
-    jwt = { sign: jest.fn().mockReturnValue('signed.jwt.token') };
+    sessionTokens = { sign: jest.fn().mockReturnValue('signed.jwt.token') };
+    verification = { issue: jest.fn().mockResolvedValue({}) };
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AuthService,
         { provide: PrismaService, useValue: prisma },
-        { provide: JwtService, useValue: jwt },
+        { provide: SessionTokenService, useValue: sessionTokens },
+        { provide: EmailVerificationService, useValue: verification },
       ],
     }).compile();
     service = module.get(AuthService);
@@ -57,6 +61,7 @@ describe('AuthService', () => {
         id: 'u1',
         tenantId: 't1',
         role: 'admin',
+        status: 'active',
         passwordHash,
       });
     });
@@ -71,12 +76,35 @@ describe('AuthService', () => {
       expect(prisma.tenantUser.findFirst).toHaveBeenCalledWith({
         where: { tenantId: 't1', email: 'owner@acme.com' },
       });
-      expect(jwt.sign).toHaveBeenCalledWith({
-        sub: 'u1',
-        tenantId: 't1',
-        role: 'admin',
-        scope: 'tenant',
+      expect(sessionTokens.sign).toHaveBeenCalledWith('u1', 't1', 'admin');
+    });
+
+    it('trims and lower-cases the email before looking the user up', async () => {
+      await service.login({ ...dto, email: '  Owner@ACME.com ' });
+      expect(prisma.tenantUser.findFirst).toHaveBeenCalledWith({
+        where: { tenantId: 't1', email: 'owner@acme.com' },
       });
+    });
+
+    it('refuses a disabled user with 403 ACCOUNT_DISABLED, but only after the password checked out', async () => {
+      prisma.tenantUser.findFirst.mockResolvedValue({
+        id: 'u1',
+        tenantId: 't1',
+        role: 'agent',
+        status: 'disabled',
+        passwordHash,
+      });
+      await expect(service.login(dto)).rejects.toMatchObject({
+        status: 403,
+        response: { code: 'ACCOUNT_DISABLED' },
+      });
+      await expect(
+        service.login({ ...dto, password: 'wrong-pass' }),
+      ).rejects.toMatchObject({
+        status: 401,
+        response: { code: 'INVALID_CREDENTIALS' },
+      });
+      expect(sessionTokens.sign).not.toHaveBeenCalled();
     });
 
     it('fails with INVALID_CREDENTIALS for a wrong password, unknown user and unknown tenant alike', async () => {
@@ -98,7 +126,7 @@ describe('AuthService', () => {
         status: 401,
         response: { code: 'INVALID_CREDENTIALS' },
       });
-      expect(jwt.sign).not.toHaveBeenCalled();
+      expect(sessionTokens.sign).not.toHaveBeenCalled();
     });
 
     it('still compares a password when the tenant is unknown, to keep timing similar', async () => {
@@ -136,10 +164,21 @@ describe('AuthService', () => {
 
     beforeEach(() => {
       prisma.tenant.create.mockImplementation(({ data }) =>
-        Promise.resolve({ id: 't1', plan: 'free', status: 'trial', ...data }),
+        Promise.resolve({
+          id: 't1',
+          plan: 'free',
+          status: 'trial',
+          defaultLocale: 'en',
+          ...data,
+        }),
       );
       prisma.tenantUser.create.mockImplementation(({ data }) =>
-        Promise.resolve({ id: 'u1', tenantId: data.tenantId, role: data.role }),
+        Promise.resolve({
+          id: 'u1',
+          tenantId: data.tenantId,
+          email: data.email,
+          role: data.role,
+        }),
       );
     });
 
@@ -148,7 +187,11 @@ describe('AuthService', () => {
 
       expect(prisma.$transaction).toHaveBeenCalledTimes(1);
       expect(prisma.tenant.create).toHaveBeenCalledWith({
-        data: { name: 'Acme Support', slug: 'acme-support' },
+        data: {
+          name: 'Acme Support',
+          slug: 'acme-support',
+          defaultLocale: 'en',
+        },
       });
       const ownerArg = prisma.tenantUser.create.mock.calls[0][0];
       expect(ownerArg.data).toMatchObject({
@@ -161,18 +204,42 @@ describe('AuthService', () => {
       ).toBe(true);
       expect(ownerArg.omit).toEqual({ passwordHash: true });
       expect(res.access_token).toBe('signed.jwt.token');
-      expect(jwt.sign).toHaveBeenCalledWith({
-        sub: 'u1',
-        tenantId: 't1',
-        role: 'owner',
-        scope: 'tenant',
+      expect(sessionTokens.sign).toHaveBeenCalledWith('u1', 't1', 'owner');
+    });
+
+    it('normalises the owner email and stores the chosen default locale', async () => {
+      await service.signup({
+        ...dto,
+        ownerEmail: ' Owner@ACME.com ',
+        locale: 'ur',
+      });
+      expect(prisma.tenant.create.mock.calls[0][0].data.defaultLocale).toBe(
+        'ur',
+      );
+      expect(prisma.tenantUser.create.mock.calls[0][0].data.email).toBe(
+        'owner@acme.com',
+      );
+    });
+
+    it('starts email verification for the new owner and exposes the link only when the mailer returns one', async () => {
+      const res = await service.signup(dto);
+      expect(verification.issue).toHaveBeenCalledWith({
+        id: 'u1',
+        email: 'owner@acme.com',
+        locale: 'en',
+      });
+      expect(res.verificationLink).toBeUndefined();
+
+      verification.issue.mockResolvedValue({ link: 'http://x/verify?token=t' });
+      await expect(service.signup(dto)).resolves.toMatchObject({
+        verificationLink: 'http://x/verify?token=t',
       });
     });
 
     it('uses the slug the caller asked for', async () => {
       await service.signup({ ...dto, tenantSlug: 'acme' });
       expect(prisma.tenant.create).toHaveBeenCalledWith({
-        data: { name: 'Acme Support', slug: 'acme' },
+        data: { name: 'Acme Support', slug: 'acme', defaultLocale: 'en' },
       });
     });
 

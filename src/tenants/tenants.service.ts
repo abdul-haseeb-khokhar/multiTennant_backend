@@ -1,4 +1,5 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
+import { AuditAction, AuditService } from '../audit/audit.service';
 import { ApiException } from '../common/errors/api.exception';
 import { ErrorCode } from '../common/errors/error-codes';
 import { isPrismaError } from '../common/errors/prisma-errors';
@@ -10,7 +11,10 @@ import { UpdateTenantDto } from './dto/update-tenant.dto';
 /** Cross-tenant operations for platform admins. Tenant creation lives in `AuthService.signup`. */
 @Injectable()
 export class TenantsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly audit: AuditService,
+  ) {}
 
   async findAll(query: QueryTenantDto) {
     const page = resolvePage(query);
@@ -33,11 +37,47 @@ export class TenantsService {
     return tenant;
   }
 
-  async update(id: string, dto: UpdateTenantDto) {
+  /**
+   * `adminId` is the platform admin making the change. Suspending or reactivating a tenant is
+   * written to that tenant's audit log (H6) in the same transaction.
+   */
+  async update(id: string, dto: UpdateTenantDto, adminId: string) {
     try {
-      return await this.prisma.tenant.update({
-        where: { id },
-        data: { name: dto.name, plan: dto.plan, status: dto.status },
+      return await this.prisma.$transaction(async (tx) => {
+        const existing = await tx.tenant.findUnique({ where: { id } });
+        if (!existing) {
+          throw this.notFound(id);
+        }
+        const updated = await tx.tenant.update({
+          where: { id },
+          data: {
+            name: dto.name,
+            plan: dto.plan,
+            status: dto.status,
+            defaultLocale: dto.defaultLocale,
+          },
+        });
+        const suspended =
+          updated.status === 'suspended' && existing.status !== 'suspended';
+        const reactivated =
+          existing.status === 'suspended' && updated.status !== 'suspended';
+        if (suspended || reactivated) {
+          await this.audit.record(
+            {
+              tenantId: id,
+              actor: { userId: adminId, role: 'platform_admin' },
+              action: suspended
+                ? AuditAction.TENANT_SUSPENDED
+                : AuditAction.TENANT_REACTIVATED,
+              targetType: 'tenant',
+              targetId: id,
+              before: { status: existing.status },
+              after: { status: updated.status },
+            },
+            tx,
+          );
+        }
+        return updated;
       });
     } catch (error) {
       if (isPrismaError(error, 'P2025')) {
