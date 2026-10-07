@@ -94,7 +94,7 @@ Phases 0 and 1 closed the original account-lifecycle issues (unprotected `/tenan
 10. The Prisma mocks do not apply `omit`: a mock that echoes `create` data back must strip `passwordHash`/`tokenHash` itself (see the e2e mocks); the unit tests assert the `omit` argument instead.
 
 ## Roadmap
-Phase 0 foundation and hardening (merged, CI green) → 1 account and team management (implemented, uncommitted on branch `phase-1-account-team`; only the mail provider, H3, is open) → 2 shared infra and engine contract (parallel with 1) → 3 gateway and widget entry → 4 human-agent flow and notifications → 5 tenant config, knowledge, actions, usage → 6 WhatsApp and voice → 7 agent productivity (deferred) → 8 production hardening. Scope checklists and exit criteria: [docs/backend-roadmap.md](docs/backend-roadmap.md). Tick boxes there as work completes.
+Phase 0 foundation and hardening (merged, CI green) → 1 account and team management (merged to main, PR #2; only the mail provider, H3, is open) → 2 shared infra and engine contract (parallel with 1) → 3 gateway and widget entry → 4 human-agent flow and notifications → 5 tenant config, knowledge, actions, usage → 6 WhatsApp and voice → 7 agent productivity (deferred) → 8 production hardening. Scope checklists and exit criteria: [docs/backend-roadmap.md](docs/backend-roadmap.md). Tick boxes there as work completes.
 
 ## Working notes
 - Do not invent facts about the AI engine's code beyond its schema (shared in chat, see docs); ask or record a question in team-alignment instead.
