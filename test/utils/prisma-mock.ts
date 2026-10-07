@@ -20,6 +20,7 @@ export function createPrismaMock() {
     tenantUser: model(
       'create',
       'findFirst',
+      'findUnique',
       'findMany',
       'count',
       'update',
@@ -34,12 +35,36 @@ export function createPrismaMock() {
       'delete',
     ),
     platformAdmin: model('findUnique'),
+    staffInvite: model(
+      'create',
+      'findFirst',
+      'findUnique',
+      'findMany',
+      'count',
+      'update',
+      'updateMany',
+    ),
+    passwordReset: model('create', 'findUnique', 'updateMany'),
+    emailVerification: model('create', 'findUnique', 'updateMany'),
+    auditLog: model('create', 'findMany', 'count'),
     $transaction: jest.fn(),
     $queryRaw: jest.fn(),
   };
 }
 
 export type PrismaMock = ReturnType<typeof createPrismaMock>;
+
+/**
+ * Makes `$transaction` run its callback against the same mock client (or resolve an array of
+ * operations), the way the services use it. Call it after `jest.resetAllMocks()`.
+ */
+export function mockTransaction(prisma: PrismaMock) {
+  prisma.$transaction.mockImplementation((arg: unknown) =>
+    typeof arg === 'function'
+      ? (arg as (tx: unknown) => unknown)(prisma)
+      : Promise.all(arg as unknown[]),
+  );
+}
 
 /** A known Prisma error such as `P2002` (unique violation) or `P2025` (record not found). */
 export function prismaError(code: string) {

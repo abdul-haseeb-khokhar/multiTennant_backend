@@ -13,7 +13,8 @@ import * as bcrypt from 'bcrypt';
 const MIN_PASSWORD_LENGTH = 12;
 
 async function main() {
-  const email = process.env.PLATFORM_ADMIN_EMAIL?.trim();
+  // Emails are stored trimmed and lower-cased (same rule as every other account).
+  const email = process.env.PLATFORM_ADMIN_EMAIL?.trim().toLowerCase();
   const password = process.env.PLATFORM_ADMIN_PASSWORD;
 
   if (!email || !password) {

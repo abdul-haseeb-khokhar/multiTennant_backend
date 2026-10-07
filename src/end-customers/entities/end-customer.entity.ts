@@ -14,6 +14,9 @@ export class EndCustomer {
   @ApiPropertyOptional({ type: String, nullable: true })
   name: string | null;
 
+  @ApiPropertyOptional({ type: String, nullable: true, example: 'ur' })
+  locale: string | null;
+
   @ApiPropertyOptional({
     type: 'object',
     additionalProperties: true,

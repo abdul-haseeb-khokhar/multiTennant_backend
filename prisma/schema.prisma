@@ -15,29 +15,43 @@ datasource db {
 }
 
 model Tenant {
-  id        String   @id @default(uuid())
-  name      String
-  slug      String   @unique
-  plan      String   @default("free")
-  status    String   @default("trial")
-  createdAt DateTime @default(now()) @map("created_at")
+  id            String   @id @default(uuid())
+  name          String
+  slug          String   @unique
+  plan          String   @default("free")
+  status        String   @default("trial")
+  defaultLocale String   @default("en") @map("default_locale")
+  createdAt     DateTime @default(now()) @map("created_at")
 
   tenantUsers  TenantUser[]
   endCustomers EndCustomer[]
+  staffInvites StaffInvite[]
+  auditLogs    AuditLog[]
 
   @@map("tenants")
   @@schema("tenant_core")
 }
 
 model TenantUser {
-  id           String   @id @default(uuid())
-  tenantId     String   @map("tenant_id")
-  email        String
-  passwordHash String   @map("password_hash")
-  role         String   @default("agent")
-  createdAt    DateTime @default(now()) @map("created_at")
+  id                String    @id @default(uuid())
+  tenantId          String    @map("tenant_id")
+  // Always stored trimmed and lower-cased (a CHECK constraint in the database enforces it).
+  email             String
+  name              String?
+  passwordHash      String    @map("password_hash")
+  role              String    @default("agent")
+  // 'active' | 'disabled'. A disabled user is refused on the next request (JwtStrategy).
+  status            String    @default("active")
+  emailVerifiedAt   DateTime? @map("email_verified_at")
+  // Tokens issued before this instant are rejected (password reset).
+  passwordChangedAt DateTime? @map("password_changed_at")
+  // Dashboard language; null falls back to tenants.default_locale.
+  locale            String?
+  createdAt         DateTime  @default(now()) @map("created_at")
 
-  tenant Tenant @relation(fields: [tenantId], references: [id])
+  tenant             Tenant              @relation(fields: [tenantId], references: [id])
+  passwordResets     PasswordReset[]
+  emailVerifications EmailVerification[]
 
   @@unique([tenantId, email])
   @@map("tenant_user")
@@ -50,6 +64,7 @@ model EndCustomer {
   externalId String   @map("external_id")
   name       String?
   metadata   Json?
+  locale     String?
   createdAt  DateTime @default(now()) @map("created_at")
 
   tenant Tenant @relation(fields: [tenantId], references: [id])
@@ -66,5 +81,85 @@ model PlatformAdmin {
   createdAt    DateTime @default(now()) @map("created_at")
 
   @@map("platform_admins")
+  @@schema("tenant_core")
+}
+
+/// A pending or finished invitation of a staff member (H1). Only the sha256 of the token is stored.
+model StaffInvite {
+  id         String    @id @default(uuid())
+  tenantId   String    @map("tenant_id")
+  email      String
+  role       String
+  tokenHash  String    @unique @map("token_hash")
+  expiresAt  DateTime  @map("expires_at")
+  // The inviting user's id. A plain column (no foreign key) so removing that user is not blocked.
+  invitedBy  String?   @map("invited_by")
+  acceptedAt DateTime? @map("accepted_at")
+  revokedAt  DateTime? @map("revoked_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId, email])
+  @@map("staff_invites")
+  @@schema("tenant_core")
+}
+
+/// Self-service password reset (H2). Rows are removed with their user (ephemeral data).
+model PasswordReset {
+  id        String    @id @default(uuid())
+  userId    String    @map("user_id")
+  tokenHash String    @unique @map("token_hash")
+  expiresAt DateTime  @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user TenantUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("password_resets")
+  @@schema("tenant_core")
+}
+
+/// Email verification links (H4). Rows are removed with their user (ephemeral data).
+model EmailVerification {
+  id        String    @id @default(uuid())
+  userId    String    @map("user_id")
+  tokenHash String    @unique @map("token_hash")
+  expiresAt DateTime  @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user TenantUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("email_verifications")
+  @@schema("tenant_core")
+}
+
+/// Append-only record of staff and platform-admin actions (H6). A database trigger refuses
+/// UPDATE and DELETE. `actorUserId` has no foreign key: it is a tenant_user id, or a
+/// platform_admins id when `actorRole` is 'platform_admin'.
+model AuditLog {
+  id          String   @id @default(uuid())
+  tenantId    String   @map("tenant_id")
+  actorUserId String?  @map("actor_user_id")
+  actorRole   String?  @map("actor_role")
+  action      String
+  targetType  String?  @map("target_type")
+  targetId    String?  @map("target_id")
+  before      Json?
+  after       Json?
+  ip          String?
+  userAgent   String?  @map("user_agent")
+  requestId   String?  @map("request_id")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId, createdAt(sort: Desc)])
+  @@index([tenantId, action])
+  @@index([tenantId, actorUserId])
+  @@map("audit_logs")
   @@schema("tenant_core")
 }

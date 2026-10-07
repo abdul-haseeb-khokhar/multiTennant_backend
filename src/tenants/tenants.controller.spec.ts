@@ -38,12 +38,20 @@ describe('TenantsController', () => {
   it('delegates to the service', () => {
     void controller.findAll({ skip: 0, take: 5 });
     void controller.findOne('t1');
-    void controller.update('t1', { status: 'suspended' });
+    void controller.update(
+      't1',
+      { status: 'suspended' },
+      { adminId: 'admin-1' },
+    );
     void controller.remove('t1');
 
     expect(service.findAll).toHaveBeenCalledWith({ skip: 0, take: 5 });
     expect(service.findOne).toHaveBeenCalledWith('t1');
-    expect(service.update).toHaveBeenCalledWith('t1', { status: 'suspended' });
+    expect(service.update).toHaveBeenCalledWith(
+      't1',
+      { status: 'suspended' },
+      'admin-1',
+    );
     expect(service.remove).toHaveBeenCalledWith('t1');
   });
 });

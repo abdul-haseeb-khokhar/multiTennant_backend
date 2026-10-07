@@ -2,6 +2,7 @@ import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AllExceptionsFilter } from './common/errors/all-exceptions.filter';
+import { NoNullBytesPipe } from './common/validation/no-null-bytes.pipe';
 import { requestContextMiddleware } from './common/request-context/request-context.middleware';
 
 export const API_PREFIX = 'v1';
@@ -13,7 +14,10 @@ export const API_PREFIX = 'v1';
 export function configureApp(app: INestApplication) {
   app.use(requestContextMiddleware);
   app.setGlobalPrefix(API_PREFIX, { exclude: ['health', 'health/ready'] });
-  app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
+  app.useGlobalPipes(
+    new NoNullBytesPipe(),
+    new ValidationPipe({ whitelist: true, transform: true }),
+  );
   app.useGlobalFilters(new AllExceptionsFilter());
   app.enableCors({
     // Without FRONTEND_URL no browser origin is allowed ("origin: undefined" would mean "*").
@@ -26,7 +30,7 @@ export function buildOpenApiConfig() {
   return new DocumentBuilder()
     .setTitle('Multi-tenant support platform: backend core')
     .setDescription(
-      'Tenants, staff authentication and roles, end customers. Errors always have the shape ' +
+      'Tenants, staff authentication, invitations and roles, audit log, translations, end customers. Errors always have the shape ' +
         '`{ statusCode, code, message }`; lists are `{ data, total, skip, take }`.',
     )
     .setVersion('0.1')

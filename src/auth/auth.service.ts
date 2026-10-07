@@ -1,14 +1,16 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
-import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 import { ApiException } from '../common/errors/api.exception';
 import { ErrorCode } from '../common/errors/error-codes';
 import { isPrismaError } from '../common/errors/prisma-errors';
+import { normalizeEmail } from '../common/validation/email';
+import { DEFAULT_LOCALE } from '../i18n/locales';
 import { PrismaService } from '../prisma/prisma.service';
 import { isReservedSlug, slugify, withSuffix } from '../tenants/slug';
 import { LoginDto } from './dto/login.dto';
 import { SignupDto } from './dto/signup.dto';
-import { TENANT_SCOPE } from './jwt.strategy';
+import { EmailVerificationService } from './email-verification.service';
+import { SessionTokenService } from './session-token.service';
 
 const SALT_ROUNDS = 10;
 const MAX_DERIVED_SLUG_ATTEMPTS = 5;
@@ -20,8 +22,9 @@ const DUMMY_PASSWORD_HASH = bcrypt.hashSync('not-a-real-password', SALT_ROUNDS);
 @Injectable()
 export class AuthService {
   constructor(
-    private readonly jwtService: JwtService,
     private readonly prisma: PrismaService,
+    private readonly sessionTokens: SessionTokenService,
+    private readonly emailVerification: EmailVerificationService,
   ) {}
 
   async login(dto: LoginDto) {
@@ -30,7 +33,7 @@ export class AuthService {
     });
     const user = tenant
       ? await this.prisma.tenantUser.findFirst({
-          where: { tenantId: tenant.id, email: dto.email },
+          where: { tenantId: tenant.id, email: normalizeEmail(dto.email) },
         })
       : null;
 
@@ -45,6 +48,14 @@ export class AuthService {
         'Invalid credentials',
       );
     }
+    // Only after the password matched, so this does not reveal which accounts exist.
+    if (user.status !== 'active') {
+      throw new ApiException(
+        HttpStatus.FORBIDDEN,
+        ErrorCode.ACCOUNT_DISABLED,
+        'This account is disabled',
+      );
+    }
     if (tenant.status === 'suspended') {
       throw new ApiException(
         HttpStatus.FORBIDDEN,
@@ -54,7 +65,7 @@ export class AuthService {
     }
 
     return {
-      access_token: this.signTenantToken(user.id, tenant.id, user.role),
+      access_token: this.sessionTokens.sign(user.id, tenant.id, user.role),
     };
   }
 
@@ -75,10 +86,23 @@ export class AuthService {
           slug,
           passwordHash,
         );
+        // The owner can use the trial straight away; inviting staff waits for the verification
+        // link (H4). A mail problem must not undo a completed signup, hence the background send.
+        const verification = await this.emailVerification.issue({
+          id: owner.id,
+          email: owner.email,
+          locale: tenant.defaultLocale,
+        });
         return {
           tenant,
           owner,
-          access_token: this.signTenantToken(owner.id, tenant.id, owner.role),
+          access_token: this.sessionTokens.sign(
+            owner.id,
+            tenant.id,
+            owner.role,
+          ),
+          // Only with MAIL_MODE=link (development).
+          verificationLink: verification.link,
         };
       } catch (error) {
         // A new tenant has no users yet, so the only unique constraint that can fire is the slug.
@@ -100,27 +124,22 @@ export class AuthService {
   ) {
     return this.prisma.$transaction(async (tx) => {
       const tenant = await tx.tenant.create({
-        data: { name: dto.tenantName, slug },
+        data: {
+          name: dto.tenantName,
+          slug,
+          defaultLocale: dto.locale ?? DEFAULT_LOCALE,
+        },
       });
       const owner = await tx.tenantUser.create({
         data: {
           tenantId: tenant.id,
-          email: dto.ownerEmail,
+          email: normalizeEmail(dto.ownerEmail),
           passwordHash,
           role: 'owner',
         },
         omit: { passwordHash: true },
       });
       return { tenant, owner };
-    });
-  }
-
-  private signTenantToken(userId: string, tenantId: string, role: string) {
-    return this.jwtService.sign({
-      sub: userId,
-      tenantId,
-      role,
-      scope: TENANT_SCOPE,
     });
   }
 

@@ -55,28 +55,30 @@ Principles:
 ### 4.1 `tenant_core` (backend). Exists today
 | Table | Columns | Notes |
 |---|---|---|
-| `tenants` | id, name, slug (unique), plan (`free`/`pro`/`enterprise`), status (`trial`/`active`/`suspended`), created_at | |
+| `tenants` | id, name, slug (unique), plan (`free`/`pro`/`enterprise`), status (`trial`/`active`/`suspended`), default_locale, created_at | |
 | `platform_admins` | id, email (unique), password_hash, created_at | our own staff; created with `npm run platform-admin:create` |
-| `tenant_user` | id, tenant_id, email, password_hash, role (`owner`/`admin`/`agent`), created_at | unique (tenant_id, email), FK RESTRICT |
-| `end_customers` | id, tenant_id, external_id, name?, metadata jsonb?, created_at | unique (tenant_id, external_id), FK RESTRICT |
+| `tenant_user` | id, tenant_id, email (lower-case, CHECK constraint), name?, password_hash, role (`owner`/`admin`/`agent`), status (`active`/`disabled`), email_verified_at?, password_changed_at?, locale?, created_at | unique (tenant_id, email), FK RESTRICT |
+| `end_customers` | id, tenant_id, external_id, name?, locale?, metadata jsonb?, created_at | unique (tenant_id, external_id), FK RESTRICT |
+| `staff_invites` | id, tenant_id, email, role, token_hash (unique), expires_at (7 days), invited_by?, accepted_at?, revoked_at?, created_at | invitation flow (H1); `invited_by` has no FK |
+| `password_resets` | id, user_id, token_hash (unique), expires_at (1 hour), used_at?, created_at | self-service reset (H2); removed with the user (cascade) |
+| `email_verifications` | id, user_id, token_hash (unique), expires_at (24 hours), used_at?, created_at | email verification (H4); removed with the user (cascade) |
+| `audit_logs` | id, tenant_id, actor_user_id?, actor_role?, action, target_type?, target_id?, before jsonb?, after jsonb?, ip?, user_agent?, request_id?, created_at | append-only (a trigger refuses UPDATE/DELETE); `actor_user_id` has no FK and holds a `platform_admins` id when `actor_role` is `platform_admin` (H6) |
 
 ### 4.2 `tenant_core`: **Proposed** additions
 | Table / change | Purpose |
 |---|---|
-| `tenants.deleted_at`, `updated_at` | Soft delete (`tenants.slug` and `platform_admins` are built, see 4.1) |
+| `tenants.deleted_at`, `updated_at` | Soft delete (`tenants.slug`, `platform_admins`, the staff-lifecycle tables and the locale columns are built, see 4.1) |
 | `api_keys` (tenant_id, type `widget`/`server`, key_prefix, key_hash, allowed_origins[], revoked_at) | Resolve a public widget key to a tenant, with per-tenant origin allow-list |
 | `channel_connections` (tenant_id, channel, provider, external_account_id, credentials_ref, status) | Map a WhatsApp number or phone number to a tenant for inbound webhooks |
 | `agent_configs` (tenant_id, version, config jsonb) | Persona, tone, language, greeting, escalation rules, working hours, allowed actions |
 | `tenant_integrations` (tenant_id, kind, credentials_encrypted) | Credentials for the tenant's own systems that agent actions call |
 | `knowledge_sources` (tenant_id, name, type, storage_key, status, error, created_at) | Uploaded docs/URLs and their ingestion state (chunks live in `ai_engine`) |
 | `usage_daily` (tenant_id, day, messages, tokens_in, tokens_out, call_minutes) | Plan limits and billing |
-| `staff_invites` (tenant_id, email, role, token_hash, expires_at, invited_by, accepted_at, revoked_at) | Staff set their own password via an invite (H1) |
-| `password_resets` (user_id, token_hash, expires_at, used_at) | Self-service password reset (H2) |
 | `notifications` (tenant_id, user_id, type, title_key, body_key, params, link, read_at) | In-app notifications, stored as translation keys (H5) |
-| `audit_logs` (tenant_id, actor_user_id, action, target_type, target_id, before, after, ip, request_id) | Append-only record of staff and admin actions (H6) |
-| `tenant_user` + `status`, `email_verified_at`, `password_changed_at`, `locale`; `tenants.default_locale`; `end_customers.locale` | Account state and language preferences (H2, H4, H7) |
 
-Translations are files, not tables: `src/lang/<locale>/<namespace>.json`, served at `/v1/i18n/...` (H7).
+Billing (section I): `plans`, `subscriptions`, `invoices`, `billing_events` and `data_use_consents`. Starter (hidden, 15 days) falls back to Free; Pro and Enterprise are paid; payments are recorded manually at launch behind a `BillingProvider` interface so a payment provider can be added later without rework. Amounts are integer minor units plus currency (PKR).
+
+Translations are files, not tables: `src/lang/<locale>/<namespace>.json`, served at `/v1/i18n/...` (H7, built).
 
 ### 4.3 `ai_engine` (Abdullah). Exists today
 `conversations`, `messages`, `knowledge_chunks` (`vector(768)`), `call_logs`, `agent_actions`; `tenant_id` is a plain indexed column, with the foreign key to `tenant_core.tenants(id)` added as raw SQL.
@@ -122,13 +124,18 @@ Default is **soft delete** (`status=suspended`, `deleted_at`). Hard delete is a 
 
 | Module | Routes | Auth |
 |---|---|---|
-| `auth` | `POST /v1/auth/signup`, `POST /v1/auth/login`, `POST /v1/admin/auth/login` | public |
+| `auth` | `POST /v1/auth/signup`, `POST /v1/auth/login`, `POST /v1/admin/auth/login`, `POST /v1/auth/password-reset/request` and `/confirm`, `POST /v1/auth/verify-email`, `POST /v1/auth/invites/accept` | public |
+| `auth` (signed in) | `POST /v1/auth/verify-email/resend` | staff JWT |
+| `me` | `GET/PATCH /v1/me` | staff JWT (any role) |
+| `invites` | `POST/GET /v1/tenants/:tenantId/invites`, `DELETE …/:id` | JWT + tenant match + owner/admin (create also needs a verified email) |
+| `audit` | `GET /v1/tenants/:tenantId/audit-logs` | JWT + tenant match + owner/admin |
+| `i18n` | `GET /v1/i18n/locales`, `GET /v1/i18n/:locale/:namespace` | public, cacheable |
 | `tenants` | `GET /v1/admin/tenants`, `GET/PATCH/DELETE /v1/admin/tenants/:id` (no create: signup is the only way in) | platform-admin token |
-| `tenant-users` | CRUD `/v1/tenants/:tenantId/users` | JWT + tenant match + role (B2) |
+| `tenant-users` | `GET /v1/tenants/:tenantId/users`, `GET/PATCH/DELETE …/:id` (people join by invite, so no create) | JWT + tenant match + role (B2) |
 | `end-customers` | CRUD `/v1/tenants/:tenantId/customers` | JWT + tenant match + role (B2) |
 | `health` | `GET /health`, `GET /health/ready` (unversioned) | public |
 
-Global `ValidationPipe` (whitelist + transform), `/v1` prefix, error body `{statusCode, code, message}` (plus `details` for validation and `requestId`), list envelope `{data,total,skip,take}`, request-id middleware and JSON logs, CORS limited to `FRONTEND_URL`, OpenAPI at `/docs`, `PrismaModule` is global. Known defects are listed in `CLAUDE.md`.
+Global `ValidationPipe` (whitelist + transform), `/v1` prefix, error body `{statusCode, code, message}` (plus `details` for validation and `requestId`), list envelope `{data,total,skip,take}`, request-id middleware and JSON logs, CORS limited to `FRONTEND_URL`, OpenAPI at `/docs`, `PrismaModule` is global. On every staff request `JwtStrategy` also loads the user (role, status, verification, `password_changed_at`), so disabling, demoting, deleting or resetting a password takes effect immediately. Emailed links (invite, reset, verification) go through `MailService` and the injectable `Mailer` (console implementation until a provider is chosen, H3). Known defects are listed in `CLAUDE.md`.
 
 ## 7. Roadmap (backend)
 
@@ -145,6 +152,8 @@ Full plan with scope checklists, dependencies and exit criteria: [backend-roadma
 | 6 | Channels: WhatsApp and voice |
 | 7 | Human-agent productivity: routing, SLAs, notes, transfer (deferred) |
 | 8 | Production hardening and launch |
+| 2B | Billing foundation: plans, Starter→Free, entitlements, manual payments (section I) |
+| 9 | Payment provider integration |
 
 ## 8. Out of scope for now
-Chat attachments (text chat only), email as a customer channel, push/email notifications (in-app only), conversation analytics (owned by the AI engine; the backend keeps plan usage metering only), routing rules/SLAs and agent tooling such as notes, tags and canned replies (deferred), billing/payment processing, SSO/SAML, multi-region, mobile apps. See H8 in [team-alignment.md](team-alignment.md).
+Chat attachments (text chat only), email as a customer channel, push/email notifications (in-app only), conversation analytics (owned by the AI engine; the backend keeps plan usage metering only), routing rules/SLAs and agent tooling such as notes, tags and canned replies (deferred), card/payment-provider integration (Phase 9; manual billing is in Phase 2B), SSO/SAML, multi-region, mobile apps. See H8 and section I in [team-alignment.md](team-alignment.md).

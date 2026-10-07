@@ -11,12 +11,14 @@ Size: **S** ≈ days · **M** ≈ 1–2 weeks · **L** ≈ 2+ weeks (rough, solo
 | 0 | Foundation and hardening | M | nothing | FE (OpenAPI, stable errors/pagination) |
 | 1 | Account and team management | M | nothing (H3 mail provider can follow) | FE (auth, invite, audit, language screens) |
 | 2 | Shared infrastructure and engine contract | S–M | AI: A1–A6, D2, schema requests | everything that talks to the engine |
-| 3 | Gateway and widget entry | M | AI: B5, D1–D3, engine create/message API | FE widget, first end-to-end chat |
+| 2B | Billing foundation (plans, subscriptions, entitlements, manual payments) | M | nothing (can run beside 2) | Phase 3 enforcement, FE billing screens |
+| 3 | Gateway and widget entry | M | AI: B5, D1–D3, engine create/message API; Phase 2B | FE widget, first end-to-end chat |
 | 4 | Human-agent flow and notifications | L | AI: C1–C4, D5, D6 | FE dashboard conversations |
 | 5 | Tenant configuration, knowledge, actions, usage | L | AI: E1–E4 | AI personalisation, plan limits |
 | 6 | Channels: WhatsApp and voice | L | AI: D4, E5; provider accounts | phone/WhatsApp customers |
 | 7 | Human-agent productivity (deferred) | M | product decision | team efficiency |
 | 8 | Production hardening and launch | L | all above | go-live |
+| 9 | Payment provider integration | M | provider chosen; company/bank account set up | self-serve card payments |
 
 Phases 1 and 2 run **in parallel**: Phase 1 needs nobody, so do it while waiting for Abdullah and the frontend to answer [team-alignment.md](team-alignment.md). The order below is the order of dependency, not strictly calendar order.
 
@@ -46,16 +48,20 @@ Depends on: nothing. Decisions needed: B1, B2, B3, F5, G1 (all backend-owned; fr
 **Goal:** a real staff lifecycle, an audit trail and translations.
 
 Scope:
-- [ ] Invitations: `staff_invites`, send/list/revoke/accept; remove password from user-create (H1)
-- [ ] Password reset, `tenant_user.status`, `password_changed_at` check (H2)
-- [ ] `Mailer` interface with a console implementation, `MAIL_MODE=link` for dev (H3); provider integration once chosen
-- [ ] Email verification (H4)
-- [ ] Audit log: table, `@Audit` decorator/interceptor, query endpoint (H6)
-- [ ] i18n: `src/lang/<locale>/<ns>.json`, `GET /v1/i18n/locales` and `/:locale/:namespace`, ETag, `en` fallback, missing-key check script, `nest-cli.json` assets, `locale` columns (H7)
-- [ ] `GET /me` (profile, role, tenant, locale)
+- [x] Invitations: `staff_invites`, send/list/revoke/accept; remove password from user-create (H1)
+- [x] Password reset, `tenant_user.status`, `password_changed_at` check (H2)
+- [x] `Mailer` interface with a console implementation, `MAIL_MODE=link` for dev (H3)
+- [ ] H3 follow-up: real mail provider and sender domain, once chosen (the `Mailer` interface and `MailModule` are the only places to change)
+- [x] Email verification (H4)
+- [x] Audit log: table, `@Audit` decorator/interceptor, query endpoint (H6)
+- [x] i18n: `src/lang/<locale>/<ns>.json`, `GET /v1/i18n/locales` and `/:locale/:namespace`, ETag, `en` fallback, missing-key check script, `nest-cli.json` assets, `locale` columns (H7)
+- [x] `GET /me` (profile, role, tenant, locale)
+- [x] Also done in this phase: email normalisation (known issue 7) and an atomic last-owner check (known issue 4)
 
-Depends on: Phase 0. Decision needed: H3 (mail provider).
-**Done when:** an owner can invite an agent who sets their own password, reset flows work end to end, role changes appear in the audit log, and the frontend can load `en` and `ur`.
+Implementation status (branch `phase-1-account-team`, not committed): everything above is built except the mail provider. `npm test` (unit), `npm run test:e2e` (mocked Prisma), `npm run test:db` (new: the account flows over HTTP against a throwaway Postgres, including the constraints, the append-only trigger and the last-owner race), `npm run build` pass locally; `oxlint` could not run on the build machine (see `CLAUDE.md` known issue 9), so lint is unverified locally. Migrations `20261007120000_phase1_account_team` (additive) and `20261007120100_normalize_emails` (data guard plus CHECK constraints) are applied to the local `multitenant` database. Urdu translations need review by a native speaker.
+
+Depends on: Phase 0. Decision needed: H3 (mail provider; everything else is built behind the `Mailer` interface).
+**Done when:** an owner can invite an agent who sets their own password, reset flows work end to end, role changes appear in the audit log, and the frontend can load `en` and `ur`. (All four are covered by `test/db/team-flows.db-spec.ts`; only the real mail provider is outstanding.)
 
 ## Phase 2: Shared infrastructure and engine contract
 **Goal:** both services run on one database and agree on the contract.
@@ -70,6 +76,23 @@ Scope:
 
 Depends on: AI answers to A1–A6 and D2; the AI side adds `end_customer_id` and the foreign keys (A5, B5).
 **Done when:** a fresh clone brings up Postgres, runs both migration sets in order, seeds data, and the backend can call the mock engine and the real one.
+
+## Phase 2B: Billing foundation
+**Goal:** every tenant has a plan, Starter turns into Free after 15 days, limits are enforceable, and you can take payments manually, with a design that accepts a payment provider later without rework (section I of team-alignment).
+
+Scope:
+- [ ] Tables: `plans` (seed Starter, Free, Pro, Enterprise), `subscriptions`, `invoices`, `billing_events`; money as integer minor units plus currency (I1, I4, I7)
+- [ ] Migrate existing tenants: every current tenant gets a Starter subscription starting at deployment; replace `tenants.plan`/`status` semantics with the subscription state (I2, I3); keep a pre-migration dump
+- [ ] `SubscriptionService.applyEvent()` state machine (idempotent, audited) and the daily transition job; request-time checks for correctness (I3, I8)
+- [ ] `EntitlementsService.check()` with a short cache, wired into seats/invites and the user API now, ready for the gateway and knowledge upload later (I5)
+- [ ] `BillingProvider` interface and `ManualProvider`; platform-admin endpoints activate, record-payment, extend, change-plan, cancel (I4, I6)
+- [ ] Subscription and invoice read endpoints for the tenant owner (`GET /v1/tenants/:tenantId/billing`), pricing endpoint for public plans only
+- [ ] Notifications and banner data for reminders and limits (I8, builds on H5 once present; until then expose the state through `GET /me`)
+- [ ] Error codes and `en`/`ur` translations: `PLAN_LIMIT_REACHED`, `PLAN_FEATURE_UNAVAILABLE`, `SUBSCRIPTION_PAST_DUE`, `TENANT_SUSPENDED`
+- [ ] `data_use_consents` table and owner API (default off, I11), without any training export
+
+Depends on: Phase 1. Decisions needed: I1–I10 confirmed with the accountant for tax and invoice wording (I7); I11 needs legal review before any training use.
+**Done when:** a new tenant has Starter for 15 days and then Free automatically, an admin can activate Pro with a recorded invoice, limits return the right error codes, and nothing in the code mentions a specific payment provider outside `ManualProvider`.
 
 ## Phase 3: Gateway and widget entry
 **Goal:** the first end-to-end conversation: a visitor chats through the widget and gets an AI answer.
@@ -148,6 +171,18 @@ Scope:
 - [ ] CI/CD, environments (dev/staging/prod), backups and restore test, deployment runbook
 
 **Done when:** a staging environment passes an end-to-end acceptance script, a restore from backup has been rehearsed, and the security review has no open high findings.
+
+## Phase 9: Payment provider integration
+**Goal:** self-serve payments, replacing manual recording. Do this when the first customers want to pay by card and a provider is chosen.
+
+Scope:
+- [ ] Choose the provider (depends on where the company and bank account are registered; options and availability must be checked at that time)
+- [ ] `XxxProvider implements BillingProvider`: hosted checkout, customer portal, webhook endpoint with raw-body signature verification and event-id idempotency (I4)
+- [ ] Map provider events to `BillingEvent`s; no change to the state machine, enforcement or tenant screens
+- [ ] Reconcile provider invoices into `invoices`; failed-payment retries and the `past_due` grace period (I3)
+- [ ] Per-provider test mode and a replay tool for webhooks; runbook for manual corrections
+
+Depends on: Phase 2B and Phase 8 (production environment).
 
 ---
 

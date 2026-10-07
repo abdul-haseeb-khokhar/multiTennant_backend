@@ -1,9 +1,9 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsEmail, IsString } from 'class-validator';
+import { IsString } from 'class-validator';
+import { NormalizedEmailProperty } from '../../common/validation/email';
 
 export class PlatformLoginDto {
-  @ApiProperty({ example: 'ops@example.com' })
-  @IsEmail()
+  @NormalizedEmailProperty({ example: 'ops@example.com' })
   email: string;
 
   @ApiProperty()

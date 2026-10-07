@@ -16,6 +16,7 @@ const CODE_BY_STATUS: Record<number, string> = {
   [HttpStatus.FORBIDDEN]: ErrorCode.FORBIDDEN,
   [HttpStatus.NOT_FOUND]: ErrorCode.NOT_FOUND,
   [HttpStatus.CONFLICT]: ErrorCode.CONFLICT,
+  [HttpStatus.PAYLOAD_TOO_LARGE]: ErrorCode.PAYLOAD_TOO_LARGE,
   [HttpStatus.TOO_MANY_REQUESTS]: ErrorCode.TOO_MANY_REQUESTS,
   [HttpStatus.SERVICE_UNAVAILABLE]: ErrorCode.SERVICE_UNAVAILABLE,
 };
@@ -99,6 +100,24 @@ export class AllExceptionsFilter implements ExceptionFilter {
       }
     }
 
+    // Client errors raised by Express middleware (body-parser: 413 "request entity too large",
+    // bad encodings, ...) are http-errors, not Nest exceptions. They are the caller's mistake and
+    // `expose` says their message is safe to show.
+    const clientError = exception as
+      { status?: unknown; expose?: unknown; message?: unknown } | undefined;
+    if (
+      exception instanceof Error &&
+      typeof clientError?.status === 'number' &&
+      clientError.status >= 400 &&
+      clientError.status < 500 &&
+      clientError.expose === true
+    ) {
+      return {
+        statusCode: clientError.status,
+        code: CODE_BY_STATUS[clientError.status] ?? ErrorCode.BAD_REQUEST,
+        message: exception.message,
+      };
+    }
     return {
       statusCode: HttpStatus.INTERNAL_SERVER_ERROR,
       code: ErrorCode.INTERNAL_ERROR,
