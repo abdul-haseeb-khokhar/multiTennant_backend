@@ -11,7 +11,7 @@ Size: **S** ≈ days · **M** ≈ 1–2 weeks · **L** ≈ 2+ weeks (rough, solo
 | 0 | Foundation and hardening | M | nothing | FE (OpenAPI, stable errors/pagination) |
 | 1 | Account and team management | M | nothing (H3 mail provider can follow) | FE (auth, invite, audit, language screens) |
 | 2 | Shared infrastructure and engine contract | S–M | AI: A1–A6, D2, schema requests | everything that talks to the engine |
-| 2B | Billing foundation (plans, subscriptions, entitlements, manual payments) | M | nothing (can run beside 2) | Phase 3 enforcement, FE billing screens |
+| 2B | Billing foundation (plans, subscriptions, entitlements, manual payments) | M | nothing (can run beside 2); **built**, reminders wait for H5 | Phase 3 enforcement, FE billing screens |
 | 3 | Gateway and widget entry | M | AI: B5, D1–D3, engine create/message API; Phase 2B | FE widget, first end-to-end chat |
 | 4 | Human-agent flow and notifications | L | AI: C1–C4, D5, D6 | FE dashboard conversations |
 | 5 | Tenant configuration, knowledge, actions, usage | L | AI: E1–E4 | AI personalisation, plan limits |
@@ -81,17 +81,25 @@ Depends on: AI answers to A1–A6 and D2; the AI side adds `end_customer_id` and
 **Goal:** every tenant has a plan, Starter turns into Free after 15 days, limits are enforceable, and you can take payments manually, with a design that accepts a payment provider later without rework (section I of team-alignment).
 
 Scope:
-- [ ] Tables: `plans` (seed Starter, Free, Pro, Enterprise), `subscriptions`, `invoices`, `billing_events`; money as integer minor units plus currency (I1, I4, I7)
-- [ ] Migrate existing tenants: every current tenant gets a Starter subscription starting at deployment; replace `tenants.plan`/`status` semantics with the subscription state (I2, I3); keep a pre-migration dump
-- [ ] `SubscriptionService.applyEvent()` state machine (idempotent, audited) and the daily transition job; request-time checks for correctness (I3, I8)
-- [ ] `EntitlementsService.check()` with a short cache, wired into seats/invites and the user API now, ready for the gateway and knowledge upload later (I5)
-- [ ] `BillingProvider` interface and `ManualProvider`; platform-admin endpoints activate, record-payment, extend, change-plan, cancel (I4, I6)
-- [ ] Subscription and invoice read endpoints for the tenant owner (`GET /v1/tenants/:tenantId/billing`), pricing endpoint for public plans only
-- [ ] Notifications and banner data for reminders and limits (I8, builds on H5 once present; until then expose the state through `GET /me`)
-- [ ] Error codes and `en`/`ur` translations: `PLAN_LIMIT_REACHED`, `PLAN_FEATURE_UNAVAILABLE`, `SUBSCRIPTION_PAST_DUE`, `TENANT_SUSPENDED`
-- [ ] `data_use_consents` table and owner API (default off, I11), without any training export
+- [x] Tables: `plans` (seed Starter, Free, Pro, Enterprise), `subscriptions`, `invoices`, `billing_events`; money as integer minor units plus currency (I1, I4, I7). Also `invoice_sequences` (gapless numbers per year) and `data_use_consents`
+- [x] Migrate existing tenants: every current tenant gets a Starter subscription starting at deployment; `tenants.plan`/`status` **kept as denormalised mirrors** of the subscription (expand-contract: nothing dropped), written only by `SubscriptionService` (I2, I3); pre-migration dump taken
+- [x] `SubscriptionService.applyEvent()` state machine (idempotent, audited) and the transition job (timer + Postgres advisory lock); request-time checks for correctness through `getEffective` (I3, I8)
+- [x] `EntitlementsService.check()` with a short cache, wired into seats/invites and the user API now (invite create, invite accept, user re-enable), ready for the gateway and knowledge upload later (I5); usage counters for conversations and knowledge are a stub until Phases 3 and 5
+- [x] `BillingProvider` interface and `ManualProvider`; platform-admin endpoints activate, record-payment, extend, change-plan, cancel (I4, I6)
+- [x] Subscription and invoice read endpoints for the tenant owner (`GET /v1/tenants/:tenantId/billing`), pricing endpoint for public plans only (`GET /v1/plans`)
+- [x] Banner data for reminders and limits through `GET /v1/me` (`subscription`: plan, status, period end, `daysLeft`, `graceDaysLeft`, limits)
+- [ ] In-app reminder notifications for I8 (7/3/1 days, grace started, 80%/100% of a limit, downgrade happened): waits for H5 (Phase 4)
+- [x] Error codes and `en`/`ur` translations: `PLAN_LIMIT_REACHED`, `PLAN_FEATURE_UNAVAILABLE`, `SUBSCRIPTION_PAST_DUE`, `TENANT_SUSPENDED` (existing), plus `NO_ACTIVE_SUBSCRIPTION`, `TENANT_CLOSED`, `INVALID_SUBSCRIPTION_STATE`, `SUBSCRIPTION_NOT_FOUND`, `PLAN_NOT_FOUND`, `NOT_IMPLEMENTED`. The Urdu text was written by an AI and needs a native-speaker check
+- [x] `data_use_consents` table and owner API (`GET`/`PUT /v1/tenants/:tenantId/data-use`, default off, I11), without any training export
 
-Depends on: Phase 1. Decisions needed: I1–I10 confirmed with the accountant for tax and invoice wording (I7); I11 needs legal review before any training use.
+Implementation status (branch `phase-2b-billing`, not committed): everything above is built except the in-app reminder notifications (they need H5). `npm test` (517), `npm run test:e2e` (187), `npm run test:db` (49, against a throwaway database, run twice) and `npm run build` pass; `oxlint` could not run on the build machine (CLAUDE.md known issue 9). Migration `20261007140000_phase2b_billing` is additive only (new tables, CHECK constraints, the append-only trigger on `billing_events`, the four seeded plans, a Starter subscription for every existing tenant starting at deployment); it was generated against a throwaway database and applied to the local `multitenant` database after a `pg_dump` of `tenant_core`.
+
+How it works (details: `CLAUDE.md` rule 10 and the I-section of team-alignment.md):
+- **One writer.** `SubscriptionService.applyEvent` is the only place that changes `subscriptions`, `invoices`, `billing_events` and the `tenants.plan`/`status` mirrors, in one transaction with an audit entry. The transitions are pure functions in `billing/subscriptions/state-machine.ts`.
+- **Time.** An injectable `Clock`. `getEffective(tenantId)` applies due transitions on read, so Starter becomes Free on day 15 even if the job is late; the job (`billing.scheduler.ts`) sweeps on boot and every `BILLING_JOB_INTERVAL_MINUTES` (60) on every instance, one of them holding `pg_try_advisory_xact_lock`.
+- **Provider later.** `BillingProvider` (checkout, portal, cancel, `handleWebhook(rawBody, headers) -> BillingEvent[]`) and `ManualProvider`. Phase 9 adds a class and registers it in `BillingCoreModule` and `BillingProviders`; the state machine, tables, enforcement and screens do not change.
+
+Depends on: Phase 1. Decisions needed: I1–I10 confirmed with the accountant for tax and invoice wording (I7, **still open**); I11 needs legal review before any training use (**still open**).
 **Done when:** a new tenant has Starter for 15 days and then Free automatically, an admin can activate Pro with a recorded invoice, limits return the right error codes, and nothing in the code mentions a specific payment provider outside `ManualProvider`.
 
 ## Phase 3: Gateway and widget entry

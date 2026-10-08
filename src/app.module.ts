@@ -3,8 +3,10 @@ import { APP_INTERCEPTOR } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
 import { AuditModule } from './audit/audit.module';
 import { AuthModule } from './auth/auth.module';
+import { BillingModule } from './billing/billing.module';
 import { RequestContextInterceptor } from './common/request-context/request-context.interceptor';
 import { validateEnv } from './config/env.validation';
+import { DataUseModule } from './data-use/data-use.module';
 import { EndCustomersModule } from './end-customers/end-customers.module';
 import { HealthModule } from './health/health.module';
 import { I18nModule } from './i18n/i18n.module';
@@ -28,6 +30,8 @@ import { TenantsModule } from './tenants/tenants.module';
     TenantUsersModule,
     InvitesModule,
     EndCustomersModule,
+    BillingModule,
+    DataUseModule,
     MeModule,
     I18nModule,
     HealthModule,

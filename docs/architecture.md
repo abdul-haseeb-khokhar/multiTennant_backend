@@ -76,7 +76,7 @@ Principles:
 | `usage_daily` (tenant_id, day, messages, tokens_in, tokens_out, call_minutes) | Plan limits and billing |
 | `notifications` (tenant_id, user_id, type, title_key, body_key, params, link, read_at) | In-app notifications, stored as translation keys (H5) |
 
-Billing (section I): `plans`, `subscriptions`, `invoices`, `billing_events` and `data_use_consents`. Starter (hidden, 15 days) falls back to Free; Pro and Enterprise are paid; payments are recorded manually at launch behind a `BillingProvider` interface so a payment provider can be added later without rework. Amounts are integer minor units plus currency (PKR).
+Billing (section I, **built in Phase 2B**): `plans`, `subscriptions`, `invoices`, `invoice_sequences`, `billing_events` (append-only) and `data_use_consents`; `tenants.plan` / `tenants.status` stay as denormalised mirrors of the subscription (only `SubscriptionService` writes them). Starter (hidden, 15 days) falls back to Free; Pro and Enterprise are paid; payments are recorded manually at launch behind a `BillingProvider` interface so a payment provider can be added later without rework. Amounts are integer minor units plus currency (PKR).
 
 Translations are files, not tables: `src/lang/<locale>/<namespace>.json`, served at `/v1/i18n/...` (H7, built).
 
@@ -133,6 +133,8 @@ Default is **soft delete** (`status=suspended`, `deleted_at`). Hard delete is a 
 | `tenants` | `GET /v1/admin/tenants`, `GET/PATCH/DELETE /v1/admin/tenants/:id` (no create: signup is the only way in) | platform-admin token |
 | `tenant-users` | `GET /v1/tenants/:tenantId/users`, `GET/PATCH/DELETE …/:id` (people join by invite, so no create) | JWT + tenant match + role (B2) |
 | `end-customers` | CRUD `/v1/tenants/:tenantId/customers` | JWT + tenant match + role (B2) |
+| `billing` | `GET /v1/plans` (public), `GET /v1/tenants/:tenantId/billing`, `/v1/admin/tenants/:id/subscription` (+ `activate`, `record-payment`, `extend`, `change-plan`, `cancel`) | public / JWT owner+admin / platform-admin token |
+| `data-use` | `GET/PUT /v1/tenants/:tenantId/data-use` (model-training consent, default off) | JWT + tenant match + owner |
 | `health` | `GET /health`, `GET /health/ready` (unversioned) | public |
 
 Global `ValidationPipe` (whitelist + transform), `/v1` prefix, error body `{statusCode, code, message}` (plus `details` for validation and `requestId`), list envelope `{data,total,skip,take}`, request-id middleware and JSON logs, CORS limited to `FRONTEND_URL`, OpenAPI at `/docs`, `PrismaModule` is global. On every staff request `JwtStrategy` also loads the user (role, status, verification, `password_changed_at`), so disabling, demoting, deleting or resetting a password takes effect immediately. Emailed links (invite, reset, verification) go through `MailService` and the injectable `Mailer` (console implementation until a provider is chosen, H3). Known defects are listed in `CLAUDE.md`.

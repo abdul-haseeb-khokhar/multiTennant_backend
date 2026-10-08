@@ -29,6 +29,15 @@ The suite reads only `TEST_DATABASE_URL` (never `DATABASE_URL`) and refuses data
 
 Never use `prisma migrate reset` or `db push` for any of this: the development database is shared with the AI engine project.
 
+## Billing tests
+
+- `src/billing/subscriptions/state-machine.spec.ts`: every transition as a table with explicit dates (the pure state machine, no database).
+- `src/billing/subscriptions/subscription.service.spec.ts`: idempotency, the single transaction, mirrors, audit and lazy transitions against a mocked Prisma.
+- `billing.e2e-spec.ts`: the HTTP side with the mocked database made stateful by `utils/billing-fixtures.ts` (`installBilling`): roles, tenant isolation, the pricing list, the whole Starter-to-Free and past-due lifecycle on a `FakeClock`, seat limits, consent.
+- `db/billing-flows.db-spec.ts`: the same on real Postgres, including the invoice counter and the seat limit under parallel requests, the advisory-locked job, the append-only `billing_events` trigger and the CHECK constraints. `db/team-flows.db-spec.ts` upgrades its tenants to an unlimited plan so the Starter seat limit does not interfere.
+
+Time: `createTestApp()` returns a `clock` (`FakeClock`) that replaces the `Clock` provider; move it with `clock.advanceDays(n)` instead of waiting.
+
 ## Helpers
 
 - `utils/prisma-mock.ts`: `createPrismaMock()`, `mockTransaction(prisma)` (runs `$transaction` callbacks against the same mock) and `prismaError('P2002')` (a real `PrismaClientKnownRequestError`). The mocks do not apply `omit`: a mock that echoes `create` data must strip hashes itself.

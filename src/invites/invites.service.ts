@@ -2,6 +2,8 @@ import { HttpStatus, Injectable } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
 import { AuditAction, AuditService } from '../audit/audit.service';
 import { AcceptInviteDto } from '../auth/dto/accept-invite.dto';
+import { assertTenantUsable } from '../auth/tenant-status';
+import { EntitlementsService } from '../billing/entitlements/entitlements.service';
 import type { AuthUser } from '../auth/roles';
 import { SessionTokenService } from '../auth/session-token.service';
 import { ApiException } from '../common/errors/api.exception';
@@ -32,6 +34,7 @@ export class InvitesService {
     private readonly mail: MailService,
     private readonly audit: AuditService,
     private readonly sessionTokens: SessionTokenService,
+    private readonly entitlements: EntitlementsService,
   ) {}
 
   /**
@@ -71,6 +74,14 @@ export class InvitesService {
     const { token, tokenHash } = generateToken();
     const now = new Date();
     const invite = await this.prisma.$transaction(async (tx) => {
+      // Plan seat limit (I5): active users plus other pending invites must leave room. Re-inviting
+      // an address replaces its pending invite, so that one does not count twice.
+      await this.entitlements.assertSeatAvailable(
+        tx,
+        tenantId,
+        'invite',
+        email,
+      );
       await tx.staffInvite.updateMany({
         where: { tenantId, email, acceptedAt: null, revokedAt: null },
         data: { revokedAt: now },
@@ -171,13 +182,7 @@ export class InvitesService {
     ) {
       throw this.invalid();
     }
-    if (invite.tenant.status === 'suspended') {
-      throw new ApiException(
-        HttpStatus.FORBIDDEN,
-        ErrorCode.TENANT_SUSPENDED,
-        'This tenant is suspended',
-      );
-    }
+    assertTenantUsable(invite.tenant.status);
     const passwordHash = await bcrypt.hash(dto.password, SALT_ROUNDS);
 
     try {
@@ -195,6 +200,13 @@ export class InvitesService {
         if (claimed.count !== 1) {
           throw this.invalid();
         }
+        // The invite held a seat; if the plan shrank since (a downgrade), a new user is refused
+        // and the invite stays pending (the transaction rolls back).
+        await this.entitlements.assertSeatAvailable(
+          tx,
+          invite.tenantId,
+          'accept',
+        );
         const created = await tx.tenantUser.create({
           data: {
             tenantId: invite.tenantId,

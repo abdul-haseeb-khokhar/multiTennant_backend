@@ -107,5 +107,29 @@ describe('validateEnv', () => {
         /FRONTEND_URL is required/,
       );
     });
+
+    it('the billing job is on by default, hourly, and configurable', () => {
+      expect(validateEnv(valid)).toMatchObject({
+        BILLING_JOB: 'on',
+        BILLING_JOB_INTERVAL_MINUTES: 60,
+      });
+      expect(
+        validateEnv({
+          ...valid,
+          BILLING_JOB: 'off',
+          BILLING_JOB_INTERVAL_MINUTES: '15',
+        }),
+      ).toMatchObject({ BILLING_JOB: 'off', BILLING_JOB_INTERVAL_MINUTES: 15 });
+    });
+
+    it.each([
+      { BILLING_JOB: 'maybe' },
+      { BILLING_JOB_INTERVAL_MINUTES: '0' },
+      { BILLING_JOB_INTERVAL_MINUTES: '5000' },
+    ])('refuses a bad billing job setting %j', (bad) => {
+      expect(() => validateEnv({ ...valid, ...bad })).toThrow(
+        /Invalid environment configuration/,
+      );
+    });
   });
 });

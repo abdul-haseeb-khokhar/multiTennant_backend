@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import { AuditAction, AuditService } from '../audit/audit.service';
 import { EmailVerificationService } from '../auth/email-verification.service';
 import { AuthUser } from '../auth/roles';
+import { EntitlementsService } from '../billing/entitlements/entitlements.service';
 import { ApiException } from '../common/errors/api.exception';
 import { ErrorCode } from '../common/errors/error-codes';
 import { isPrismaError } from '../common/errors/prisma-errors';
@@ -32,6 +33,7 @@ export class TenantUsersService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly emailVerification: EmailVerificationService,
+    private readonly entitlements: EntitlementsService,
   ) {}
 
   async findAll(tenantId: string, query: QueryTenantUserDto) {
@@ -88,6 +90,15 @@ export class TenantUsersService {
             dto.status === 'disabled');
         if (stopsBeingActiveOwner) {
           await this.assertAnotherActiveOwner(tx, tenantId, id);
+        }
+
+        // A disabled user becoming active takes a seat again (plan seat limit, I5).
+        if (dto.status === 'active' && existing.status !== 'active') {
+          await this.entitlements.assertSeatAvailable(
+            tx,
+            tenantId,
+            'reactivate',
+          );
         }
 
         const data: Prisma.TenantUserUpdateInput = {};

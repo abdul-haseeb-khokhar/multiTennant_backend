@@ -1186,6 +1186,461 @@
         ]
       }
     },
+    "/v1/plans": {
+      "get": {
+        "description": "No authentication. Only public, active plans (Free, Pro, Enterprise today): the hidden Starter plan is never listed. Amounts are integer minor units of `currency`; `priceMinor: null` means \"custom quote\".",
+        "operationId": "PlansController_findPublic",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanPage"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Public price list (pricing page)",
+        "tags": [
+          "billing"
+        ]
+      }
+    },
+    "/v1/tenants/{tenantId}/billing": {
+      "get": {
+        "description": "Agents cannot read billing (403 INSUFFICIENT_ROLE). `skip` / `take` page the invoice list, newest first. Usage against the limits is not reported yet (the counters arrive with the gateway, Phase 3).",
+        "operationId": "TenantBillingController_get",
+        "parameters": [
+          {
+            "name": "tenantId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "skip",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 0,
+              "default": 0,
+              "type": "number"
+            }
+          },
+          {
+            "name": "take",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TenantBilling"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Current plan, status, period, limits and invoices (owner/admin)",
+        "tags": [
+          "billing"
+        ]
+      }
+    },
+    "/v1/admin/tenants/{id}/subscription": {
+      "get": {
+        "description": "`skip` / `take` apply to both lists, newest first.",
+        "operationId": "AdminSubscriptionController_get",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "skip",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 0,
+              "default": 0,
+              "type": "number"
+            }
+          },
+          {
+            "name": "take",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminTenantBilling"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "A tenant's subscription, invoices and billing event log",
+        "tags": [
+          "platform-admin"
+        ]
+      }
+    },
+    "/v1/admin/tenants/{id}/subscription/activate": {
+      "post": {
+        "description": "Moves Starter/Free (or another plan) to `planCode`, starting now, until `periodEnd` or one `interval`. Use `record-payment` for a renewal of the current plan.",
+        "operationId": "AdminSubscriptionController_activate",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActivateSubscriptionDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionCommandResult"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Activate a paid plan after a payment (creates a paid invoice)",
+        "tags": [
+          "platform-admin"
+        ]
+      }
+    },
+    "/v1/admin/tenants/{id}/subscription/record-payment": {
+      "post": {
+        "description": "The new period starts when the current one ends (or now when it already ended) and lasts one `interval` or until `periodEnd`. A renewal also clears a pending cancellation and a past-due state.",
+        "operationId": "AdminSubscriptionController_recordPayment",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordPaymentDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionCommandResult"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Record a renewal payment of the current paid plan (creates a paid invoice)",
+        "tags": [
+          "platform-admin"
+        ]
+      }
+    },
+    "/v1/admin/tenants/{id}/subscription/extend": {
+      "post": {
+        "description": "Send `until` or `days`.",
+        "operationId": "AdminSubscriptionController_extend",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExtendSubscriptionDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionCommandResult"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Extend the current period (for example Starter), no invoice",
+        "tags": [
+          "platform-admin"
+        ]
+      }
+    },
+    "/v1/admin/tenants/{id}/subscription/change-plan": {
+      "post": {
+        "operationId": "AdminSubscriptionController_changePlan",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangePlanDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionCommandResult"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Change the plan without a payment (upgrade, downgrade, comp), no invoice",
+        "tags": [
+          "platform-admin"
+        ]
+      }
+    },
+    "/v1/admin/tenants/{id}/subscription/cancel": {
+      "post": {
+        "description": "By default the plan is kept until the period ends (`status: canceled`) and then falls back to Free; `atPeriodEnd: false` falls back now.",
+        "operationId": "AdminSubscriptionController_cancel",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CancelSubscriptionDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionCommandResult"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Cancel a paid plan",
+        "tags": [
+          "platform-admin"
+        ]
+      }
+    },
+    "/v1/tenants/{tenantId}/data-use": {
+      "get": {
+        "description": "Default OFF. This only records the owner's choice; no training export exists (it needs legal review first).",
+        "operationId": "DataUseController_get",
+        "parameters": [
+          {
+            "name": "tenantId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DataUse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Consent to use conversations for model training (owner only)",
+        "tags": [
+          "data-use"
+        ]
+      },
+      "put": {
+        "description": "`enabled: true` needs `termsVersion`. Recorded with who accepted and when; revoking keeps the history and is audited. Admins and agents get 403 INSUFFICIENT_ROLE.",
+        "operationId": "DataUseController_update",
+        "parameters": [
+          {
+            "name": "tenantId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateDataUseDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DataUse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Grant or revoke consent (owner only)",
+        "tags": [
+          "data-use"
+        ]
+      }
+    },
     "/v1/me": {
       "get": {
         "operationId": "MeController_get",
@@ -1537,18 +1992,22 @@
           "plan": {
             "type": "string",
             "enum": [
+              "starter",
               "free",
               "pro",
               "enterprise"
-            ]
+            ],
+            "description": "Denormalised mirror of the subscription plan. The source of truth is GET /admin/tenants/:id/subscription."
           },
           "status": {
             "type": "string",
             "enum": [
               "trial",
               "active",
-              "suspended"
-            ]
+              "suspended",
+              "closed"
+            ],
+            "description": "Denormalised mirror of the subscription state (trial = on Starter). The source of truth is GET /admin/tenants/:id/subscription."
           },
           "defaultLocale": {
             "type": "string",
@@ -1752,10 +2211,13 @@
           "plan": {
             "type": "string",
             "enum": [
+              "starter",
               "free",
               "pro",
               "enterprise"
-            ]
+            ],
+            "deprecated": true,
+            "description": "Deprecated: same as POST /admin/tenants/:id/subscription/change-plan with no payment (a paid plan gets one interval, no invoice)."
           },
           "status": {
             "type": "string",
@@ -1763,7 +2225,9 @@
               "trial",
               "active",
               "suspended"
-            ]
+            ],
+            "deprecated": true,
+            "description": "`suspended` suspends the tenant; `active` or `trial` lifts a suspension (it returns to the state it had). Nothing else changes: the real state is the subscription."
           },
           "defaultLocale": {
             "type": "string",
@@ -2005,6 +2469,971 @@
           }
         }
       },
+      "EntitlementsView": {
+        "type": "object",
+        "properties": {
+          "seats": {
+            "type": "number",
+            "nullable": true,
+            "example": 3,
+            "description": "Staff seats: active users plus pending invites. null = unlimited."
+          },
+          "conversationsPerPeriod": {
+            "type": "number",
+            "nullable": true,
+            "example": 100,
+            "description": "AI conversations allowed per `conversationPeriod`. null = unlimited."
+          },
+          "conversationPeriod": {
+            "type": "string",
+            "enum": [
+              "total",
+              "month"
+            ],
+            "description": "`total` = since the subscription period began (Starter), `month` = per calendar month."
+          },
+          "knowledgeMb": {
+            "type": "number",
+            "nullable": true,
+            "example": 20,
+            "description": "Knowledge base size in MB. null = unlimited."
+          },
+          "channels": {
+            "example": [
+              "chat",
+              "whatsapp"
+            ],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "voice": {
+            "type": "boolean",
+            "description": "Phone calls included."
+          },
+          "poweredByLabel": {
+            "type": "boolean",
+            "description": "The widget shows our \"powered by\" label."
+          },
+          "overageConversationMinor": {
+            "type": "number",
+            "description": "Price hint: one extra conversation, minor units."
+          },
+          "voicePerMinuteMinor": {
+            "type": "number",
+            "description": "Price hint: one voice minute, minor units."
+          }
+        },
+        "required": [
+          "seats",
+          "conversationsPerPeriod",
+          "conversationPeriod",
+          "knowledgeMb",
+          "channels",
+          "voice",
+          "poweredByLabel"
+        ]
+      },
+      "PlanView": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "example": "pro"
+          },
+          "name": {
+            "type": "string",
+            "example": "Pro"
+          },
+          "priceMinor": {
+            "type": "number",
+            "nullable": true,
+            "example": 1999900,
+            "description": "Price per `interval` in minor units. null = custom quote."
+          },
+          "yearlyPriceMinor": {
+            "type": "number",
+            "nullable": true,
+            "example": 19999000,
+            "description": "Price of a year when sold yearly too."
+          },
+          "currency": {
+            "type": "string",
+            "example": "PKR"
+          },
+          "interval": {
+            "type": "string",
+            "enum": [
+              "month",
+              "year",
+              "none"
+            ]
+          },
+          "entitlements": {
+            "$ref": "#/components/schemas/EntitlementsView"
+          }
+        },
+        "required": [
+          "code",
+          "name",
+          "priceMinor",
+          "yearlyPriceMinor",
+          "currency",
+          "interval",
+          "entitlements"
+        ]
+      },
+      "PlanPage": {
+        "type": "object",
+        "properties": {
+          "total": {
+            "type": "number"
+          },
+          "skip": {
+            "type": "number"
+          },
+          "take": {
+            "type": "number"
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlanView"
+            }
+          }
+        },
+        "required": [
+          "total",
+          "skip",
+          "take",
+          "data"
+        ]
+      },
+      "SubscriptionSummary": {
+        "type": "object",
+        "properties": {
+          "planCode": {
+            "type": "string",
+            "example": "starter"
+          },
+          "planName": {
+            "type": "string",
+            "example": "Starter"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "past_due",
+              "canceled",
+              "closed",
+              "suspended"
+            ],
+            "description": "`active` includes Starter and Free; `past_due` = a paid period ended unpaid (grace period); `canceled` = ends at period end."
+          },
+          "interval": {
+            "type": "string",
+            "enum": [
+              "month",
+              "year",
+              "none"
+            ]
+          },
+          "currentPeriodStart": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "currentPeriodEnd": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "null = no end (Free)."
+          },
+          "daysLeft": {
+            "type": "number",
+            "nullable": true,
+            "description": "Whole days until the period ends (never negative). null = no end."
+          },
+          "cancelAtPeriodEnd": {
+            "type": "boolean",
+            "description": "The plan ends at the period end and the tenant falls back to Free."
+          },
+          "graceEndsAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "While `past_due`: when the grace period ends."
+          },
+          "graceDaysLeft": {
+            "type": "number",
+            "nullable": true,
+            "description": "While `past_due`: whole days of grace left."
+          },
+          "limits": {
+            "description": "What the plan (plus any per-tenant override) allows.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/EntitlementsView"
+              }
+            ]
+          }
+        },
+        "required": [
+          "planCode",
+          "planName",
+          "status",
+          "interval",
+          "currentPeriodStart",
+          "currentPeriodEnd",
+          "daysLeft",
+          "cancelAtPeriodEnd",
+          "graceEndsAt",
+          "graceDaysLeft",
+          "limits"
+        ]
+      },
+      "InvoiceView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "number": {
+            "type": "string",
+            "example": "INV-2026-000001",
+            "description": "Sequential per year."
+          },
+          "planCode": {
+            "type": "string",
+            "nullable": true
+          },
+          "amountMinor": {
+            "type": "number",
+            "example": 1999900,
+            "description": "Integer minor units of `currency` (PKR 19,999.00 = 1999900)."
+          },
+          "currency": {
+            "type": "string",
+            "example": "PKR"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "open",
+              "paid",
+              "void"
+            ]
+          },
+          "periodStart": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "periodEnd": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "method": {
+            "type": "string",
+            "nullable": true,
+            "example": "bank_transfer"
+          },
+          "reference": {
+            "type": "string",
+            "nullable": true
+          },
+          "paidAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "number",
+          "planCode",
+          "amountMinor",
+          "currency",
+          "status",
+          "periodStart",
+          "periodEnd",
+          "method",
+          "reference",
+          "paidAt",
+          "createdAt"
+        ]
+      },
+      "InvoicePage": {
+        "type": "object",
+        "properties": {
+          "total": {
+            "type": "number"
+          },
+          "skip": {
+            "type": "number"
+          },
+          "take": {
+            "type": "number"
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InvoiceView"
+            }
+          }
+        },
+        "required": [
+          "total",
+          "skip",
+          "take",
+          "data"
+        ]
+      },
+      "TenantBilling": {
+        "type": "object",
+        "properties": {
+          "subscription": {
+            "$ref": "#/components/schemas/SubscriptionSummary"
+          },
+          "invoices": {
+            "description": "Newest first; `skip` / `take` apply to this list.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/InvoicePage"
+              }
+            ]
+          }
+        },
+        "required": [
+          "subscription",
+          "invoices"
+        ]
+      },
+      "AdminSubscriptionSummary": {
+        "type": "object",
+        "properties": {
+          "planCode": {
+            "type": "string",
+            "example": "starter"
+          },
+          "planName": {
+            "type": "string",
+            "example": "Starter"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "past_due",
+              "canceled",
+              "closed",
+              "suspended"
+            ],
+            "description": "`active` includes Starter and Free; `past_due` = a paid period ended unpaid (grace period); `canceled` = ends at period end."
+          },
+          "interval": {
+            "type": "string",
+            "enum": [
+              "month",
+              "year",
+              "none"
+            ]
+          },
+          "currentPeriodStart": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "currentPeriodEnd": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "null = no end (Free)."
+          },
+          "daysLeft": {
+            "type": "number",
+            "nullable": true,
+            "description": "Whole days until the period ends (never negative). null = no end."
+          },
+          "cancelAtPeriodEnd": {
+            "type": "boolean",
+            "description": "The plan ends at the period end and the tenant falls back to Free."
+          },
+          "graceEndsAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "While `past_due`: when the grace period ends."
+          },
+          "graceDaysLeft": {
+            "type": "number",
+            "nullable": true,
+            "description": "While `past_due`: whole days of grace left."
+          },
+          "limits": {
+            "description": "What the plan (plus any per-tenant override) allows.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/EntitlementsView"
+              }
+            ]
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "provider": {
+            "type": "string",
+            "example": "manual"
+          },
+          "entitlementsOverride": {
+            "type": "object",
+            "additionalProperties": true,
+            "nullable": true,
+            "description": "Per-tenant entitlement overrides merged over the plan (custom contracts)."
+          }
+        },
+        "required": [
+          "planCode",
+          "planName",
+          "status",
+          "interval",
+          "currentPeriodStart",
+          "currentPeriodEnd",
+          "daysLeft",
+          "cancelAtPeriodEnd",
+          "graceEndsAt",
+          "graceDaysLeft",
+          "limits",
+          "id",
+          "provider"
+        ]
+      },
+      "AdminInvoiceView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "number": {
+            "type": "string",
+            "example": "INV-2026-000001",
+            "description": "Sequential per year."
+          },
+          "planCode": {
+            "type": "string",
+            "nullable": true
+          },
+          "amountMinor": {
+            "type": "number",
+            "example": 1999900,
+            "description": "Integer minor units of `currency` (PKR 19,999.00 = 1999900)."
+          },
+          "currency": {
+            "type": "string",
+            "example": "PKR"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "open",
+              "paid",
+              "void"
+            ]
+          },
+          "periodStart": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "periodEnd": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "method": {
+            "type": "string",
+            "nullable": true,
+            "example": "bank_transfer"
+          },
+          "reference": {
+            "type": "string",
+            "nullable": true
+          },
+          "paidAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "recordedBy": {
+            "type": "string",
+            "nullable": true,
+            "description": "The platform admin who recorded it."
+          },
+          "providerInvoiceId": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "number",
+          "planCode",
+          "amountMinor",
+          "currency",
+          "status",
+          "periodStart",
+          "periodEnd",
+          "method",
+          "reference",
+          "paidAt",
+          "createdAt",
+          "recordedBy",
+          "providerInvoiceId"
+        ]
+      },
+      "AdminInvoicePage": {
+        "type": "object",
+        "properties": {
+          "total": {
+            "type": "number"
+          },
+          "skip": {
+            "type": "number"
+          },
+          "take": {
+            "type": "number"
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminInvoiceView"
+            }
+          }
+        },
+        "required": [
+          "total",
+          "skip",
+          "take",
+          "data"
+        ]
+      },
+      "BillingEventView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "type": {
+            "type": "string",
+            "example": "payment.succeeded",
+            "description": "payment.succeeded, payment.failed, subscription.canceled, plan.changed, period.ended, period.extended, account.closed, tenant.suspended, tenant.unsuspended, subscription.created"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "manual",
+              "provider",
+              "system"
+            ]
+          },
+          "provider": {
+            "type": "string",
+            "nullable": true
+          },
+          "providerEventId": {
+            "type": "string",
+            "nullable": true
+          },
+          "payload": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "source",
+          "provider",
+          "providerEventId",
+          "payload",
+          "createdAt"
+        ]
+      },
+      "BillingEventPage": {
+        "type": "object",
+        "properties": {
+          "total": {
+            "type": "number"
+          },
+          "skip": {
+            "type": "number"
+          },
+          "take": {
+            "type": "number"
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BillingEventView"
+            }
+          }
+        },
+        "required": [
+          "total",
+          "skip",
+          "take",
+          "data"
+        ]
+      },
+      "AdminTenantBilling": {
+        "type": "object",
+        "properties": {
+          "subscription": {
+            "$ref": "#/components/schemas/AdminSubscriptionSummary"
+          },
+          "invoices": {
+            "description": "Newest first; `skip` / `take` apply to this list.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AdminInvoicePage"
+              }
+            ]
+          },
+          "events": {
+            "description": "Newest first; `skip` / `take` apply to this list.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BillingEventPage"
+              }
+            ]
+          }
+        },
+        "required": [
+          "subscription",
+          "invoices",
+          "events"
+        ]
+      },
+      "ActivateSubscriptionDto": {
+        "type": "object",
+        "properties": {
+          "idempotencyKey": {
+            "type": "string",
+            "maxLength": 100,
+            "description": "Optional client-chosen key. Sending the same key again for this tenant changes nothing (`duplicate: true`), so a retry or a double click cannot record a payment twice."
+          },
+          "interval": {
+            "type": "string",
+            "enum": [
+              "month",
+              "year"
+            ],
+            "description": "Length of the paid period. Defaults to the plan interval (or the current one for a renewal). Ignored when `periodEnd` is given."
+          },
+          "periodEnd": {
+            "type": "string",
+            "format": "date-time",
+            "description": "End of the paid period (ISO-8601). Required for plans without a billing interval, such as Enterprise."
+          },
+          "amountMinor": {
+            "type": "number",
+            "example": 1999900,
+            "description": "Amount received, integer minor units (PKR 19,999.00 = 1999900).",
+            "minimum": 1,
+            "maximum": 2000000000
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "PKR"
+            ],
+            "example": "PKR"
+          },
+          "method": {
+            "type": "string",
+            "enum": [
+              "bank_transfer",
+              "cash",
+              "cheque",
+              "mobile_wallet",
+              "other"
+            ]
+          },
+          "reference": {
+            "type": "string",
+            "maxLength": 200,
+            "description": "Bank transaction id, cheque number, receipt number..."
+          },
+          "planCode": {
+            "type": "string",
+            "example": "pro",
+            "description": "A paid plan: pro or enterprise."
+          },
+          "entitlementsOverride": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Per-tenant entitlements merged over the plan (custom Enterprise contracts), for example `{ \"seats\": 40, \"voice\": true }`."
+          }
+        },
+        "required": [
+          "amountMinor",
+          "currency",
+          "method",
+          "planCode"
+        ]
+      },
+      "SubscriptionCommandResult": {
+        "type": "object",
+        "properties": {
+          "applied": {
+            "type": "boolean",
+            "description": "False when the command changed nothing (already in the requested state)."
+          },
+          "duplicate": {
+            "type": "boolean",
+            "description": "True when the same `idempotencyKey` was applied before: nothing was done."
+          },
+          "subscription": {
+            "nullable": true,
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AdminSubscriptionSummary"
+              }
+            ]
+          },
+          "invoice": {
+            "nullable": true,
+            "description": "The invoice a payment created.",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AdminInvoiceView"
+              }
+            ]
+          }
+        },
+        "required": [
+          "applied",
+          "duplicate",
+          "subscription",
+          "invoice"
+        ]
+      },
+      "RecordPaymentDto": {
+        "type": "object",
+        "properties": {
+          "idempotencyKey": {
+            "type": "string",
+            "maxLength": 100,
+            "description": "Optional client-chosen key. Sending the same key again for this tenant changes nothing (`duplicate: true`), so a retry or a double click cannot record a payment twice."
+          },
+          "interval": {
+            "type": "string",
+            "enum": [
+              "month",
+              "year"
+            ],
+            "description": "Length of the paid period. Defaults to the plan interval (or the current one for a renewal). Ignored when `periodEnd` is given."
+          },
+          "periodEnd": {
+            "type": "string",
+            "format": "date-time",
+            "description": "End of the paid period (ISO-8601). Required for plans without a billing interval, such as Enterprise."
+          },
+          "amountMinor": {
+            "type": "number",
+            "example": 1999900,
+            "description": "Amount received, integer minor units (PKR 19,999.00 = 1999900).",
+            "minimum": 1,
+            "maximum": 2000000000
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "PKR"
+            ],
+            "example": "PKR"
+          },
+          "method": {
+            "type": "string",
+            "enum": [
+              "bank_transfer",
+              "cash",
+              "cheque",
+              "mobile_wallet",
+              "other"
+            ]
+          },
+          "reference": {
+            "type": "string",
+            "maxLength": 200,
+            "description": "Bank transaction id, cheque number, receipt number..."
+          }
+        },
+        "required": [
+          "amountMinor",
+          "currency",
+          "method"
+        ]
+      },
+      "ExtendSubscriptionDto": {
+        "type": "object",
+        "properties": {
+          "idempotencyKey": {
+            "type": "string",
+            "maxLength": 100,
+            "description": "Optional client-chosen key. Sending the same key again for this tenant changes nothing (`duplicate: true`), so a retry or a double click cannot record a payment twice."
+          },
+          "until": {
+            "type": "string",
+            "format": "date-time",
+            "description": "New end of the current period. Send this or `days`."
+          },
+          "days": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 366,
+            "description": "Days to add to the current end. Send this or `until`."
+          }
+        }
+      },
+      "ChangePlanDto": {
+        "type": "object",
+        "properties": {
+          "idempotencyKey": {
+            "type": "string",
+            "maxLength": 100,
+            "description": "Optional client-chosen key. Sending the same key again for this tenant changes nothing (`duplicate: true`), so a retry or a double click cannot record a payment twice."
+          },
+          "planCode": {
+            "type": "string",
+            "example": "free"
+          },
+          "interval": {
+            "type": "string",
+            "enum": [
+              "month",
+              "year"
+            ]
+          },
+          "periodEnd": {
+            "type": "string",
+            "format": "date-time",
+            "description": "End of the period when moving to a paid plan without a payment (a comped period). Without it, a running paid period is kept, else one interval is granted."
+          },
+          "entitlementsOverride": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "required": [
+          "planCode"
+        ]
+      },
+      "CancelSubscriptionDto": {
+        "type": "object",
+        "properties": {
+          "idempotencyKey": {
+            "type": "string",
+            "maxLength": 100,
+            "description": "Optional client-chosen key. Sending the same key again for this tenant changes nothing (`duplicate: true`), so a retry or a double click cannot record a payment twice."
+          },
+          "atPeriodEnd": {
+            "type": "boolean",
+            "default": true,
+            "description": "true (default): keep the plan until the period ends, then fall back to Free. false: fall back to Free now."
+          }
+        }
+      },
+      "DataUse": {
+        "type": "object",
+        "properties": {
+          "purpose": {
+            "type": "string",
+            "example": "model_training"
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether consent is currently given. false until an owner turns it on."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "off",
+              "granted",
+              "revoked"
+            ],
+            "description": "`off` = never given (the default), `granted`, or `revoked` after having been given."
+          },
+          "termsVersion": {
+            "type": "string",
+            "nullable": true,
+            "description": "Terms version accepted with the last grant."
+          },
+          "acceptedBy": {
+            "type": "string",
+            "nullable": true,
+            "description": "User id of the owner who accepted."
+          },
+          "acceptedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "revokedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        },
+        "required": [
+          "purpose",
+          "enabled",
+          "status",
+          "termsVersion",
+          "acceptedBy",
+          "acceptedAt",
+          "revokedAt"
+        ]
+      },
+      "UpdateDataUseDto": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "true records explicit consent; false revokes it. There is no pre-ticked default: the setting is off until an owner turns it on."
+          },
+          "termsVersion": {
+            "type": "string",
+            "example": "2026-10-01",
+            "maxLength": 50,
+            "description": "Required when `enabled` is true: the version of the terms the owner was shown and accepted."
+          }
+        },
+        "required": [
+          "enabled"
+        ]
+      },
       "MeUser": {
         "type": "object",
         "properties": {
@@ -2062,18 +3491,22 @@
           "plan": {
             "type": "string",
             "enum": [
+              "starter",
               "free",
               "pro",
               "enterprise"
-            ]
+            ],
+            "description": "Mirror of the subscription plan; prefer `subscription`."
           },
           "status": {
             "type": "string",
             "enum": [
               "trial",
               "active",
-              "suspended"
-            ]
+              "suspended",
+              "closed"
+            ],
+            "description": "Mirror of the subscription state; prefer `subscription`."
           },
           "defaultLocale": {
             "type": "string",
@@ -2098,6 +3531,16 @@
           "tenant": {
             "$ref": "#/components/schemas/MeTenant"
           },
+          "subscription": {
+            "nullable": true,
+            "description": "Plan, status, period end, days left and limits, for the dashboard banner (reminders until in-app notifications exist, H5).",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SubscriptionSummary"
+              }
+            ]
+          },
           "locale": {
             "type": "string",
             "example": "ur",
@@ -2107,6 +3550,7 @@
         "required": [
           "user",
           "tenant",
+          "subscription",
           "locale"
         ]
       },

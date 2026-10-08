@@ -5,24 +5,26 @@ import {
   PrismaMock,
   prismaError,
 } from '../../test/utils/prisma-mock';
-import { AuditService } from '../audit/audit.service';
+import { SubscriptionService } from '../billing/subscriptions/subscription.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { TenantsService } from './tenants.service';
 
 describe('TenantsService (platform admin)', () => {
   let service: TenantsService;
   let prisma: PrismaMock;
-  let audit: { record: jest.Mock };
+  let subscriptions: { applyEvent: jest.Mock };
 
   beforeEach(async () => {
     prisma = createPrismaMock();
     mockTransaction(prisma);
-    audit = { record: jest.fn().mockResolvedValue(undefined) };
+    subscriptions = {
+      applyEvent: jest.fn().mockResolvedValue({ applied: true }),
+    };
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         TenantsService,
         { provide: PrismaService, useValue: prisma },
-        { provide: AuditService, useValue: audit },
+        { provide: SubscriptionService, useValue: subscriptions },
       ],
     }).compile();
     service = module.get(TenantsService);
@@ -80,68 +82,84 @@ describe('TenantsService (platform admin)', () => {
   });
 
   describe('update', () => {
-    const existing = (status = 'active') => ({
+    const tenantRow = (over: Record<string, unknown> = {}) => ({
       id: '1',
       name: 'Acme',
-      status,
+      status: 'active',
       plan: 'free',
+      ...over,
+    });
+    const actor = { userId: 'admin-1', role: 'platform_admin' };
+
+    beforeEach(() => {
+      prisma.tenant.findUnique.mockResolvedValue(tenantRow());
+      prisma.tenant.update.mockResolvedValue(tenantRow());
     });
 
-    it('can change name, plan, status and default language', async () => {
-      prisma.tenant.findUnique.mockResolvedValue(existing());
-      prisma.tenant.update.mockResolvedValue({ id: '1', status: 'suspended' });
+    it('writes name and default language itself, and never writes plan or status (those are mirrors owned by the subscription)', async () => {
       await service.update(
         '1',
-        { status: 'suspended', plan: 'pro', defaultLocale: 'ur' },
+        { name: 'New', defaultLocale: 'ur', plan: 'pro', status: 'suspended' },
         'admin-1',
       );
       expect(prisma.tenant.update).toHaveBeenCalledWith({
         where: { id: '1' },
-        data: {
-          name: undefined,
-          plan: 'pro',
-          status: 'suspended',
-          defaultLocale: 'ur',
-        },
+        data: { name: 'New', defaultLocale: 'ur' },
       });
     });
 
-    it('records tenant.suspended in the tenant audit log, with the platform admin as actor, in the same transaction', async () => {
-      prisma.tenant.findUnique.mockResolvedValue(existing('active'));
-      prisma.tenant.update.mockResolvedValue({ id: '1', status: 'suspended' });
+    it('turns status=suspended into a tenant.suspended billing event from the platform admin', async () => {
       await service.update('1', { status: 'suspended' }, 'admin-1');
-      expect(audit.record).toHaveBeenCalledWith(
-        {
-          tenantId: '1',
-          actor: { userId: 'admin-1', role: 'platform_admin' },
-          action: 'tenant.suspended',
-          targetType: 'tenant',
-          targetId: '1',
-          before: { status: 'active' },
-          after: { status: 'suspended' },
-        },
-        prisma,
-      );
+      expect(subscriptions.applyEvent).toHaveBeenCalledWith({
+        tenantId: '1',
+        type: 'tenant.suspended',
+        payload: {},
+        source: 'manual',
+        actor,
+      });
+      expect(prisma.tenant.update).not.toHaveBeenCalled();
     });
 
-    it('records tenant.reactivated when a suspended tenant is activated again', async () => {
-      prisma.tenant.findUnique.mockResolvedValue(existing('suspended'));
-      prisma.tenant.update.mockResolvedValue({ id: '1', status: 'active' });
+    it('turns status=active or trial into tenant.unsuspended', async () => {
       await service.update('1', { status: 'active' }, 'admin-1');
-      expect(audit.record).toHaveBeenCalledWith(
-        expect.objectContaining({ action: 'tenant.reactivated' }),
-        prisma,
-      );
+      await service.update('1', { status: 'trial' }, 'admin-1');
+      expect(subscriptions.applyEvent).toHaveBeenCalledTimes(2);
+      for (const call of subscriptions.applyEvent.mock.calls) {
+        expect(call[0]).toMatchObject({
+          tenantId: '1',
+          type: 'tenant.unsuspended',
+        });
+      }
     });
 
-    it('records nothing for a rename or when the status did not change', async () => {
-      prisma.tenant.findUnique.mockResolvedValue(existing('suspended'));
-      prisma.tenant.update.mockResolvedValue({ id: '1', status: 'suspended' });
-      await service.update('1', { status: 'suspended' }, 'admin-1');
-      prisma.tenant.findUnique.mockResolvedValue(existing('active'));
-      prisma.tenant.update.mockResolvedValue({ id: '1', status: 'active' });
-      await service.update('1', { name: 'New' }, 'admin-1');
-      expect(audit.record).not.toHaveBeenCalled();
+    it('turns plan into a plan.changed event (no payment, no invoice)', async () => {
+      await service.update('1', { plan: 'pro' }, 'admin-1');
+      expect(subscriptions.applyEvent).toHaveBeenCalledWith({
+        tenantId: '1',
+        type: 'plan.changed',
+        payload: { planCode: 'pro' },
+        source: 'manual',
+        actor,
+      });
+    });
+
+    it('applies the subscription change first, so a refused change leaves the name untouched', async () => {
+      subscriptions.applyEvent.mockRejectedValue(
+        Object.assign(new Error('nope'), {
+          status: 409,
+          response: { code: 'INVALID_SUBSCRIPTION_STATE' },
+        }),
+      );
+      await expect(
+        service.update('1', { name: 'New', plan: 'pro' }, 'admin-1'),
+      ).rejects.toMatchObject({ status: 409 });
+      expect(prisma.tenant.update).not.toHaveBeenCalled();
+    });
+
+    it('touches nothing when only unrelated fields are absent', async () => {
+      await service.update('1', {}, 'admin-1');
+      expect(subscriptions.applyEvent).not.toHaveBeenCalled();
+      expect(prisma.tenant.update).not.toHaveBeenCalled();
     });
 
     it('404 TENANT_NOT_FOUND for an unknown tenant, and maps a P2025 race to 404', async () => {
@@ -152,8 +170,8 @@ describe('TenantsService (platform admin)', () => {
         status: 404,
         response: { code: 'TENANT_NOT_FOUND' },
       });
+      expect(subscriptions.applyEvent).not.toHaveBeenCalled();
 
-      prisma.tenant.findUnique.mockResolvedValue(existing());
       prisma.tenant.update.mockRejectedValueOnce(prismaError('P2025'));
       await expect(
         service.update('x', { name: 'n' }, 'admin-1'),

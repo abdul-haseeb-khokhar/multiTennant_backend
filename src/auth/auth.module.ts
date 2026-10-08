@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtModule, JwtModuleOptions } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
+import { BillingCoreModule } from '../billing/billing-core.module';
 import { RateLimiter } from '../common/throttle/rate-limiter';
 import { MailModule } from '../mail/mail.module';
 import { AuthController } from './auth.controller';
@@ -33,6 +34,7 @@ import { SessionTokenService } from './session-token.service';
       }),
     }),
     MailModule,
+    BillingCoreModule,
   ],
   providers: [
     AuthService,

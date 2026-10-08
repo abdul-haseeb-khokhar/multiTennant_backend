@@ -10,6 +10,7 @@ import { join } from 'node:path';
 
 // Throwaway values (set before the app modules load: they validate the environment on import): the app is only built to read route metadata, nothing connects.
 process.env.JWT_SECRET ??= 'openapi-export-secret-not-used';
+process.env.BILLING_JOB ??= 'off';
 process.env.DATABASE_URL ??= 'postgresql://unused:unused@localhost:5432/unused';
 
 async function main() {

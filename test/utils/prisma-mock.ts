@@ -47,6 +47,11 @@ export function createPrismaMock() {
     passwordReset: model('create', 'findUnique', 'updateMany'),
     emailVerification: model('create', 'findUnique', 'updateMany'),
     auditLog: model('create', 'findMany', 'count'),
+    plan: model('findUnique', 'findMany'),
+    subscription: model('create', 'findUnique', 'findMany', 'update'),
+    invoice: model('create', 'findMany', 'count'),
+    billingEvent: model('create', 'findFirst', 'findMany', 'count'),
+    dataUseConsent: model('findUnique', 'upsert', 'update'),
     $transaction: jest.fn(),
     $queryRaw: jest.fn(),
   };

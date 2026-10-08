@@ -378,11 +378,27 @@ Plans are rows with `code`, `name`, `visibility` (`public` | `hidden`), `price_m
 | Channels | chat | chat, "powered by" label | chat + WhatsApp | all |
 | Voice | none | none | add-on, about PKR 25 per minute | custom |
 
+### I1. Plan catalogue (data-driven): BE
+Plans are rows with `code`, `name`, `visibility` (`public` | `hidden`), `price_minor`, `currency`, `interval` (`month` | `year` | `none`), `duration_days` (null = no end), `fallback_plan_code`, `entitlements` JSON and `provider_price_ids` JSON. The pricing page lists only `public` plans.
+
+| | Starter (hidden) | Free (public) | Pro (public) | Enterprise (public) |
+|---|---|---|---|---|
+| Price (excl. tax) | not sold, granted at signup | PKR 0 | PKR 19,999 per month, PKR 199,990 per year (10 months) | custom quote, set by a platform admin |
+| Duration | 15 days, then falls back to Free | no end | per period | per contract |
+| Staff seats | 3 | 1 | 10 | custom |
+| AI conversations | 100 in total | 30 per month | 1,500 per month, extra PKR 15 each | custom |
+| Knowledge base | 20 MB | 10 MB | 500 MB | custom |
+| Channels | chat | chat, "powered by" label | chat + WhatsApp | all |
+| Voice | none | none | add-on, about PKR 25 per minute | custom |
+
 Prices exclude tax; tax is a separate invoice line and its treatment needs an accountant (I7).
+**Built (Phase 2B):** table `plans` seeded with these four rows by the migration (adjust the rows, not the code). Columns as proposed plus `yearly_price_minor` (Pro: PKR 199,990 = `19999000` minor units, monthly `1999900`), `sort_order` and `active`; `price_minor` is `null` for a custom quote (Enterprise) and `interval` is `none` for plans without a billing interval (Enterprise is per contract, so an admin passes `periodEnd`). **Entitlements JSON:** `{ "seats": 3, "conversationsPerPeriod": 100, "conversationPeriod": "total" | "month", "knowledgeMb": 20, "channels": ["chat"], "voice": false, "poweredByLabel": false, "overageConversationMinor"?: 1500, "voicePerMinuteMinor"?: 2500 }`; `null` = unlimited, a missing key = the most restrictive value, `total` = since the subscription period began (Starter), Pro voice is an add-on so `voice` is false there until a per-tenant override (`subscriptions.entitlements_override`, same keys) grants it. Public list: `GET /v1/plans` (Free, Pro, Enterprise; Starter is hidden). Starter and Free values are placeholders.
 Status: ☐
 
 ### I2. Starter to Free lifecycle: BE
+Every new tenant starts on **Starter** with `current_period_end = signup + 15 days` (the length is `plans.duration_days`, not code). At the end it moves to **Free** automatically unless a paid plan is active. A tenant can buy Pro at any time, including during Starter. Existing tenants at deployment time start Starter from that day, not from their creation date. ### I2. Starter to Free lifecycle: BE
 Every new tenant starts on **Starter** with `current_period_end = signup + 15 days` (the length is `plans.duration_days`, not code). At the end it moves to **Free** automatically unless a paid plan is active. A tenant can buy Pro at any time, including during Starter. Existing tenants at deployment time start Starter from that day, not from their creation date. A platform admin can extend Starter or change any plan.
+**Built (Phase 2B):** signup creates the Starter subscription in the same transaction (`current_period_end` = now + `plans.duration_days`); the migration gave every existing tenant a Starter subscription starting on the deployment day. It falls to Free by itself (on read and by the job). Admin: `extend`, `change-plan`.
 Status: ☐
 
 ### I3. Subscription state machine: BE
@@ -394,7 +410,17 @@ Pro active ─period ends, no renewal─► past_due ─7 days grace─► Free
 Pro active ─cancel─► canceled (keeps Pro until period end) ─► Free
 any ─admin─► suspended        any ─owner/admin request─► closed
 ```
+### I3. Subscription state machine: BE
+`subscriptions.status`: `active` (includes Starter and Free), `past_due` (a paid period ended without renewal), `canceled` (ends at period end), `closed` (account closed), `suspended` (set by a platform admin).
+```
+Starter ─15 days─► Free ─payment─► Pro/Enterprise (active)
+Starter ─payment──────────────────► Pro (active)
+Pro active ─period ends, no renewal─► past_due ─7 days grace─► Free
+Pro active ─cancel─► canceled (keeps Pro until period end) ─► Free
+any ─admin─► suspended        any ─owner/admin request─► closed
+```
 `tenants.status` (`trial`/`active`/`suspended`) is replaced by this state; `tenants.plan` becomes derived from the subscription, and the existing `trial` and `free` values are migrated accordingly.
+**Built (Phase 2B), with one deliberate deviation:** the columns are not dropped (expand-contract on the shared database). `tenants.plan` and `tenants.status` stay as **denormalised mirrors** (`status` = `trial` while on Starter, `active`, `suspended`, `closed`) written only by `SubscriptionService` in the transaction of each change; the auth guard reads `status` (cheap suspended/closed check), nothing else may. Dropping them is a later, separate migration if ever wanted. The machine is exactly the diagram above, plus: `past_due` grace = 7 days from the end of the paid period (a constant, `GRACE_DAYS`); a payment on time renews from the old period end, a late one from now; a paid plan cancelled at period end shows `status: canceled` until it ends; suspending remembers the previous state and lifting restores it; `closed` is final (the event exists, the route does not yet). Pure functions in `billing/subscriptions/state-machine.ts`.
 Status: ☐
 
 ### I4. Payment sources, manual now and a provider later: BE
@@ -403,35 +429,58 @@ The rest of the system never knows who took the money. Everything that changes a
 - `ManualProvider` (launch): a platform admin records a payment, which emits the same event a webhook would.
 - Later: a `StripeProvider` or another one (provider choice depends on where the company is registered and is not decided). Adding it must not change the state machine, tables, enforcement or screens.
 - Tables (`tenant_core`): `plans`, `subscriptions` (tenant, plan, status, period start/end, `cancel_at_period_end`, `provider`, `provider_customer_id`, `provider_subscription_id`), `invoices` (number, amount, currency, status, period, method, reference, `recorded_by`, `provider_invoice_id`), `billing_events` (append-only, unique per provider event id).
+### I4. Payment sources, manual now and a provider later: BE
+The rest of the system never knows who took the money. Everything that changes a subscription is a normalised **BillingEvent** (`payment.succeeded`, `payment.failed`, `subscription.canceled`, `plan.changed`, …) applied by one `SubscriptionService.applyEvent()` state machine, which is idempotent and audited (H6).
+- `BillingProvider` interface: `createCheckout`, `createPortalSession`, `cancel`, `handleWebhook(rawBody, headers) → BillingEvent[]`.
+- `ManualProvider` (launch): a platform admin records a payment, which emits the same event a webhook would.
+- Later: a `StripeProvider` or another one (provider choice depends on where the company is registered and is not decided). Adding it must not change the state machine, tables, enforcement or screens.
+- Tables (`tenant_core`): `plans`, `subscriptions` (tenant, plan, status, period start/end, `cancel_at_period_end`, `provider`, `provider_customer_id`, `provider_subscription_id`), `invoices` (number, amount, currency, status, period, method, reference, `recorded_by`, `provider_invoice_id`), `billing_events` (append-only, unique per provider event id).
 - Provider webhooks verify the raw-body signature and are processed once by event id. Card data never reaches our servers (hosted checkout).
+**Built (Phase 2B):** `BillingProvider` (abstract class), `ManualProvider` (checkout, portal and webhooks answer 501 `NOT_IMPLEMENTED`; `cancel` is a no-op because nothing exists outside this system) and a `BillingProviders` registry. Events: `payment.succeeded`, `payment.failed`, `subscription.canceled`, `plan.changed`, `period.ended`, `period.extended` (added for the admin `extend` command), `account.closed`, `tenant.suspended`, `tenant.unsuspended`; `subscription.created` is only logged. Tables as listed plus `invoice_sequences`; `billing_events` is append-only (DB trigger) and unique per (`provider`, `provider_event_id`). Admin commands accept an optional `idempotencyKey`, stored as the tenant-scoped provider event id. Phase 9 adds a class and registers it; no other change.
 Status: ☐
 
 ### I5. Entitlements and enforcement: BE (AI engine honours the result)
 `EntitlementsService.check(tenantId, limit | feature)` is the single answer to "may this tenant do this?", with a short cache. It is called by the gateway (D1), the knowledge upload, seat and invite creation, and channel connection. Stable error codes (translatable, H7): `PLAN_LIMIT_REACHED`, `PLAN_FEATURE_UNAVAILABLE`, `SUBSCRIPTION_PAST_DUE`, `TENANT_SUSPENDED`.
+### I5. Entitlements and enforcement: BE (AI engine honours the result)
+`EntitlementsService.check(tenantId, limit | feature)` is the single answer to "may this tenant do this?", with a short cache. It is called by the gateway (D1), the knowledge upload, seat and invite creation, and channel connection. Stable error codes (translatable, H7): `PLAN_LIMIT_REACHED`, `PLAN_FEATURE_UNAVAILABLE`, `SUBSCRIPTION_PAST_DUE`, `TENANT_SUSPENDED`.
 At a limit the **end customer is never dropped**: the widget shows the tenant's configured fallback message and the conversation escalates to a human (D7). Over-limit conversations are counted but not answered by the AI.
+**Built (Phase 2B):** `EntitlementsService.check(tenantId, key, amount?, options?)` returns `{ allowed, planCode, limit, used }` or `{ allowed: false, code, reason, ... }`; `assert` throws a 403 with the same code. Keys: `seats`, `conversations`, `knowledgeMb`, `voice`, `channel:<name>`. Codes: `PLAN_LIMIT_REACHED`, `PLAN_FEATURE_UNAVAILABLE`, `SUBSCRIPTION_PAST_DUE`, `TENANT_SUSPENDED`, `TENANT_CLOSED`, `NO_ACTIVE_SUBSCRIPTION`. `past_due` keeps answering customers (`conversations` still allowed) but cannot grow (seats, uploads, channels). Wired now into invite creation, invite acceptance and re-enabling a user (seats = active users + pending invites, counted under the subscription row lock so parallel invites cannot overshoot). The gateway and knowledge upload will call `check`; usage comes through the injected `UsageProvider` (stub returns 0 for conversations and knowledge). 30 s cache, dropped on every change by this instance and never kept past the next time-based transition.
 Status: ☐
 
 ### I6. Manual billing API for platform admins (all audited): BE
+Under `/v1/admin/tenants/:id/subscription`: `POST activate` (plan, period end or interval, amount, currency, method, reference), `POST record-payment` (renewal), `POST extend` (extend the current period, for example Starter), `POST change-plan`, `POST cancel`, plus `GET` for the subscription, invoices and billing events. ### I6. Manual billing API for platform admins (all audited): BE
 Under `/v1/admin/tenants/:id/subscription`: `POST activate` (plan, period end or interval, amount, currency, method, reference), `POST record-payment` (renewal), `POST extend` (extend the current period, for example Starter), `POST change-plan`, `POST cancel`, plus `GET` for the subscription, invoices and billing events. Each call writes an invoice or event and an audit entry.
+**Built (Phase 2B):** exactly these routes under `/v1/admin/tenants/:id/subscription`. `activate` and `record-payment` answer 201 with `{ applied, duplicate, subscription, invoice }` (a paid, sequentially numbered invoice `INV-<year>-<6 digits>`); `extend`, `change-plan` and `cancel` answer 200 and create no invoice. Errors: 409 `INVALID_SUBSCRIPTION_STATE`, 404 `PLAN_NOT_FOUND` / `TENANT_NOT_FOUND` / `SUBSCRIPTION_NOT_FOUND`, 400 validation. Payment DTO: `amountMinor` (JSON integer, 1..2,000,000,000), `currency` (`PKR`), `method` (`bank_transfer`, `cash`, `cheque`, `mobile_wallet`, `other`), optional `reference`, `interval`/`periodEnd`, `idempotencyKey`. Everything in OpenAPI (`docs/openapi.json`).
 Status: ☐
 
 ### I7. Money, invoices and tax: BE
+Amounts are integers in minor units plus a currency code (PKR at launch); never floats. Invoices have sequential numbers and a PDF/HTML view later. ### I7. Money, invoices and tax: BE
 Amounts are integers in minor units plus a currency code (PKR at launch); never floats. Invoices have sequential numbers and a PDF/HTML view later. Tax is a separate line item; the applicable rate, registration and invoice wording need confirmation by an accountant before the first paid invoice.
+**Built (Phase 2B), tax part still OPEN:** amounts are integers in minor units plus a currency code (`PKR`); invoices have sequential numbers per calendar year, a status (`paid` today), the period, method, reference and who recorded it. **Not decided in code:** tax lines, rates, registration numbers, invoice wording, fiscal-year numbering and the PDF/HTML view: the accountant decides these before the first paid invoice.
 Status: ☐
 
 ### I8. Reminders: BE
+In-app notifications (H5) and a dashboard banner: Starter ends in 7, 3 and 1 days; paid period ends in 7, 3 and 1 days; grace period started; plan limit at 80% and 100%; downgrade to Free happened; data deletion notices (I10). ### I8. Reminders: BE
 In-app notifications (H5) and a dashboard banner: Starter ends in 7, 3 and 1 days; paid period ends in 7, 3 and 1 days; grace period started; plan limit at 80% and 100%; downgrade to Free happened; data deletion notices (I10). A daily job applies time-based transitions; request-time checks guarantee correctness if the job is late.
+**Built (Phase 2B), reminders NOT built:** the job and the request-time checks are done (the job sweeps on boot and hourly in every instance, one holding an advisory lock). The notifications need H5 (Phase 4). Until then `GET /v1/me` carries `subscription` (plan, status, `currentPeriodEnd`, `daysLeft`, `graceEndsAt`, `graceDaysLeft`, `cancelAtPeriodEnd`, limits) so the frontend can show the banner.
 Status: ☐
 
 ### I9. Abuse and cost guards: BE
+No AI replies until the owner's email is verified (H4); signup rate limits per IP and per email; one Starter per organisation (matching verified email domain or company name, platform admin can override); hard caps from I1 on Starter and Free. ### I9. Abuse and cost guards: BE
 No AI replies until the owner's email is verified (H4); signup rate limits per IP and per email; one Starter per organisation (matching verified email domain or company name, platform admin can override); hard caps from I1 on Starter and Free. Free-plan AI conversations are metered as carefully as paid ones because each costs LLM money.
+**Phase 2B:** only the plan caps of I1 (as entitlements) exist. Signup rate limits, one Starter per organisation and "no AI replies until the owner's email is verified" are not built (they belong with the gateway, Phase 3, and Phase 8).
 Status: ☐
 
 ### I10. Data retention after a plan ends: BE (+ AI for engine data)
 - Free is an ongoing plan, so a Free tenant's data stays while the account is active.
 - When a paid plan ends and the tenant falls to Free, content **beyond the Free limits** (extra seats, knowledge over 10 MB, extra channels) is kept inactive and read-only for **60 days**, then deleted unless the tenant upgrades. Notices at day 30, 50 and 57, with an export offered.
 - A closed or abandoned account is deleted **60 days** after closure through the offboarding procedure (architecture §5.6) across both schemas, with the same notices.
+### I10. Data retention after a plan ends: BE (+ AI for engine data)
+- Free is an ongoing plan, so a Free tenant's data stays while the account is active.
+- When a paid plan ends and the tenant falls to Free, content **beyond the Free limits** (extra seats, knowledge over 10 MB, extra channels) is kept inactive and read-only for **60 days**, then deleted unless the tenant upgrades. Notices at day 30, 50 and 57, with an export offered.
+- A closed or abandoned account is deleted **60 days** after closure through the offboarding procedure (architecture §5.6) across both schemas, with the same notices.
 - Deletion is never silent. Legal retention (invoices, audit log) is the exception: invoices and tax records are kept for the period an accountant specifies.
+**Phase 2B:** not built. After a downgrade nobody is removed: users above the new seat limit stay and only new invites, acceptances and re-enables are refused. The 60-day inactive period, the notices and the deletion are Phase 8 (with the offboarding procedure). `closed_at` is recorded on the subscription for it.
 Status: ☐
 
 ### I11. Using customer conversations to train our own model: BE + AI (**blocks any training use; needs legal review**)
@@ -442,7 +491,16 @@ We intend to train our own model later. Customer conversations contain personal 
 - Datasets contain **de-identified** text (names, phones, emails, ids and card numbers removed, free-text checked), are stored separately from live data with access control, and carry the source tenant id so revocation and erasure can be honoured for future exports.
 - Voice recordings are excluded unless separately consented, because voice is biometric-adjacent and its rules are stricter.
 - Be honest about erasure: a model that has already been trained cannot "unlearn" one tenant's data, so only de-identified, consented data is used.
+### I11. Using customer conversations to train our own model: BE + AI (**blocks any training use; needs legal review**)
+We intend to train our own model later. Customer conversations contain personal data about **third parties** (the tenants' own customers) that we hold on the tenants' behalf. Using that data for our own training is a different purpose from running the service, and generally needs a clear legal basis: an explicit clause in the terms or data-processing agreement, and in many jurisdictions consent. Keeping data "for some future use not yet defined" is not a safe basis, and retention beyond I10 must be tied to a stated purpose. This is not legal advice; a lawyer must review before launch (Pakistan's data-protection rules and any foreign customers' rules, such as the GDPR, can apply).
+**Proposal (privacy-by-design, so training stays possible later):**
+- Table `data_use_consents` (tenant_id, purpose `model_training`, status, terms version, accepted_by, accepted_at, revoked_at). **Default is off.** Consent is explicit, per tenant, revocable, and recorded; it is not hidden in a pre-ticked box. An optional benefit, such as extra Free-plan quota for opting in, is a business decision for the owner.
+- Only consenting tenants' data may enter a training dataset; the AI engine's export job filters by consent at export time.
+- Datasets contain **de-identified** text (names, phones, emails, ids and card numbers removed, free-text checked), are stored separately from live data with access control, and carry the source tenant id so revocation and erasure can be honoured for future exports.
+- Voice recordings are excluded unless separately consented, because voice is biometric-adjacent and its rules are stricter.
+- Be honest about erasure: a model that has already been trained cannot "unlearn" one tenant's data, so only de-identified, consented data is used.
 - Retention for training data is its own stated period in the terms; it does not extend I10 for non-consenting tenants.
+**Built (Phase 2B), only the consent record; export BLOCKED:** table `data_use_consents` (one row per tenant and purpose, `model_training`; no row = off) and `GET`/`PUT /v1/tenants/:tenantId/data-use`, **owner only**, default off, explicit (`enabled` must be a JSON boolean; granting needs the `termsVersion` the owner was shown), records who accepted and when, revoking keeps the row, every change is audited (`data_use.granted` / `data_use.revoked`). Nothing reads it to export or copy data and nothing may until the lawyer has reviewed the terms, the lawful basis, de-identification and voice exclusion. Which terms version is current is not decided in code: the client sends it.
 Status: ☐
 
 ### I12. Self-hosted model readiness: AI + BE
@@ -493,6 +551,7 @@ Engine → backend: `POST /internal/events` (D5), `GET /internal/tenants/:id/age
 | Password reset | `POST /auth/password-reset/request`, `POST /auth/password-reset/confirm` (H2) |
 | Notifications | `GET /tenants/:tenantId/notifications`, `POST …/:id/read`, `POST …/read-all` (H5) |
 | Audit log | `GET /tenants/:tenantId/audit-logs` (H6) |
+| Billing | `GET /plans` (public), `GET /tenants/:tenantId/billing` (owner/admin), `GET/PUT /tenants/:tenantId/data-use` (owner), `/admin/tenants/:id/subscription` + `activate`, `record-payment`, `extend`, `change-plan`, `cancel` (I1-I6, I11; built in Phase 2B) |
 | Languages | `GET /i18n/locales`, `GET /i18n/:locale/:namespace` (H7, public) |
 
 ## Appendix C: Response checklist (copy into your reply)

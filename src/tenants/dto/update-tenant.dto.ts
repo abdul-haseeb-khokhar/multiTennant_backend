@@ -10,7 +10,9 @@ import { LOCALE_CODES } from '../../i18n/locales';
 
 /**
  * Platform-admin only (`/v1/admin/tenants`). Tenants are created through signup, never through
- * this API, so `plan` and `status` can only be changed here.
+ * this API. `plan` and `status` are kept for compatibility but no longer write the tenant
+ * columns: they are translated into subscription events (see TenantsService.update). Use
+ * `/v1/admin/tenants/:id/subscription` for billing.
  */
 export class UpdateTenantDto {
   @ApiPropertyOptional()
@@ -20,12 +22,22 @@ export class UpdateTenantDto {
   @MaxLength(100)
   name?: string;
 
-  @ApiPropertyOptional({ enum: ['free', 'pro', 'enterprise'] })
+  @ApiPropertyOptional({
+    enum: ['starter', 'free', 'pro', 'enterprise'],
+    deprecated: true,
+    description:
+      'Deprecated: same as POST /admin/tenants/:id/subscription/change-plan with no payment (a paid plan gets one interval, no invoice).',
+  })
   @IsOptional()
-  @IsIn(['free', 'pro', 'enterprise'])
+  @IsIn(['starter', 'free', 'pro', 'enterprise'])
   plan?: string;
 
-  @ApiPropertyOptional({ enum: ['trial', 'active', 'suspended'] })
+  @ApiPropertyOptional({
+    enum: ['trial', 'active', 'suspended'],
+    deprecated: true,
+    description:
+      '`suspended` suspends the tenant; `active` or `trial` lifts a suspension (it returns to the state it had). Nothing else changes: the real state is the subscription.',
+  })
   @IsOptional()
   @IsIn(['trial', 'active', 'suspended'])
   status?: string;

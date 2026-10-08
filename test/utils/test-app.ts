@@ -3,6 +3,7 @@ import { JwtService } from '@nestjs/jwt';
 import { Test } from '@nestjs/testing';
 import { AppModule } from '../../src/app.module';
 import { configureApp, setupSwagger } from '../../src/app.setup';
+import { Clock, FakeClock } from '../../src/billing/clock';
 import { PrismaService } from '../../src/prisma/prisma.service';
 import { createPrismaMock } from './prisma-mock';
 
@@ -27,9 +28,13 @@ export interface StaffRecord {
  */
 export async function createTestApp() {
   const prisma = createPrismaMock();
+  // Billing reads time from the injected Clock; tests move it instead of waiting.
+  const clock = new FakeClock();
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
     .overrideProvider(PrismaService)
     .useValue(prisma)
+    .overrideProvider(Clock)
+    .useValue(clock)
     .compile();
 
   const app: INestApplication = moduleRef.createNestApplication({
@@ -62,6 +67,7 @@ export async function createTestApp() {
   return {
     app,
     prisma,
+    clock,
     /** A staff token, as `AuthService.login` would issue it. */
     staffToken,
     /**

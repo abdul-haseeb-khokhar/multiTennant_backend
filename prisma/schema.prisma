@@ -18,15 +18,24 @@ model Tenant {
   id            String   @id @default(uuid())
   name          String
   slug          String   @unique
+  // DENORMALISED MIRRORS of the subscription (section I): `plan` is the subscription's plan code
+  // and `status` is trial | active | suspended | closed. They exist so the auth guard and the
+  // admin list need no join. The subscription is the source of truth: only SubscriptionService
+  // writes these two columns, in the same transaction as every subscription change. Never read
+  // them to decide what a tenant may do (use EntitlementsService), and never write them elsewhere.
   plan          String   @default("free")
   status        String   @default("trial")
   defaultLocale String   @default("en") @map("default_locale")
   createdAt     DateTime @default(now()) @map("created_at")
 
-  tenantUsers  TenantUser[]
-  endCustomers EndCustomer[]
-  staffInvites StaffInvite[]
-  auditLogs    AuditLog[]
+  tenantUsers     TenantUser[]
+  endCustomers    EndCustomer[]
+  staffInvites    StaffInvite[]
+  auditLogs       AuditLog[]
+  subscription    Subscription?
+  invoices        Invoice[]
+  billingEvents   BillingEvent[]
+  dataUseConsents DataUseConsent[]
 
   @@map("tenants")
   @@schema("tenant_core")
@@ -161,5 +170,159 @@ model AuditLog {
   @@index([tenantId, action])
   @@index([tenantId, actorUserId])
   @@map("audit_logs")
+  @@schema("tenant_core")
+}
+
+/// Plan catalogue (I1). Rows are data: prices, durations and entitlements are adjustable without a
+/// release. `entitlements` shape: see src/billing/entitlements/entitlements.ts and docs.
+model Plan {
+  code             String   @id
+  name             String
+  // 'public' (listed on the pricing page) | 'hidden' (granted, never listed, e.g. Starter)
+  visibility       String   @default("public")
+  // Integer minor units of `currency`. 0 = free; null = custom quote (Enterprise).
+  priceMinor       Int?     @map("price_minor")
+  currency         String   @default("PKR")
+  // Billing interval of `priceMinor`: 'month' | 'year' | 'none'.
+  interval         String   @default("none")
+  // Price of a year, for a plan sold both monthly and yearly (Pro). Null = no yearly option.
+  yearlyPriceMinor Int?     @map("yearly_price_minor")
+  // A plan that ends by itself (Starter: 15). Null = no end.
+  durationDays     Int?     @map("duration_days")
+  // Where a subscription lands when this plan ends or lapses. Null = it never ends (Free).
+  fallbackPlanCode String?  @map("fallback_plan_code")
+  entitlements     Json
+  // { "<provider>": { "month": "<price id>", "year": "<price id>" } } once a provider exists.
+  providerPriceIds Json     @default("{}") @map("provider_price_ids")
+  active           Boolean  @default(true)
+  sortOrder        Int      @default(0) @map("sort_order")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @default(now()) @updatedAt @map("updated_at")
+
+  subscriptions Subscription[]
+
+  @@map("plans")
+  @@schema("tenant_core")
+}
+
+/// One row per tenant: its current plan and billing state (I3). History lives in billing_events,
+/// invoices and the audit log. Written only by SubscriptionService.
+model Subscription {
+  id                     String    @id @default(uuid())
+  tenantId               String    @unique @map("tenant_id")
+  planCode               String    @map("plan_code")
+  // 'active' (includes Starter and Free) | 'past_due' | 'canceled' | 'closed' | 'suspended'
+  status                 String    @default("active")
+  // Billing interval of the current paid period: 'month' | 'year' | 'none'.
+  interval               String    @default("none")
+  currentPeriodStart     DateTime  @default(now()) @map("current_period_start")
+  // Null = no end (Free).
+  currentPeriodEnd       DateTime? @map("current_period_end")
+  cancelAtPeriodEnd      Boolean   @default(false) @map("cancel_at_period_end")
+  // While past_due: when the grace period ends and the tenant falls back.
+  graceEndsAt            DateTime? @map("grace_ends_at")
+  // Where an un-suspend returns to.
+  statusBeforeSuspension String?   @map("status_before_suspension")
+  closedAt               DateTime? @map("closed_at")
+  // Per-tenant overrides merged over the plan's entitlements (custom Enterprise contracts).
+  entitlementsOverride   Json?     @map("entitlements_override")
+  provider               String    @default("manual")
+  providerCustomerId     String?   @map("provider_customer_id")
+  providerSubscriptionId String?   @map("provider_subscription_id")
+  createdAt              DateTime  @default(now()) @map("created_at")
+  updatedAt              DateTime  @default(now()) @updatedAt @map("updated_at")
+
+  tenant   Tenant    @relation(fields: [tenantId], references: [id])
+  plan     Plan      @relation(fields: [planCode], references: [code])
+  invoices Invoice[]
+
+  @@index([status, currentPeriodEnd])
+  @@map("subscriptions")
+  @@schema("tenant_core")
+}
+
+/// Invoices, amounts in integer minor units (I7). No tax lines yet: the rate, registration and
+/// wording need an accountant first. `number` is sequential per year (invoice_sequences).
+model Invoice {
+  id                String    @id @default(uuid())
+  number            String    @unique
+  tenantId          String    @map("tenant_id")
+  subscriptionId    String    @map("subscription_id")
+  planCode          String?   @map("plan_code")
+  amountMinor       Int       @map("amount_minor")
+  currency          String    @default("PKR")
+  // 'draft' | 'open' | 'paid' | 'void'
+  status            String
+  periodStart       DateTime? @map("period_start")
+  periodEnd         DateTime? @map("period_end")
+  // 'bank_transfer' | 'cash' | 'cheque' | 'mobile_wallet' | 'other' | 'provider'
+  method            String?
+  reference         String?
+  // The platform admin who recorded it. A plain column (no foreign key), like audit_logs.
+  recordedBy        String?   @map("recorded_by")
+  providerInvoiceId String?   @map("provider_invoice_id")
+  paidAt            DateTime? @map("paid_at")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @default(now()) @updatedAt @map("updated_at")
+
+  tenant       Tenant       @relation(fields: [tenantId], references: [id])
+  subscription Subscription @relation(fields: [subscriptionId], references: [id])
+
+  @@index([tenantId, createdAt(sort: Desc)])
+  @@map("invoices")
+  @@schema("tenant_core")
+}
+
+/// Gapless invoice numbering per calendar year: one row per year, incremented inside the
+/// transaction that creates the invoice (a rollback gives the number back).
+model InvoiceSequence {
+  year       Int @id
+  lastNumber Int @default(0) @map("last_number")
+
+  @@map("invoice_sequences")
+  @@schema("tenant_core")
+}
+
+/// Append-only log of every normalised billing event (I4). A database trigger refuses UPDATE and
+/// DELETE. (provider, provider_event_id) is unique when set, so a replayed webhook is a no-op.
+model BillingEvent {
+  id              String   @id @default(uuid())
+  tenantId        String   @map("tenant_id")
+  type            String
+  // 'manual' | 'provider' | 'system'
+  source          String
+  provider        String?
+  providerEventId String?  @map("provider_event_id")
+  payload         Json
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@unique([provider, providerEventId])
+  @@index([tenantId, createdAt(sort: Desc)])
+  @@map("billing_events")
+  @@schema("tenant_core")
+}
+
+/// Explicit, revocable, per-tenant consent to use de-identified conversations for our own model
+/// training (I11). One row per (tenant, purpose); no row means "off". DEFAULT IS OFF. Nothing in
+/// this codebase exports training data: that needs legal review first.
+model DataUseConsent {
+  id           String    @id @default(uuid())
+  tenantId     String    @map("tenant_id")
+  purpose      String
+  // 'granted' | 'revoked'
+  status       String
+  termsVersion String    @map("terms_version")
+  acceptedBy   String    @map("accepted_by")
+  acceptedAt   DateTime  @map("accepted_at")
+  revokedAt    DateTime? @map("revoked_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @default(now()) @updatedAt @map("updated_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@unique([tenantId, purpose])
+  @@map("data_use_consents")
   @@schema("tenant_core")
 }

@@ -54,6 +54,22 @@ export class EnvironmentVariables {
   @IsOptional()
   @IsIn(['console', 'link'])
   MAIL_MODE: string = 'console';
+
+  /**
+   * The billing job that applies due plan transitions (Starter to Free, grace expiry). `off`
+   * disables the timer on this instance; request-time checks stay correct either way.
+   */
+  @IsOptional()
+  @IsIn(['on', 'off'])
+  BILLING_JOB: string = 'on';
+
+  /** How often the billing job sweeps (default 60 minutes; always at least daily). */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(1440)
+  BILLING_JOB_INTERVAL_MINUTES: number = 60;
 }
 
 /** Used by `ConfigModule.forRoot({ validate })`: the app refuses to start on a bad environment. */

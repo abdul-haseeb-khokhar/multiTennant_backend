@@ -5,12 +5,14 @@ import { ErrorCode } from '../common/errors/error-codes';
 import { isPrismaError } from '../common/errors/prisma-errors';
 import { normalizeEmail } from '../common/validation/email';
 import { DEFAULT_LOCALE } from '../i18n/locales';
+import { SubscriptionService } from '../billing/subscriptions/subscription.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { isReservedSlug, slugify, withSuffix } from '../tenants/slug';
 import { LoginDto } from './dto/login.dto';
 import { SignupDto } from './dto/signup.dto';
 import { EmailVerificationService } from './email-verification.service';
 import { SessionTokenService } from './session-token.service';
+import { assertTenantUsable } from './tenant-status';
 
 const SALT_ROUNDS = 10;
 const MAX_DERIVED_SLUG_ATTEMPTS = 5;
@@ -25,6 +27,7 @@ export class AuthService {
     private readonly prisma: PrismaService,
     private readonly sessionTokens: SessionTokenService,
     private readonly emailVerification: EmailVerificationService,
+    private readonly subscriptions: SubscriptionService,
   ) {}
 
   async login(dto: LoginDto) {
@@ -56,13 +59,7 @@ export class AuthService {
         'This account is disabled',
       );
     }
-    if (tenant.status === 'suspended') {
-      throw new ApiException(
-        HttpStatus.FORBIDDEN,
-        ErrorCode.TENANT_SUSPENDED,
-        'This tenant is suspended',
-      );
-    }
+    assertTenantUsable(tenant.status);
 
     return {
       access_token: this.sessionTokens.sign(user.id, tenant.id, user.role),
@@ -139,6 +136,8 @@ export class AuthService {
         },
         omit: { passwordHash: true },
       });
+      // Every new tenant starts on Starter for 15 days (I2), in the same transaction.
+      await this.subscriptions.createStarter(tx, tenant.id);
       return { tenant, owner };
     });
   }
