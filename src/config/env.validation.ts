@@ -70,6 +70,60 @@ export class EnvironmentVariables {
   @Min(1)
   @Max(1440)
   BILLING_JOB_INTERVAL_MINUTES: number = 60;
+
+  /**
+   * Which AI engine the gateway talks to. `http` = the real engine (ENGINE_BASE_URL and
+   * INTERNAL_API_TOKEN required); `mock` = the in-process mock engine, the default outside
+   * production. Production must set `http` explicitly.
+   */
+  @IsOptional()
+  @IsIn(['mock', 'http'])
+  ENGINE_MODE?: string;
+
+  /** Private address of the engine (ENGINE_MODE=http). */
+  @IsOptional()
+  @IsUrl({ require_tld: false, protocols: ['http', 'https'] })
+  ENGINE_BASE_URL?: string;
+
+  /** Service token shared with the engine (D2). At least 32 characters; never logged. */
+  @IsOptional()
+  @IsString()
+  @MinLength(32, {
+    message: 'INTERNAL_API_TOKEN must be at least 32 characters',
+  })
+  INTERNAL_API_TOKEN?: string;
+
+  /** D7: time allowed until the first answer event of a reply stream. */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(100)
+  @Max(60_000)
+  ENGINE_FIRST_TOKEN_TIMEOUT_MS: number = 5000;
+
+  /** D7: time allowed for a whole reply stream. */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1000)
+  @Max(300_000)
+  ENGINE_TOTAL_TIMEOUT_MS: number = 30_000;
+
+  /** Time allowed for the engine's plain request/response calls. */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(500)
+  @Max(120_000)
+  ENGINE_REQUEST_TIMEOUT_MS: number = 10_000;
+
+  /** Pause between tokens of the mock engine's streamed reply (ENGINE_MODE=mock). */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  @Max(2000)
+  MOCK_ENGINE_TOKEN_DELAY_MS: number = 25;
 }
 
 /** Used by `ConfigModule.forRoot({ validate })`: the app refuses to start on a bad environment. */
@@ -90,7 +144,20 @@ export function validateEnv(config: Record<string, unknown>) {
   }
 
   const problems: string[] = [];
+  if (validated.ENGINE_MODE === 'http') {
+    if (!validated.ENGINE_BASE_URL) {
+      problems.push('ENGINE_BASE_URL is required when ENGINE_MODE=http');
+    }
+    if (!validated.INTERNAL_API_TOKEN) {
+      problems.push('INTERNAL_API_TOKEN is required when ENGINE_MODE=http');
+    }
+  }
   if (validated.NODE_ENV === 'production') {
+    if (validated.ENGINE_MODE !== 'http') {
+      problems.push(
+        'ENGINE_MODE=http is required when NODE_ENV=production (the mock engine is for development)',
+      );
+    }
     if (validated.MAIL_MODE === 'link') {
       problems.push('MAIL_MODE=link is not allowed when NODE_ENV=production');
     }

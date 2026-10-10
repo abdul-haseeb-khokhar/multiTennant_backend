@@ -28,14 +28,18 @@ model Tenant {
   defaultLocale String   @default("en") @map("default_locale")
   createdAt     DateTime @default(now()) @map("created_at")
 
-  tenantUsers     TenantUser[]
-  endCustomers    EndCustomer[]
-  staffInvites    StaffInvite[]
-  auditLogs       AuditLog[]
-  subscription    Subscription?
-  invoices        Invoice[]
-  billingEvents   BillingEvent[]
-  dataUseConsents DataUseConsent[]
+  tenantUsers          TenantUser[]
+  endCustomers         EndCustomer[]
+  staffInvites         StaffInvite[]
+  auditLogs            AuditLog[]
+  subscription         Subscription?
+  invoices             Invoice[]
+  billingEvents        BillingEvent[]
+  dataUseConsents      DataUseConsent[]
+  apiKeys              ApiKey[]
+  gatewayConversations GatewayConversation[]
+  usageDailies         UsageDaily[]
+  usageEvents          UsageEvent[]
 
   @@map("tenants")
   @@schema("tenant_core")
@@ -76,7 +80,8 @@ model EndCustomer {
   locale     String?
   createdAt  DateTime @default(now()) @map("created_at")
 
-  tenant Tenant @relation(fields: [tenantId], references: [id])
+  tenant               Tenant                @relation(fields: [tenantId], references: [id])
+  gatewayConversations GatewayConversation[]
 
   @@unique([tenantId, externalId])
   @@map("end_customers")
@@ -324,5 +329,104 @@ model DataUseConsent {
 
   @@unique([tenantId, purpose])
   @@map("data_use_consents")
+  @@schema("tenant_core")
+}
+
+/// Public widget keys and (later) server keys (D8, B4). Only the sha256 of the key is stored; the
+/// full key is shown once at creation. A widget key is an identifier, not a secret: it is always
+/// checked together with the request Origin against `allowedOrigins`.
+model ApiKey {
+  id             String    @id @default(uuid())
+  tenantId       String    @map("tenant_id")
+  // 'widget' | 'server'
+  type           String
+  name           String
+  // First characters of the key, safe to display (for example "wk_AbCd1234").
+  keyPrefix      String    @map("key_prefix")
+  keyHash        String    @unique @map("key_hash")
+  // Exact origins (scheme://host[:port], lower case, no path). Empty = usable from nowhere.
+  allowedOrigins String[]  @default([]) @map("allowed_origins")
+  lastUsedAt     DateTime? @map("last_used_at")
+  revokedAt      DateTime? @map("revoked_at")
+  // The staff user who created it. A plain column (no foreign key), like audit_logs.
+  createdBy      String?   @map("created_by")
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId, createdAt(sort: Desc)])
+  @@index([allowedOrigins], type: Gin)
+  @@map("api_keys")
+  @@schema("tenant_core")
+}
+
+/// What the gateway knows about a conversation it started: which end customer it belongs to (so a
+/// returning visitor resumes it), whether the AI may answer it, and an escalation the engine could
+/// not be told about yet. The conversation itself lives in ai_engine.
+model GatewayConversation {
+  id                String    @id @default(uuid())
+  tenantId          String    @map("tenant_id")
+  // The engine's conversation id (a plain value; the engine owns that table).
+  conversationId    String    @map("conversation_id")
+  endCustomerId     String    @map("end_customer_id")
+  // 'widget' (whatsapp and voice follow in Phase 6)
+  channel           String
+  apiKeyId          String?   @map("api_key_id")
+  // True when the plan limit was reached when this conversation started: the AI never answers it (I5).
+  aiBlocked         Boolean   @default(false) @map("ai_blocked")
+  // Why the gateway escalated it (limit_reached, ai_unavailable), once decided.
+  escalationReason  String?   @map("escalation_reason")
+  // True while the engine has not yet been told about that escalation (it was unreachable).
+  escalationPending Boolean   @default(false) @map("escalation_pending")
+  closedAt          DateTime? @map("closed_at")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  lastActivityAt    DateTime  @default(now()) @map("last_activity_at")
+
+  tenant      Tenant      @relation(fields: [tenantId], references: [id])
+  endCustomer EndCustomer @relation(fields: [endCustomerId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, conversationId])
+  @@index([tenantId, endCustomerId, channel, createdAt(sort: Desc)])
+  @@map("gateway_conversations")
+  @@schema("tenant_core")
+}
+
+/// Per-day usage counters of a tenant: the basis of plan limits (B6, I5) and of the usage screen.
+/// Written only by UsageService, which increments through usage_events so that recording the same
+/// conversation or message twice counts once. `day` is a UTC date.
+model UsageDaily {
+  tenantId      String   @map("tenant_id")
+  day           DateTime @db.Date
+  conversations Int      @default(0)
+  messages      Int      @default(0)
+  tokensIn      Int      @default(0) @map("tokens_in")
+  tokensOut     Int      @default(0) @map("tokens_out")
+  callMinutes   Int      @default(0) @map("call_minutes")
+  updatedAt     DateTime @default(now()) @updatedAt @map("updated_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@id([tenantId, day])
+  @@map("usage_daily")
+  @@schema("tenant_core")
+}
+
+/// Dedupe ledger for usage_daily: one row per counted conversation or message (`kind`, `refId` =
+/// the engine's id). Inserting the same (tenant, kind, ref) twice is a no-op, so replays, retries and
+/// the later `usage.recorded` event cannot double count.
+model UsageEvent {
+  id        String   @id @default(uuid())
+  tenantId  String   @map("tenant_id")
+  // 'conversation' | 'message'
+  kind      String
+  refId     String   @map("ref_id")
+  day       DateTime @db.Date
+  createdAt DateTime @default(now()) @map("created_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@unique([tenantId, kind, refId])
+  @@index([tenantId, day])
+  @@map("usage_events")
   @@schema("tenant_core")
 }

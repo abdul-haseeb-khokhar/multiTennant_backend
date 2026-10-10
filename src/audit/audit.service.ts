@@ -29,6 +29,10 @@ export const AuditAction = {
   SUBSCRIPTION_CLOSED: 'subscription.closed',
   DATA_USE_GRANTED: 'data_use.granted',
   DATA_USE_REVOKED: 'data_use.revoked',
+  // gateway (Phase 3)
+  API_KEY_CREATED: 'apikey.created',
+  API_KEY_UPDATED: 'apikey.updated',
+  API_KEY_REVOKED: 'apikey.revoked',
 } as const;
 
 export interface AuditEntry {

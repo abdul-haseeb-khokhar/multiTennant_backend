@@ -201,6 +201,44 @@ describe('EntitlementsService', () => {
       }
     });
 
+    it('allowPastDue lets the chat gateway through for a past_due tenant, but only the chat channel the plan has', async () => {
+      subscriptions.getEffective.mockResolvedValue(
+        effective({
+          status: 'past_due',
+          planCode: 'pro',
+          planName: 'Pro',
+          entitlements: entitlements({ channels: ['chat'] }),
+        }),
+      );
+      await expect(
+        service.check('tenant-a', 'channel:chat', 1, { allowPastDue: true }),
+      ).resolves.toMatchObject({ allowed: true });
+      await expect(
+        service.check('tenant-a', 'channel:whatsapp', 1, {
+          allowPastDue: true,
+        }),
+      ).resolves.toMatchObject({
+        allowed: false,
+        code: 'PLAN_FEATURE_UNAVAILABLE',
+      });
+      // The flag never lifts a suspension.
+      subscriptions.getEffective.mockResolvedValue(
+        effective({ status: 'suspended' }),
+      );
+      service.invalidate('tenant-a');
+      await expect(
+        service.check('tenant-a', 'channel:chat', 1, { allowPastDue: true }),
+      ).resolves.toMatchObject({ allowed: false, code: 'TENANT_SUSPENDED' });
+    });
+
+    it('forTenant gives the cached effective subscription', async () => {
+      const first = await service.forTenant('tenant-a');
+      const second = await service.forTenant('tenant-a');
+      expect(first?.planCode).toBe('starter');
+      expect(second).toBe(first);
+      expect(subscriptions.getEffective).toHaveBeenCalledTimes(1);
+    });
+
     it('a canceled plan keeps working until it ends', async () => {
       subscriptions.getEffective.mockResolvedValue(
         effective({ status: 'canceled' }),

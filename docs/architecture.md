@@ -68,12 +68,14 @@ Principles:
 | Table / change | Purpose |
 |---|---|
 | `tenants.deleted_at`, `updated_at` | Soft delete (`tenants.slug`, `platform_admins`, the staff-lifecycle tables and the locale columns are built, see 4.1) |
-| `api_keys` (tenant_id, type `widget`/`server`, key_prefix, key_hash, allowed_origins[], revoked_at) | Resolve a public widget key to a tenant, with per-tenant origin allow-list |
+| `api_keys` (tenant_id, type `widget`/`server`, name, key_prefix, key_hash, allowed_origins[], last_used_at, revoked_at, created_by) | Resolve a public widget key to a tenant, with per-tenant origin allow-list. **Built (Phase 3)** |
+| `gateway_conversations` (tenant_id, conversation_id, end_customer_id, channel, ai_blocked, escalation_reason, escalation_pending, closed_at) | What the gateway knows about a conversation it started: resume for a returning visitor, "AI may not answer" (plan limit), an escalation not yet delivered. **Built (Phase 3)** |
+| `usage_events` (tenant_id, kind, ref_id, day) | Dedupe ledger so `usage_daily` counts a conversation or message once. **Built (Phase 3)** |
 | `channel_connections` (tenant_id, channel, provider, external_account_id, credentials_ref, status) | Map a WhatsApp number or phone number to a tenant for inbound webhooks |
 | `agent_configs` (tenant_id, version, config jsonb) | Persona, tone, language, greeting, escalation rules, working hours, allowed actions |
 | `tenant_integrations` (tenant_id, kind, credentials_encrypted) | Credentials for the tenant's own systems that agent actions call |
 | `knowledge_sources` (tenant_id, name, type, storage_key, status, error, created_at) | Uploaded docs/URLs and their ingestion state (chunks live in `ai_engine`) |
-| `usage_daily` (tenant_id, day, messages, tokens_in, tokens_out, call_minutes) | Plan limits and billing |
+| `usage_daily` (tenant_id, day, conversations, messages, tokens_in, tokens_out, call_minutes) | Plan limits and billing. **Built (Phase 3)**, written only by `UsageService` |
 | `notifications` (tenant_id, user_id, type, title_key, body_key, params, link, read_at) | In-app notifications, stored as translation keys (H5) |
 
 Billing (section I, **built in Phase 2B**): `plans`, `subscriptions`, `invoices`, `invoice_sequences`, `billing_events` (append-only) and `data_use_consents`; `tenants.plan` / `tenants.status` stay as denormalised mirrors of the subscription (only `SubscriptionService` writes them). Starter (hidden, 15 days) falls back to Free; Pro and Enterprise are paid; payments are recorded manually at launch behind a `BillingProvider` interface so a payment provider can be added later without rework. Amounts are integer minor units plus currency (PKR).
@@ -99,10 +101,10 @@ Details and reasoning are in [team-alignment.md](team-alignment.md) (C and E sec
 ### 5.1 Staff sign-up and login (exists)
 `POST /v1/auth/signup` creates tenant plus owner in one transaction (the tenant `slug` is the caller's or derived from the name) and returns a JWT. `POST /v1/auth/login` takes `tenantSlug`, email and password and returns a JWT with `sub`, `tenantId`, `role`, `scope: "tenant"`. Tenant-scoped routes are `/v1/tenants/:tenantId/...` and the guard rejects a token whose `tenantId` differs from the URL (403 `TENANT_MISMATCH`) or whose tenant is suspended (403 `TENANT_SUSPENDED`). Platform admins log in at `POST /v1/admin/auth/login` and get a token with `scope: "platform"` for `/v1/admin/...`.
 
-### 5.2 Customer chat from the widget (**Proposed**)
+### 5.2 Customer chat from the widget (**Built in Phase 3 against the mock engine; the real engine is not connected yet**)
 1. The widget loads with the tenant's public `widgetKey` and a locally stored `visitorId`.
-2. `POST /v1/widget/sessions` → backend validates key and `Origin`, checks tenant status and plan, upserts the `EndCustomer` (`externalId = visitorId`), asks the engine to create a conversation, and returns a short-lived **widget token** (`scope: widget`, `tenantId`, `endCustomerId`, `conversationId`).
-3. `POST /v1/widget/messages` with the widget token → backend forwards to the engine with the service token. The engine stores the message; if the conversation is `active` it retrieves context, calls the LLM and **streams** the reply back (SSE). The backend relays it to the widget and publishes it to the dashboard.
+2. `POST /v1/widget/sessions` → backend validates key and `Origin`, checks tenant status and plan, upserts the `EndCustomer` (`externalId = web_<visitorId>`), asks the engine to create a conversation (or resumes the visitor's open one), and returns a short-lived **widget token** (`scope: widget`, `tenantId`, `endCustomerId`, `conversationId`, plus the `keyId`, re-checked on every call). A blocked tenant, a plan without chat or an engine that is down answers `status: "blocked"` with a fallback text instead of a token.
+3. `POST /v1/widget/messages` with the widget token → backend forwards to the engine with the service token. The engine stores the message; if the conversation is `active` it retrieves context, calls the LLM and **streams** the reply back (SSE). The backend relays it to the widget as `text/event-stream` (the dashboard fan-out is Phase 4). Over the plan limit the message is stored without an AI reply and escalated; if the engine is down or slow the customer gets a fallback and the conversation is escalated (`ai_unavailable`). Details: `docs/contracts/README.md`.
 4. If the engine decides to escalate it sets status `escalated`, stores `escalation_reason` and `summary`, and emits `conversation.escalated`. The backend pushes it to the dashboard queue.
 
 ### 5.3 Human takeover (**Proposed**)
@@ -135,9 +137,11 @@ Default is **soft delete** (`status=suspended`, `deleted_at`). Hard delete is a 
 | `end-customers` | CRUD `/v1/tenants/:tenantId/customers` | JWT + tenant match + role (B2) |
 | `billing` | `GET /v1/plans` (public), `GET /v1/tenants/:tenantId/billing`, `/v1/admin/tenants/:id/subscription` (+ `activate`, `record-payment`, `extend`, `change-plan`, `cancel`) | public / JWT owner+admin / platform-admin token |
 | `data-use` | `GET/PUT /v1/tenants/:tenantId/data-use` (model-training consent, default off) | JWT + tenant match + owner |
+| `api-keys` | `POST/GET /v1/tenants/:tenantId/api-keys`, `GET/PATCH/DELETE …/:id` (Phase 3) | JWT + tenant match + owner/admin |
+| `widget` | `POST /v1/widget/sessions` (public: widget key + Origin), `POST /v1/widget/messages` (SSE), `GET /v1/widget/conversation` (Phase 3) | widget token (a staff or platform token is refused) + key + Origin |
 | `health` | `GET /health`, `GET /health/ready` (unversioned) | public |
 
-Global `ValidationPipe` (whitelist + transform), `/v1` prefix, error body `{statusCode, code, message}` (plus `details` for validation and `requestId`), list envelope `{data,total,skip,take}`, request-id middleware and JSON logs, CORS limited to `FRONTEND_URL`, OpenAPI at `/docs`, `PrismaModule` is global. On every staff request `JwtStrategy` also loads the user (role, status, verification, `password_changed_at`), so disabling, demoting, deleting or resetting a password takes effect immediately. Emailed links (invite, reset, verification) go through `MailService` and the injectable `Mailer` (console implementation until a provider is chosen, H3). Known defects are listed in `CLAUDE.md`.
+Global `ValidationPipe` (whitelist + transform), `/v1` prefix, error body `{statusCode, code, message}` (plus `details` for validation and `requestId`), list envelope `{data,total,skip,take}`, request-id middleware and JSON logs, CORS limited to `FRONTEND_URL` for dashboard routes and to the origins of the widget key for `/v1/widget/*`, OpenAPI at `/docs`, `PrismaModule` is global. On every staff request `JwtStrategy` also loads the user (role, status, verification, `password_changed_at`), so disabling, demoting, deleting or resetting a password takes effect immediately. Emailed links (invite, reset, verification) go through `MailService` and the injectable `Mailer` (console implementation until a provider is chosen, H3). Known defects are listed in `CLAUDE.md`.
 
 ## 7. Roadmap (backend)
 

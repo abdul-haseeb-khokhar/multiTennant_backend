@@ -29,9 +29,11 @@ export function createPrismaMock() {
     endCustomer: model(
       'create',
       'findFirst',
+      'findFirstOrThrow',
       'findMany',
       'count',
       'update',
+      'upsert',
       'delete',
     ),
     platformAdmin: model('findUnique'),
@@ -52,8 +54,27 @@ export function createPrismaMock() {
     invoice: model('create', 'findMany', 'count'),
     billingEvent: model('create', 'findFirst', 'findMany', 'count'),
     dataUseConsent: model('findUnique', 'upsert', 'update'),
+    apiKey: model(
+      'create',
+      'findFirst',
+      'findFirstOrThrow',
+      'findUnique',
+      'findMany',
+      'count',
+      'updateMany',
+    ),
+    gatewayConversation: model(
+      'create',
+      'findFirst',
+      'findFirstOrThrow',
+      'count',
+      'updateMany',
+    ),
+    usageEvent: model('createMany'),
+    usageDaily: model('aggregate'),
     $transaction: jest.fn(),
     $queryRaw: jest.fn(),
+    $executeRaw: jest.fn(),
   };
 }
 

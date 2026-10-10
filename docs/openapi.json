@@ -1641,17 +1641,37 @@
         ]
       }
     },
-    "/v1/me": {
-      "get": {
-        "operationId": "MeController_get",
-        "parameters": [],
+    "/v1/tenants/{tenantId}/api-keys": {
+      "post": {
+        "description": "The response carries the full `key` ONCE; only its hash is stored, so it cannot be shown again. A widget key is public by nature (it sits in your page): it only works from the origins in `allowedOrigins`. Creating a widget key needs chat in the plan (403 PLAN_FEATURE_UNAVAILABLE) and an account in good standing. At most 10 active keys per tenant (409 API_KEY_LIMIT_REACHED).",
+        "operationId": "ApiKeysController_create",
+        "parameters": [
+          {
+            "name": "tenantId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateApiKeyDto"
+              }
+            }
+          }
+        },
         "responses": {
-          "200": {
+          "201": {
             "description": "",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Me"
+                  "$ref": "#/components/schemas/CreatedApiKey"
                 }
               }
             }
@@ -1662,20 +1682,252 @@
             "bearer": []
           }
         ],
-        "summary": "Who am I: profile, role, tenant (slug, plan, status) and language",
+        "summary": "Create a widget or server API key (owner/admin)",
         "tags": [
-          "me"
+          "api-keys"
+        ]
+      },
+      "get": {
+        "description": "Prefix, origins and last use; never the key or its hash. Revoked keys are hidden unless `includeRevoked=true`. Agents get 403: key prefixes and origins are not needed to answer customers.",
+        "operationId": "ApiKeysController_findAll",
+        "parameters": [
+          {
+            "name": "tenantId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "skip",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 0,
+              "default": 0,
+              "type": "number"
+            }
+          },
+          {
+            "name": "take",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "includeRevoked",
+            "required": false,
+            "in": "query",
+            "description": "Also list revoked keys (default false).",
+            "schema": {
+              "default": false,
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data",
+                    "total",
+                    "skip",
+                    "take"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ApiKeyView"
+                      }
+                    },
+                    "total": {
+                      "type": "integer"
+                    },
+                    "skip": {
+                      "type": "integer"
+                    },
+                    "take": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "List API keys (owner/admin)",
+        "tags": [
+          "api-keys"
+        ]
+      }
+    },
+    "/v1/tenants/{tenantId}/api-keys/{id}": {
+      "get": {
+        "operationId": "ApiKeysController_findOne",
+        "parameters": [
+          {
+            "name": "tenantId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiKeyView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "One API key (owner/admin)",
+        "tags": [
+          "api-keys"
         ]
       },
       "patch": {
-        "operationId": "MeController_update",
+        "description": "Takes effect on the next widget request (widget tokens are re-checked against the key). A revoked key cannot be changed (409).",
+        "operationId": "ApiKeysController_update",
+        "parameters": [
+          {
+            "name": "tenantId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateApiKeyDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiKeyView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Rename a key or replace its allowed origins (owner/admin)",
+        "tags": [
+          "api-keys"
+        ]
+      },
+      "delete": {
+        "description": "Permanent and idempotent. Sessions started with the key stop working at their next request, and new sessions are refused (401 WIDGET_KEY_INVALID).",
+        "operationId": "ApiKeysController_revoke",
+        "parameters": [
+          {
+            "name": "tenantId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiKeyView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Revoke an API key (owner/admin)",
+        "tags": [
+          "api-keys"
+        ]
+      }
+    },
+    "/v1/widget/sessions": {
+      "post": {
+        "description": "Validates the widget key together with the request `Origin` (the key must list that origin; a call without an Origin header is refused), checks that the tenant may chat, creates or finds the visitor (`web_<visitorId>`), creates the conversation (or resumes the open one of this visitor: call again with the same `visitorId` to get a fresh token before the 15 minutes end) and returns the widget token. A suspended or closed tenant, a plan without chat, or an engine that is down answers **200 with `status: \"blocked\"`** and a `fallback` text instead of an error; a tenant at its conversation limit gets `status: \"limited\"`. Errors: 401 WIDGET_KEY_INVALID, 403 ORIGIN_NOT_ALLOWED, 429 TOO_MANY_REQUESTS (with `Retry-After`).",
+        "operationId": "WidgetController_createSession",
         "parameters": [],
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/UpdateMeDto"
+                "$ref": "#/components/schemas/CreateWidgetSessionDto"
               }
             }
           }
@@ -1686,7 +1938,51 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Me"
+                  "$ref": "#/components/schemas/WidgetSession"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Start or refresh a chat session (public, widget key + Origin)",
+        "tags": [
+          "widget"
+        ]
+      }
+    },
+    "/v1/widget/messages": {
+      "post": {
+        "description": "The response is a **server-sent event stream** (`text/event-stream`), read with `fetch` and a stream reader (a POST cannot use `EventSource`). Events, in order: `accepted` (message stored), then `token` (zero or more; concatenate `text`), optionally `escalated` (a human was asked to take over), and finally either `done` or `fallback` (the AI did not answer: `service_unavailable`, `limit_reached` or `ai_unavailable`; the customer is never left without a text). `error` (`CONVERSATION_NOT_FOUND`, `CONVERSATION_RESOLVED`) means call POST /v1/widget/sessions for a new conversation. Failures before the stream starts are ordinary JSON errors: 400 MESSAGE_TOO_LONG (over 2,000 characters), 401 WIDGET_TOKEN_EXPIRED, 403 ORIGIN_NOT_ALLOWED, 404 CONVERSATION_NOT_FOUND, 429. Each event is `event: <name>` + `data: <json>` + blank line; the payload schemas are listed under `Sse*Event`.",
+        "operationId": "WidgetController_sendMessage",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "A unique id (8-100 characters of A-Z a-z 0-9 _ -) per message. Sending the same key again does not store the message twice and does not call the model again.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendWidgetMessageDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "text/event-stream",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string",
+                  "example": "event: accepted\ndata: {\"messageId\":\"…\"}\n\nevent: token\ndata: {\"text\":\"Our \"}\n\nevent: done\ndata: {\"messageId\":\"…\",\"aiReply\":true,\"conversationStatus\":\"active\"}\n\n"
                 }
               }
             }
@@ -1697,9 +1993,59 @@
             "bearer": []
           }
         ],
-        "summary": "Change my own name or dashboard language",
+        "summary": "Send a customer message and stream the reply (widget token)",
         "tags": [
-          "me"
+          "widget"
+        ]
+      }
+    },
+    "/v1/widget/conversation": {
+      "get": {
+        "description": "Oldest first, paged. Returns only the conversation named in the token; internal (tool) messages and staff identities are left out. 503 ENGINE_UNAVAILABLE when the engine cannot be reached.",
+        "operationId": "WidgetController_history",
+        "parameters": [
+          {
+            "name": "skip",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 0,
+              "default": 0,
+              "type": "number"
+            }
+          },
+          {
+            "name": "take",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WidgetConversation"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "The conversation history of the visitor (widget token)",
+        "tags": [
+          "widget"
         ]
       }
     },
@@ -1781,6 +2127,68 @@
         "summary": "Translations of one namespace (public, cacheable)",
         "tags": [
           "i18n"
+        ]
+      }
+    },
+    "/v1/me": {
+      "get": {
+        "operationId": "MeController_get",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Me"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Who am I: profile, role, tenant (slug, plan, status) and language",
+        "tags": [
+          "me"
+        ]
+      },
+      "patch": {
+        "operationId": "MeController_update",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateMeDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Me"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Change my own name or dashboard language",
+        "tags": [
+          "me"
         ]
       }
     },
@@ -3434,6 +3842,516 @@
           "enabled"
         ]
       },
+      "CreateApiKeyDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "example": "Website chat",
+            "maxLength": 80
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "widget",
+              "server"
+            ],
+            "default": "widget",
+            "description": "`widget` keys start chats from a web page. `server` keys are stored but no route accepts them yet."
+          },
+          "allowedOrigins": {
+            "example": [
+              "https://shop.example.com",
+              "http://localhost:5173"
+            ],
+            "description": "Exact origins allowed to use a widget key (`scheme://host[:port]`). https only, except http for localhost. No wildcards, paths or queries; at most 20. An empty list means the key works nowhere.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "CreatedApiKey": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "tenantId": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "widget",
+              "server"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "keyPrefix": {
+            "type": "string",
+            "example": "wk_AbCd1",
+            "description": "First characters of the key, to recognise it in a list."
+          },
+          "allowedOrigins": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "lastUsedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "revokedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "createdBy": {
+            "type": "string",
+            "nullable": true,
+            "description": "User id of the staff member who created it."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "key": {
+            "type": "string",
+            "example": "wk_AbCd1234…",
+            "description": "The full key. Shown ONCE, in this response; only its hash is stored."
+          }
+        },
+        "required": [
+          "id",
+          "tenantId",
+          "type",
+          "name",
+          "keyPrefix",
+          "allowedOrigins",
+          "lastUsedAt",
+          "revokedAt",
+          "createdBy",
+          "createdAt",
+          "key"
+        ]
+      },
+      "ApiKeyView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "tenantId": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "widget",
+              "server"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "keyPrefix": {
+            "type": "string",
+            "example": "wk_AbCd1",
+            "description": "First characters of the key, to recognise it in a list."
+          },
+          "allowedOrigins": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "lastUsedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "revokedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "createdBy": {
+            "type": "string",
+            "nullable": true,
+            "description": "User id of the staff member who created it."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "tenantId",
+          "type",
+          "name",
+          "keyPrefix",
+          "allowedOrigins",
+          "lastUsedAt",
+          "revokedAt",
+          "createdBy",
+          "createdAt"
+        ]
+      },
+      "UpdateApiKeyDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "example": "Website chat",
+            "maxLength": 80
+          },
+          "allowedOrigins": {
+            "description": "Replaces the whole allow-list. Same rules as when creating (exact origins, https or http for localhost, at most 20).",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "SseAcceptedEvent": {
+        "type": "object",
+        "properties": {
+          "messageId": {
+            "type": "string",
+            "description": "Id of the stored customer message."
+          }
+        },
+        "required": [
+          "messageId"
+        ]
+      },
+      "SseTokenEvent": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "The next piece of the reply; concatenate them."
+          }
+        },
+        "required": [
+          "text"
+        ]
+      },
+      "SseEscalatedEvent": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string",
+            "description": "A human has been asked to take over (or is already waiting). Show this text."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Why (engine escalation reason code)."
+          }
+        },
+        "required": [
+          "message"
+        ]
+      },
+      "SseFallbackEvent": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "enum": [
+              "service_unavailable",
+              "limit_reached",
+              "ai_unavailable"
+            ],
+            "description": "`service_unavailable`: the chat is switched off for this tenant (suspended, closed, no chat in the plan). `limit_reached`: the plan limit was reached and a human takes over. `ai_unavailable`: the assistant is down or too slow and a human takes over. The customer never sees billing details."
+          },
+          "message": {
+            "type": "string",
+            "description": "Text to show the customer, already in their language: the tenant's own fallback message when it has one (Phase 5), else the default from the `widget` namespace."
+          },
+          "escalated": {
+            "type": "boolean",
+            "description": "True when the conversation was handed to a human; false when it could not be (nobody was told yet, the gateway retries)."
+          }
+        },
+        "required": [
+          "reason",
+          "message",
+          "escalated"
+        ]
+      },
+      "SseDoneEvent": {
+        "type": "object",
+        "properties": {
+          "messageId": {
+            "type": "string",
+            "nullable": true,
+            "description": "Id of the assistant message; null when the AI did not answer."
+          },
+          "aiReply": {
+            "type": "boolean"
+          },
+          "conversationStatus": {
+            "type": "string",
+            "enum": [
+              "active",
+              "escalated",
+              "human_active",
+              "resolved"
+            ]
+          }
+        },
+        "required": [
+          "aiReply",
+          "conversationStatus"
+        ]
+      },
+      "SseErrorEvent": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "example": "CONVERSATION_RESOLVED",
+            "description": "The conversation is gone or finished (`CONVERSATION_NOT_FOUND`, `CONVERSATION_RESOLVED`): call POST /v1/widget/sessions again for a new one."
+          }
+        },
+        "required": [
+          "code"
+        ]
+      },
+      "CreateWidgetSessionDto": {
+        "type": "object",
+        "properties": {
+          "widgetKey": {
+            "type": "string",
+            "example": "wk_AbCd1234…",
+            "description": "The tenant's public widget key (from the dashboard). It is an identifier, not a secret: it only works from the origins listed for it."
+          },
+          "visitorId": {
+            "type": "string",
+            "example": "3f9c1b7e-52aa-4d0e-9a41-6f1d2b8c7e10",
+            "description": "A random id the widget creates once (crypto.randomUUID()) and keeps in localStorage. 16 to 64 characters of A-Z a-z 0-9 _ -. Whoever knows it can resume that visitor's chat, so it must be unguessable and is never shown or logged."
+          },
+          "locale": {
+            "type": "string",
+            "example": "ur",
+            "description": "The visitor's language (the browser's, e.g. `ur-PK`). Falls back to the tenant default, then `en`."
+          }
+        },
+        "required": [
+          "widgetKey",
+          "visitorId"
+        ]
+      },
+      "WidgetFallback": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "enum": [
+              "service_unavailable",
+              "limit_reached",
+              "ai_unavailable"
+            ],
+            "description": "`service_unavailable`: the chat is switched off for this tenant (suspended, closed, no chat in the plan). `limit_reached`: the plan limit was reached and a human takes over. `ai_unavailable`: the assistant is down or too slow and a human takes over. The customer never sees billing details."
+          },
+          "message": {
+            "type": "string",
+            "description": "Text to show the customer, already in their language: the tenant's own fallback message when it has one (Phase 5), else the default from the `widget` namespace."
+          }
+        },
+        "required": [
+          "reason",
+          "message"
+        ]
+      },
+      "WidgetSession": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "limited",
+              "blocked"
+            ],
+            "description": "`ready`: chat normally. `limited`: the conversation exists but the AI will not answer it (plan limit); messages reach a human; `fallback` says what to show. `blocked`: no chat possible, there is no token; show `fallback`."
+          },
+          "token": {
+            "type": "string",
+            "description": "Widget token (Authorization: Bearer) for the other widget routes. Absent when `blocked`. Valid 15 minutes; call this endpoint again with the same visitorId to get a new one."
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expiresInSeconds": {
+            "type": "number",
+            "example": 900
+          },
+          "conversationId": {
+            "type": "string"
+          },
+          "locale": {
+            "type": "string",
+            "example": "ur",
+            "description": "Language to render the widget in."
+          },
+          "defaultLocale": {
+            "type": "string",
+            "example": "en",
+            "description": "The tenant's default language."
+          },
+          "greeting": {
+            "type": "string",
+            "description": "Greeting to show first (in `locale`)."
+          },
+          "personaName": {
+            "type": "string",
+            "description": "Name of the assistant."
+          },
+          "poweredBy": {
+            "type": "boolean",
+            "description": "Whether the widget must show the \"Powered by\" label (Free plan)."
+          },
+          "fallback": {
+            "$ref": "#/components/schemas/WidgetFallback"
+          }
+        },
+        "required": [
+          "status",
+          "locale",
+          "defaultLocale",
+          "poweredBy"
+        ]
+      },
+      "SendWidgetMessageDto": {
+        "type": "object",
+        "properties": {
+          "content": {
+            "type": "string",
+            "example": "What are your opening hours?",
+            "maxLength": 2000,
+            "description": "The customer's text, at most 2,000 characters (longer: 400 MESSAGE_TOO_LONG). Surrounding whitespace is trimmed."
+          }
+        },
+        "required": [
+          "content"
+        ]
+      },
+      "WidgetHistoryMessage": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "authorType": {
+            "type": "string",
+            "enum": [
+              "customer",
+              "ai",
+              "human",
+              "system"
+            ]
+          },
+          "content": {
+            "type": "string"
+          },
+          "contentKey": {
+            "type": "string",
+            "nullable": true,
+            "description": "Translation key (`widget` namespace) for system lines such as `agent.joined`; then `content` is empty."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "authorType",
+          "content",
+          "createdAt"
+        ]
+      },
+      "WidgetConversation": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "escalated",
+              "human_active",
+              "resolved"
+            ]
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WidgetHistoryMessage"
+            }
+          },
+          "total": {
+            "type": "number"
+          },
+          "skip": {
+            "type": "number"
+          },
+          "take": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "data",
+          "total",
+          "skip",
+          "take"
+        ]
+      },
+      "LocaleEntry": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "example": "ur",
+            "description": "BCP-47 code"
+          },
+          "name": {
+            "type": "string",
+            "example": "اردو",
+            "description": "The language's own name"
+          },
+          "dir": {
+            "type": "string",
+            "enum": [
+              "ltr",
+              "rtl"
+            ]
+          }
+        },
+        "required": [
+          "code",
+          "name",
+          "dir"
+        ]
+      },
       "MeUser": {
         "type": "object",
         "properties": {
@@ -3571,33 +4489,6 @@
             "description": "Dashboard language. `null` clears it, so the tenant default applies."
           }
         }
-      },
-      "LocaleEntry": {
-        "type": "object",
-        "properties": {
-          "code": {
-            "type": "string",
-            "example": "ur",
-            "description": "BCP-47 code"
-          },
-          "name": {
-            "type": "string",
-            "example": "اردو",
-            "description": "The language's own name"
-          },
-          "dir": {
-            "type": "string",
-            "enum": [
-              "ltr",
-              "rtl"
-            ]
-          }
-        },
-        "required": [
-          "code",
-          "name",
-          "dir"
-        ]
       }
     }
   }

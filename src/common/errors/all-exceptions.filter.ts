@@ -9,6 +9,7 @@ import {
 import { Prisma } from '@prisma/client';
 import type { Request, Response } from 'express';
 import { ErrorCode } from './error-codes';
+import { RateLimitedException } from './rate-limited.exception';
 
 const CODE_BY_STATUS: Record<number, string> = {
   [HttpStatus.BAD_REQUEST]: ErrorCode.BAD_REQUEST,
@@ -56,6 +57,9 @@ export class AllExceptionsFilter implements ExceptionFilter {
       });
     }
 
+    if (exception instanceof RateLimitedException) {
+      response.setHeader('Retry-After', String(exception.retryAfterSeconds));
+    }
     response.status(body.statusCode).json(body);
   }
 

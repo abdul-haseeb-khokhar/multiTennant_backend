@@ -81,6 +81,7 @@ Status: ☐
 | Approve high-risk AI actions (E4) | ✓ | ✓ | |
 
 Enforced by a `RolesGuard` on the backend; the engine receives the acting `userId` and `role` for audit only.
+**Built (Phase 3), API keys:** owner and admin create, list, read, change the origins of and revoke API keys; agents get 403 (the prototype's question G22: key prefixes and origins are hidden from agents); at most 10 active keys per tenant.
 **Built (Phase 0), for the rows that exist today:** owner and admin create, change and delete users (an admin cannot touch an owner or promote anyone to owner; a tenant keeps at least one owner, else 409 `LAST_OWNER`). All roles read users, and read, create and edit customers; only owner and admin delete customers. Errors: `INSUFFICIENT_ROLE`, `OWNER_REQUIRED`. Other rows arrive with their features.
 **Built (Phase 1):** users are no longer created by owner/admin but invited (H1): admin may invite `admin`/`agent`, only an owner may invite or revoke an invite for an `owner`. "Change" now means email, role or **status** (`active`/`disabled`); an admin still cannot touch an owner. The tenant keeps at least one **active** owner (demoting, disabling or deleting the last one gives 409 `LAST_OWNER`; the check runs in a serializable transaction). Owners and admins read the audit log (H6). A password can only be set by its owner (invite, reset).
 Status: ☐
@@ -92,6 +93,7 @@ Login currently needs a `tenantId` UUID, which users do not know.
 Status: ☐
 
 ### B4. End-customer identity per channel: BE + AI
+**Built (Phase 3), widget row only:** `POST /v1/widget/sessions` upserts `web_<visitorId>` (concurrency-safe: two parallel first visits make one row) and passes the `end_customers.id` to the engine as `endCustomerId`. `visitorId` is 16 to 64 characters of `A-Za-z0-9_-`.
 End customers are `EndCustomer(tenantId, externalId)`; the pair is unique.
 **Proposal:**
 | Channel | `externalId` | Notes |
@@ -150,14 +152,17 @@ Status: ☐
 ## D. Gateway, authentication and realtime
 
 ### D1. Gateway pattern: BE + AI
+**Built (Phase 3):** the widget talks only to `/v1/widget/*`; the backend derives the tenant from the key/token and calls the engine through `EngineClient` (`ENGINE_MODE=mock` or `http`). The real engine has not been connected yet.
 **Proposal:** browsers, phone providers and WhatsApp only talk to the **backend**. The engine listens on a private interface only. The backend authenticates the caller, derives `tenantId`, then calls the engine. This keeps staff JWTs, widget keys and provider signatures entirely on the backend, and keeps the engine free of auth logic.
 Status: ☐
 
 ### D2. Service-to-service authentication: BE + AI
+**Built (Phase 3):** `HttpEngineClient` sends `Authorization: Bearer $INTERNAL_API_TOKEN` (32+ characters, required for `ENGINE_MODE=http`), `X-Tenant-Id` (only from the verified widget token or key), `X-Request-Id` and `Idempotency-Key`. `X-Acting-User-Id` / `X-Acting-Role` arrive with the staff-side calls (Phase 4). Written down in `docs/contracts/engine-internal.openapi.yaml`.
 **Proposal:** `Authorization: Bearer <INTERNAL_API_TOKEN>` (long random secret, one per environment, rotatable) plus headers `X-Tenant-Id`, `X-Request-Id`, and where relevant `X-Acting-User-Id` / `X-Acting-Role`. **The engine takes `tenantId` only from `X-Tenant-Id`, never from the body, a query string or message content.** The staff JWT is never forwarded and the engine does not verify it. If the engine ever must verify user tokens, we move to asymmetric (RS256/ES256) signing.
 Status: ☐
 
 ### D3. Widget session token: BE
+**Built (Phase 3):** JWT, 15 minutes, claims `scope=widget`, `tenantId`, `endCustomerId`, `conversationId` plus `keyId` and `locale`, a unique `jti`; signed with a secret derived from `JWT_SECRET` (a staff or platform token fails verification on widget routes and the other way round). Refresh = call `POST /v1/widget/sessions` again with the same `visitorId` (same conversation, a conversation counts once); an expired token answers `401 WIDGET_TOKEN_EXPIRED`. The key and the request Origin are re-checked on every call, so revoking the key ends its sessions.
 **Proposal:** short-lived JWT (15 min, refreshable while the page is open), claims `scope=widget`, `tenantId`, `endCustomerId`, `conversationId`. It only permits sending and reading messages in that one conversation.
 Status: ☐
 
@@ -181,10 +186,12 @@ Writes always go through the engine API. For **reads** there are two options:
 Status: ☐
 
 ### D7. Timeouts, retries and fallback: BE + AI
+**Built (Phase 3):** 5 s to the first answer event and 30 s in total (`ENGINE_FIRST_TOKEN_TIMEOUT_MS`, `ENGINE_TOTAL_TIMEOUT_MS`), ONE retry only when the connection broke, `Idempotency-Key` on commands. On failure the customer gets `fallback` with reason `ai_unavailable` and the gateway calls the engine's `POST /internal/conversations/:id/escalate` (**a proposed addition to Appendix A: please confirm**); if the engine cannot take it the escalation is remembered (`escalation_pending`, delivered by a later phase). The fallback text comes from the `widget` namespace now and from `agent_config` in Phase 5.
 **Proposal:** the backend sends `Idempotency-Key` on commands and allows 5 s to first token, 30 s total; one retry on network error only. If the engine is down or slow the customer gets a configurable fallback message ("A colleague will reply shortly"), and the conversation is marked `escalated` with reason `ai_unavailable`. Engine commands are idempotent by key.
 Status: ☐
 
 ### D8. CORS and widget origins: BE
+**Built (Phase 3):** exactly as proposed, plus the preflight rule the prototype asked about (G9.3): a preflight carries no key, so it is answered for any origin that some active widget key lists (never `*`, no credentials); the real response gets `Access-Control-Allow-Origin` only after the key and the origin matched for that key. Origins are exact (`scheme://host[:port]`, https, or http for localhost); wildcards are not supported; an empty list means the key works nowhere; a request without `Origin` is refused. Dashboard routes keep `FRONTEND_URL`.
 CORS today allows one origin (`FRONTEND_URL`), which fits the dashboard but not a widget embedded on customer websites.
 **Proposal:** dashboard routes keep `FRONTEND_URL`; widget routes allow the origins listed in the tenant's widget `api_keys.allowed_origins`.
 Status: ☐
@@ -261,6 +268,7 @@ Status: ☐
 Status: ☐
 
 ### F6. Abuse and cost protection: BE + AI
+**Built (Phase 3), gateway side:** 2,000-character cap (400 `MESSAGE_TOO_LONG`, counted in characters), fixed-window limits per minute per IP, per widget key and per visitor (defaults in `src/widget/widget.constants.ts`: sessions 30/600/10, messages 60/1200/20, reads 120/60, preflights 120), 429 with `Retry-After`. **The counters are in process memory: per instance until Phase 8.** The CAPTCHA/turnstile option and the engine-side token caps are not built.
 **Proposal:** rate limits per widget key and per IP at the gateway; maximum message length (2,000 characters) enforced on both sides; per-conversation and per-tenant daily token caps in the engine; widgets can require a lightweight challenge (CAPTCHA/turnstile) on session start if abused.
 Status: ☐
 
@@ -440,6 +448,7 @@ The rest of the system never knows who took the money. Everything that changes a
 Status: ☐
 
 ### I5. Entitlements and enforcement: BE (AI engine honours the result)
+**Built (Phase 3), gateway:** `conversations` is enforced from real usage (`usage_daily`) when a conversation starts; a returning visitor of an open conversation is never stopped. At the limit the conversation is still created and counted, marked `limited`, the customer's messages are stored with `aiReply:false`, the conversation escalates with `limit_reached` and the model is not called. `past_due` keeps answering customers (`allowPastDue` on the chat check) but cannot create new widget keys. A suspended or closed tenant, or a plan without chat, answers `status: "blocked"`.
 `EntitlementsService.check(tenantId, limit | feature)` is the single answer to "may this tenant do this?", with a short cache. It is called by the gateway (D1), the knowledge upload, seat and invite creation, and channel connection. Stable error codes (translatable, H7): `PLAN_LIMIT_REACHED`, `PLAN_FEATURE_UNAVAILABLE`, `SUBSCRIPTION_PAST_DUE`, `TENANT_SUSPENDED`.
 ### I5. Entitlements and enforcement: BE (AI engine honours the result)
 `EntitlementsService.check(tenantId, limit | feature)` is the single answer to "may this tenant do this?", with a short cache. It is called by the gateway (D1), the knowledge upload, seat and invite creation, and channel connection. Stable error codes (translatable, H7): `PLAN_LIMIT_REACHED`, `PLAN_FEATURE_UNAVAILABLE`, `SUBSCRIPTION_PAST_DUE`, `TENANT_SUSPENDED`.
@@ -466,6 +475,7 @@ In-app notifications (H5) and a dashboard banner: Starter ends in 7, 3 and 1 day
 Status: ☐
 
 ### I9. Abuse and cost guards: BE
+**Phase 3:** the plan caps are enforced at the gateway and the widget has rate limits (F6). "No AI replies until the owner's email is verified" is still NOT built (the gateway does not look at `email_verified_at`; decide whether an unverified owner's widget should answer).
 No AI replies until the owner's email is verified (H4); signup rate limits per IP and per email; one Starter per organisation (matching verified email domain or company name, platform admin can override); hard caps from I1 on Starter and Free. ### I9. Abuse and cost guards: BE
 No AI replies until the owner's email is verified (H4); signup rate limits per IP and per email; one Starter per organisation (matching verified email domain or company name, platform admin can override); hard caps from I1 on Starter and Free. Free-plan AI conversations are metered as carefully as paid ones because each costs LLM money.
 **Phase 2B:** only the plan caps of I1 (as entitlements) exist. Signup rate limits, one Starter per organisation and "no AI replies until the owner's email is verified" are not built (they belong with the gateway, Phase 3, and Phase 8).
@@ -511,6 +521,8 @@ Status: ☐
 
 ## Appendix A: Proposed engine internal API (called by the backend)
 
+**Phase 3 wrote the subset the gateway uses as an OpenAPI file: [contracts/engine-internal.openapi.yaml](contracts/engine-internal.openapi.yaml)** (create conversation, get conversation with messages, send a message with the streamed reply, health) and added two things to it that this table does not have yet, for the AI owner to confirm: `POST /internal/conversations/:id/escalate` `{ reason, summary? }` (the backend tells the engine to escalate without calling the model: `limit_reached`, `ai_unavailable`) and `aiReply: false` on the message call (store a message, generate no reply). The rest of the table (human messages, claim, release, knowledge, actions, erasure) is unchanged and not yet in the file.
+
 All calls carry `Authorization`, `X-Tenant-Id`, `X-Request-Id` (D2) and, for commands, `Idempotency-Key`.
 
 | Method and path | Purpose |
@@ -543,9 +555,9 @@ Engine → backend: `POST /internal/events` (D5), `GET /internal/tenants/:id/age
 | Knowledge | `POST …/knowledge` (upload), `GET …/knowledge`, `DELETE …/knowledge/:id` |
 | Agent config | `GET/PUT /tenants/:tenantId/agent-config` |
 | Integrations | `PUT/DELETE /tenants/:tenantId/integrations/:kind` (write-only secrets) |
-| API keys | CRUD `/tenants/:tenantId/api-keys` |
+| API keys | **Built (Phase 3):** `POST`, `GET`, `GET :id`, `PATCH :id` (name, origins), `DELETE :id` (revoke) on `/tenants/:tenantId/api-keys`; rotation is Phase 5 |
 | Realtime | `GET /tenants/:tenantId/events` (SSE) |
-| Widget | `POST /widget/sessions`, `POST /widget/messages`, `GET /widget/messages/stream` |
+| Widget | **Built (Phase 3):** `POST /widget/sessions`, `POST /widget/messages` (answers `text/event-stream`; there is no separate stream route), `GET /widget/conversation` |
 | Platform admin | `/admin/auth/login`, `/admin/tenants…` |
 | Invites | `POST/GET /tenants/:tenantId/invites`, `DELETE …/:id`, `POST /auth/invites/accept` (H1) |
 | Password reset | `POST /auth/password-reset/request`, `POST /auth/password-reset/confirm` (H2) |

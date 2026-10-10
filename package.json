@@ -23,7 +23,8 @@
     "openapi:export": "ts-node scripts/export-openapi.ts",
     "platform-admin:create": "ts-node scripts/create-platform-admin.ts",
     "i18n:check": "ts-node scripts/check-i18n.ts",
-    "postinstall": "prisma skills sync || exit 0"
+    "postinstall": "prisma skills sync || exit 0",
+    "widget:walkthrough": "ts-node scripts/widget-walkthrough.ts"
   },
   "dependencies": {
     "@nestjs/common": "^12.0.1",
@@ -66,6 +67,7 @@
     "ts-loader": "^9.5.2",
     "ts-node": "^10.9.2",
     "tsconfig-paths": "^4.2.0",
-    "typescript": "^6.0.2"
+    "typescript": "^6.0.2",
+    "yaml": "^2.9.1"
   }
 }

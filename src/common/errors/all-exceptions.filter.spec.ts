@@ -10,16 +10,20 @@ import { prismaError } from '../../../test/utils/prisma-mock';
 import { ApiException } from './api.exception';
 import { AllExceptionsFilter } from './all-exceptions.filter';
 import { ErrorCode } from './error-codes';
+import { RateLimitedException } from './rate-limited.exception';
 
 describe('AllExceptionsFilter', () => {
   const filter = new AllExceptionsFilter();
+  let headers: jest.Mock;
 
   function run(exception: unknown) {
     const json = jest.fn();
     const status = jest.fn().mockReturnValue({ json });
+    const setHeader = jest.fn();
+    headers = setHeader;
     const host = {
       switchToHttp: () => ({
-        getResponse: () => ({ status }),
+        getResponse: () => ({ status, setHeader }),
         getRequest: () => ({ id: 'req-1', originalUrl: '/v1/x?email=a@b.co' }),
       }),
     } as unknown as ArgumentsHost;
@@ -27,6 +31,18 @@ describe('AllExceptionsFilter', () => {
     filter.catch(exception, host);
     return { status: status.mock.calls[0][0], body: json.mock.calls[0][0] };
   }
+
+  it('a rate-limited error answers 429 TOO_MANY_REQUESTS and tells the client when to retry', () => {
+    const { status, body } = run(new RateLimitedException(42));
+    expect(status).toBe(429);
+    expect(body).toMatchObject({ statusCode: 429, code: 'TOO_MANY_REQUESTS' });
+    expect(headers).toHaveBeenCalledWith('Retry-After', '42');
+  });
+
+  it('other errors set no Retry-After header', () => {
+    run(new ApiException(HttpStatus.CONFLICT, ErrorCode.SLUG_TAKEN, 'taken'));
+    expect(headers).not.toHaveBeenCalled();
+  });
 
   it('keeps the code of an ApiException', () => {
     const { status, body } = run(

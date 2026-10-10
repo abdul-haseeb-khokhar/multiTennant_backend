@@ -1,6 +1,7 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
 import { AuditAction, AuditService } from '../audit/audit.service';
+import { RateLimitedException } from '../common/errors/rate-limited.exception';
 import { ApiException } from '../common/errors/api.exception';
 import { ErrorCode } from '../common/errors/error-codes';
 import { RateLimiter } from '../common/throttle/rate-limiter';
@@ -47,11 +48,7 @@ export class PasswordResetService {
       WINDOW_MS,
     );
     if (!byIp.allowed) {
-      throw new ApiException(
-        HttpStatus.TOO_MANY_REQUESTS,
-        ErrorCode.TOO_MANY_REQUESTS,
-        `Too many requests, try again in ${byIp.retryAfterSeconds} seconds`,
-      );
+      throw new RateLimitedException(byIp.retryAfterSeconds);
     }
     const byEmail = this.limiter.hit(
       `password-reset:email:${dto.tenantSlug}:${email}`,

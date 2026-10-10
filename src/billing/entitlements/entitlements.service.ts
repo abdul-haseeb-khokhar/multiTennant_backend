@@ -35,6 +35,12 @@ export interface CheckOptions {
   currentUsage?: number;
   /** Bypass the cache (used while holding the subscription lock). */
   fresh?: boolean;
+  /**
+   * Treat `past_due` like `active` for this check. The chat gateway sets it: a tenant whose
+   * payment is overdue keeps answering its customers (I5), so only the other statuses and the
+   * plan's own features decide.
+   */
+  allowPastDue?: boolean;
 }
 
 interface CacheEntry {
@@ -65,6 +71,11 @@ export class EntitlementsService {
 
   invalidate(tenantId: string) {
     this.cache.delete(tenantId);
+  }
+
+  /** The tenant's effective subscription (cached like `check`), for callers that need the plan's entitlements themselves. */
+  forTenant(tenantId: string): Promise<EffectiveSubscription | null> {
+    return this.effective(tenantId);
   }
 
   /** `amount` is how much the caller wants to add (default 1). */
@@ -106,7 +117,8 @@ export class EntitlementsService {
     }
     if (
       subscription.status === SubscriptionStatus.PAST_DUE &&
-      key !== 'conversations'
+      key !== 'conversations' &&
+      !options.allowPastDue
     ) {
       return this.deny(
         ErrorCode.SUBSCRIPTION_PAST_DUE,
