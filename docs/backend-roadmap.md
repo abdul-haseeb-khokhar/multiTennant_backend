@@ -11,7 +11,7 @@ Size: **S** ≈ days · **M** ≈ 1–2 weeks · **L** ≈ 2+ weeks (rough, solo
 | 0 | Foundation and hardening | M | nothing | FE (OpenAPI, stable errors/pagination) |
 | 1 | Account and team management | M | nothing (H3 mail provider can follow) | FE (auth, invite, audit, language screens) |
 | 2 | Shared infrastructure and engine contract | S–M | AI: A1–A6, D2, schema requests | everything that talks to the engine |
-| 2B | Billing foundation (plans, subscriptions, entitlements, manual payments) | M | nothing (can run beside 2) | Phase 3 enforcement, FE billing screens |
+| 2B | Billing foundation (plans, subscriptions, entitlements, manual payments) | M | nothing (can run beside 2); **built**, reminders wait for H5 | Phase 3 enforcement, FE billing screens |
 | 3 | Gateway and widget entry | M | AI: B5, D1–D3, engine create/message API; Phase 2B | FE widget, first end-to-end chat |
 | 4 | Human-agent flow and notifications | L | AI: C1–C4, D5, D6 | FE dashboard conversations |
 | 5 | Tenant configuration, knowledge, actions, usage | L | AI: E1–E4 | AI personalisation, plan limits |
@@ -70,8 +70,9 @@ Scope:
 - [ ] Agree A1–A6 with Abdullah; `docker-compose.yml` + `infra/init/00-init.sql`; switch `DATABASE_URL` and add `?schema=tenant_core` (A1, A2, A3)
 - [ ] **Verify A2** (migration histories stay separate) on a throwaway database before anyone migrates
 - [ ] Seed script: demo tenant with a fixed UUID, owner, agent, a few customers (A6)
-- [ ] Write the engine internal API as an OpenAPI file in `docs/contracts/` (Appendix A) and the agent-config schema (E1); both sides review
-- [ ] Backend `EngineClient`: service token, request id, `Idempotency-Key`, timeouts and retry policy (D2, D7), plus a **mock engine** so backend work never waits for AI
+- [x] Write the engine internal API as an OpenAPI file in `docs/contracts/` (Appendix A): the subset Phase 3 uses is in `docs/contracts/engine-internal.openapi.yaml` (built in Phase 3, **proposed, not yet reviewed by the AI side**)
+- [ ] The agent-config schema (E1) and the rest of the engine API (claim, release, knowledge, actions, erasure); both sides review
+- [x] Backend `EngineClient`: service token, request id, `Idempotency-Key`, timeouts and retry policy (D2, D7), plus a **mock engine** so backend work never waits for AI (built in Phase 3: `src/engine/`, `ENGINE_MODE=mock|http`; the HTTP client has only met a fake server so far)
 - [ ] README: how to start everything from scratch, migration order
 
 Depends on: AI answers to A1–A6 and D2; the AI side adds `end_customer_id` and the foreign keys (A5, B5).
@@ -81,32 +82,45 @@ Depends on: AI answers to A1–A6 and D2; the AI side adds `end_customer_id` and
 **Goal:** every tenant has a plan, Starter turns into Free after 15 days, limits are enforceable, and you can take payments manually, with a design that accepts a payment provider later without rework (section I of team-alignment).
 
 Scope:
-- [ ] Tables: `plans` (seed Starter, Free, Pro, Enterprise), `subscriptions`, `invoices`, `billing_events`; money as integer minor units plus currency (I1, I4, I7)
-- [ ] Migrate existing tenants: every current tenant gets a Starter subscription starting at deployment; replace `tenants.plan`/`status` semantics with the subscription state (I2, I3); keep a pre-migration dump
-- [ ] `SubscriptionService.applyEvent()` state machine (idempotent, audited) and the daily transition job; request-time checks for correctness (I3, I8)
-- [ ] `EntitlementsService.check()` with a short cache, wired into seats/invites and the user API now, ready for the gateway and knowledge upload later (I5)
-- [ ] `BillingProvider` interface and `ManualProvider`; platform-admin endpoints activate, record-payment, extend, change-plan, cancel (I4, I6)
-- [ ] Subscription and invoice read endpoints for the tenant owner (`GET /v1/tenants/:tenantId/billing`), pricing endpoint for public plans only
-- [ ] Notifications and banner data for reminders and limits (I8, builds on H5 once present; until then expose the state through `GET /me`)
-- [ ] Error codes and `en`/`ur` translations: `PLAN_LIMIT_REACHED`, `PLAN_FEATURE_UNAVAILABLE`, `SUBSCRIPTION_PAST_DUE`, `TENANT_SUSPENDED`
-- [ ] `data_use_consents` table and owner API (default off, I11), without any training export
+- [x] Tables: `plans` (seed Starter, Free, Pro, Enterprise), `subscriptions`, `invoices`, `billing_events`; money as integer minor units plus currency (I1, I4, I7). Also `invoice_sequences` (gapless numbers per year) and `data_use_consents`
+- [x] Migrate existing tenants: every current tenant gets a Starter subscription starting at deployment; `tenants.plan`/`status` **kept as denormalised mirrors** of the subscription (expand-contract: nothing dropped), written only by `SubscriptionService` (I2, I3); pre-migration dump taken
+- [x] `SubscriptionService.applyEvent()` state machine (idempotent, audited) and the transition job (timer + Postgres advisory lock); request-time checks for correctness through `getEffective` (I3, I8)
+- [x] `EntitlementsService.check()` with a short cache, wired into seats/invites and the user API now (invite create, invite accept, user re-enable), ready for the gateway and knowledge upload later (I5); usage counters for conversations and knowledge are a stub until Phases 3 and 5
+- [x] `BillingProvider` interface and `ManualProvider`; platform-admin endpoints activate, record-payment, extend, change-plan, cancel (I4, I6)
+- [x] Subscription and invoice read endpoints for the tenant owner (`GET /v1/tenants/:tenantId/billing`), pricing endpoint for public plans only (`GET /v1/plans`)
+- [x] Banner data for reminders and limits through `GET /v1/me` (`subscription`: plan, status, period end, `daysLeft`, `graceDaysLeft`, limits)
+- [ ] In-app reminder notifications for I8 (7/3/1 days, grace started, 80%/100% of a limit, downgrade happened): waits for H5 (Phase 4)
+- [x] Error codes and `en`/`ur` translations: `PLAN_LIMIT_REACHED`, `PLAN_FEATURE_UNAVAILABLE`, `SUBSCRIPTION_PAST_DUE`, `TENANT_SUSPENDED` (existing), plus `NO_ACTIVE_SUBSCRIPTION`, `TENANT_CLOSED`, `INVALID_SUBSCRIPTION_STATE`, `SUBSCRIPTION_NOT_FOUND`, `PLAN_NOT_FOUND`, `NOT_IMPLEMENTED`. The Urdu text was written by an AI and needs a native-speaker check
+- [x] `data_use_consents` table and owner API (`GET`/`PUT /v1/tenants/:tenantId/data-use`, default off, I11), without any training export
 
-Depends on: Phase 1. Decisions needed: I1–I10 confirmed with the accountant for tax and invoice wording (I7); I11 needs legal review before any training use.
+Implementation status (branch `phase-2b-billing`, not committed): everything above is built except the in-app reminder notifications (they need H5). `npm test` (517), `npm run test:e2e` (187), `npm run test:db` (49, against a throwaway database, run twice) and `npm run build` pass; `oxlint` could not run on the build machine (CLAUDE.md known issue 9). Migration `20261007140000_phase2b_billing` is additive only (new tables, CHECK constraints, the append-only trigger on `billing_events`, the four seeded plans, a Starter subscription for every existing tenant starting at deployment); it was generated against a throwaway database and applied to the local `multitenant` database after a `pg_dump` of `tenant_core`.
+
+How it works (details: `CLAUDE.md` rule 10 and the I-section of team-alignment.md):
+- **One writer.** `SubscriptionService.applyEvent` is the only place that changes `subscriptions`, `invoices`, `billing_events` and the `tenants.plan`/`status` mirrors, in one transaction with an audit entry. The transitions are pure functions in `billing/subscriptions/state-machine.ts`.
+- **Time.** An injectable `Clock`. `getEffective(tenantId)` applies due transitions on read, so Starter becomes Free on day 15 even if the job is late; the job (`billing.scheduler.ts`) sweeps on boot and every `BILLING_JOB_INTERVAL_MINUTES` (60) on every instance, one of them holding `pg_try_advisory_xact_lock`.
+- **Provider later.** `BillingProvider` (checkout, portal, cancel, `handleWebhook(rawBody, headers) -> BillingEvent[]`) and `ManualProvider`. Phase 9 adds a class and registers it in `BillingCoreModule` and `BillingProviders`; the state machine, tables, enforcement and screens do not change.
+
+Depends on: Phase 1. Decisions needed: I1–I10 confirmed with the accountant for tax and invoice wording (I7, **still open**); I11 needs legal review before any training use (**still open**).
 **Done when:** a new tenant has Starter for 15 days and then Free automatically, an admin can activate Pro with a recorded invoice, limits return the right error codes, and nothing in the code mentions a specific payment provider outside `ManualProvider`.
 
 ## Phase 3: Gateway and widget entry
 **Goal:** the first end-to-end conversation: a visitor chats through the widget and gets an AI answer.
 
 Scope:
-- [ ] `api_keys` (widget/server), per-key allowed origins, per-tenant CORS for widget routes (D8)
-- [ ] `POST /v1/widget/sessions`: validate key and origin, check tenant status/plan, upsert `EndCustomer` per channel rules (B4), create the conversation in the engine, issue a widget token (D3)
-- [ ] `POST /v1/widget/messages` and the streamed reply (SSE) relayed from the engine (D1)
-- [ ] Fallback and auto-escalation when the engine is down (D7)
-- [ ] Rate limiting per key/IP, message length cap (F6)
-- [ ] `usage.recorded` handling and `usage_daily` (basis for plan limits, enforced in Phase 5)
+- [x] `api_keys` (widget/server), per-key allowed origins, per-tenant CORS for widget routes (D8): owner/admin endpoints under `/v1/tenants/:tenantId/api-keys` (create returns the key once, list, get, update origins, revoke), audit entries `apikey.*`, CORS via `WidgetCorsService`
+- [x] `POST /v1/widget/sessions`: validate key and origin, check tenant status/plan, upsert `EndCustomer` per channel rules (B4), create the conversation in the engine, issue a widget token (D3); `GET /v1/widget/conversation` for history
+- [x] `POST /v1/widget/messages` and the streamed reply (SSE) relayed from the engine (D1): one design, POST answering `text/event-stream` (events `accepted`, `token`, `escalated`, `fallback`, `done`, `error`)
+- [x] Fallback and auto-escalation when the engine is down or the plan limit is reached (D7, I5): structured `fallback` with stable translated reason codes
+- [x] Rate limiting per key, per visitor and per IP (in process memory, per instance), message length cap of 2,000 (F6)
+- [x] `usage_daily` and the real `UsageProvider`: `conversationsPerPeriod` is enforced from real usage when a conversation starts (the roadmap said Phase 5; it was cheap and the exit criteria need it)
+- [ ] `usage.recorded` event receiver (`POST /internal/events`, Phase 4): the event name and payload are fixed in `docs/contracts/`, the gateway already counts from the reply stream and `UsageService` dedupes per conversation and message id
+
+Implementation status (branch `phase-3-gateway`, cut from `phase-2b-billing`, not committed): everything above is built and tested against the **mock engine and a contract-faithful fake engine server only**; no real engine exists yet, so the second half of "Done when" (a full chat against the real engine) is open and waits for the AI side to implement `docs/contracts/engine-internal.openapi.yaml`. Migration `20261008100000_phase3_gateway` is additive (tables `api_keys`, `gateway_conversations`, `usage_daily`, `usage_events`); it was applied from empty to a throwaway database (drift check against `schema.prisma`: none; `npm run test:db`: 62 tests, repeated runs, which also caught and fixed a parallel-start race) and then to the local `multitenant` database after a `pg_dump` (the 11 existing tenants and their Starter subscriptions untouched). `npm run widget:walkthrough` was run against the real server on real Postgres with the mock engine and passes every step. How it works and how the frontend runs against the mock: `docs/contracts/README.md`; rules and known issues: `CLAUDE.md` rule 11 and known issue 12.
+
+Decisions the docs did not settle (taken in Phase 3, change them in code if you disagree): a blocked or engine-less start is **HTTP 200 `status: "blocked"`** with a fallback text and no token (not 403); an over-limit conversation is created, counted and given to humans (`status: "limited"`); **`month` allowance = UTC calendar month**, `total` = since the UTC day the period began; widget origins are exact (no wildcards, https or http for localhost); a missing `Origin` header is refused; reading and managing API keys is owner/admin only (agents get 403); at most 10 active API keys per tenant; the widget token is signed with a secret derived from `JWT_SECRET`; `visitorId` must be 16 to 64 characters of `A-Za-z0-9_-`; `past_due` keeps chatting but cannot create new widget keys.
 
 Depends on: Phase 2; engine endpoints for create/message; B4, B5, C3.
-**Done when:** the frontend widget completes a full chat against the real engine, and a suspended tenant or wrong origin is refused.
+**Done when:** the frontend widget completes a full chat against the real engine, and a suspended tenant or wrong origin is refused. (Met against the mock engine; the real engine is outstanding.)
 
 ## Phase 4: Human-agent flow and notifications
 **Goal:** staff see escalated conversations, take over, reply and hand back, with live updates.

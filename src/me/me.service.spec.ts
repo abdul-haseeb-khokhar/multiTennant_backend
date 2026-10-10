@@ -5,6 +5,7 @@ import {
   prismaError,
 } from '../../test/utils/prisma-mock';
 import type { AuthUser } from '../auth/roles';
+import { SubscriptionService } from '../billing/subscriptions/subscription.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { MeService } from './me.service';
 
@@ -18,6 +19,7 @@ const actor: AuthUser = {
 describe('MeService', () => {
   let service: MeService;
   let prisma: PrismaMock;
+  let subscriptions: { getEffective: jest.Mock };
 
   const dbUser = (over: Record<string, unknown> = {}) => ({
     id: 'u1',
@@ -39,8 +41,13 @@ describe('MeService', () => {
 
   beforeEach(async () => {
     prisma = createPrismaMock();
+    subscriptions = { getEffective: jest.fn().mockResolvedValue(null) };
     const module: TestingModule = await Test.createTestingModule({
-      providers: [MeService, { provide: PrismaService, useValue: prisma }],
+      providers: [
+        MeService,
+        { provide: PrismaService, useValue: prisma },
+        { provide: SubscriptionService, useValue: subscriptions },
+      ],
     }).compile();
     service = module.get(MeService);
   });
@@ -65,11 +72,61 @@ describe('MeService', () => {
           status: 'active',
           defaultLocale: 'ur',
         },
+        subscription: null,
         locale: 'ur',
       });
       expect(prisma.tenantUser.findFirst).toHaveBeenCalledWith(
         expect.objectContaining({ where: { id: 'u1', tenantId: 'tenant-a' } }),
       );
+    });
+
+    it('adds the subscription summary for the dashboard banner, read for the token tenant only', async () => {
+      prisma.tenantUser.findFirst.mockResolvedValue(dbUser());
+      const limits = {
+        seats: 3,
+        conversationsPerPeriod: 100,
+        conversationPeriod: 'total',
+        knowledgeMb: 20,
+        channels: ['chat'],
+        voice: false,
+        poweredByLabel: false,
+      };
+      subscriptions.getEffective.mockResolvedValue({
+        tenantId: 'tenant-a',
+        subscriptionId: 's1',
+        planCode: 'starter',
+        planName: 'Starter',
+        status: 'active',
+        interval: 'none',
+        currentPeriodStart: new Date('2026-10-01'),
+        currentPeriodEnd: new Date('2026-10-16'),
+        cancelAtPeriodEnd: false,
+        graceEndsAt: null,
+        daysLeft: 9,
+        graceDaysLeft: null,
+        provider: 'manual',
+        entitlements: limits,
+        entitlementsOverride: null,
+        nextTransitionAt: new Date('2026-10-16'),
+      });
+      const me = await service.get(actor);
+      expect(subscriptions.getEffective).toHaveBeenCalledWith('tenant-a');
+      expect(me.subscription).toEqual({
+        planCode: 'starter',
+        planName: 'Starter',
+        status: 'active',
+        interval: 'none',
+        currentPeriodStart: new Date('2026-10-01'),
+        currentPeriodEnd: new Date('2026-10-16'),
+        daysLeft: 9,
+        cancelAtPeriodEnd: false,
+        graceEndsAt: null,
+        graceDaysLeft: null,
+        limits,
+      });
+      // Internal billing columns do not leak into /me.
+      expect(me.subscription).not.toHaveProperty('provider');
+      expect(me.subscription).not.toHaveProperty('subscriptionId');
     });
 
     it("prefers the user's own language over the tenant default", async () => {

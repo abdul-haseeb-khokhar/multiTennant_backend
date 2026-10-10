@@ -1,6 +1,8 @@
 import { INestApplication } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
 import request from 'supertest';
+import { FakeClock } from '../src/billing/clock';
+import { installBilling } from './utils/billing-fixtures';
 import { mockTransaction, PrismaMock, prismaError } from './utils/prisma-mock';
 import { createTestApp } from './utils/test-app';
 
@@ -11,9 +13,10 @@ describe('Auth (e2e)', () => {
   let prisma: PrismaMock;
   let passwordHash: string;
   let allowStaff: () => void;
+  let clock: FakeClock;
 
   beforeAll(async () => {
-    ({ app, prisma, allowStaff } = await createTestApp());
+    ({ app, prisma, allowStaff, clock } = await createTestApp());
     passwordHash = bcrypt.hashSync(PASSWORD, 4);
   });
 
@@ -35,7 +38,10 @@ describe('Auth (e2e)', () => {
       ownerPassword: PASSWORD,
     };
 
+    let billing: ReturnType<typeof installBilling>;
+
     beforeEach(() => {
+      billing = installBilling(prisma, clock, { subscription: null });
       prisma.tenant.create.mockImplementation(({ data }) =>
         Promise.resolve({ id: 't1', plan: 'free', status: 'trial', ...data }),
       );
@@ -87,6 +93,42 @@ describe('Auth (e2e)', () => {
         .get('/v1/tenants/t1/users')
         .set('Authorization', `Bearer ${res.body.access_token}`)
         .expect(200);
+    });
+
+    it('starts the new tenant on Starter for 15 days and mirrors it on the tenant row (I2)', async () => {
+      await request(app.getHttpServer())
+        .post('/v1/auth/signup')
+        .send(body)
+        .expect(201);
+
+      expect(prisma.subscription.create).toHaveBeenCalledTimes(1);
+      expect(prisma.subscription.create.mock.calls[0][0].data).toMatchObject({
+        tenantId: 't1',
+        planCode: 'starter',
+        status: 'active',
+        currentPeriodStart: new Date('2026-10-07T00:00:00.000Z'),
+        currentPeriodEnd: new Date('2026-10-22T00:00:00.000Z'),
+      });
+      expect(billing.mirrors).toEqual([
+        { id: 't1', plan: 'starter', status: 'trial' },
+      ]);
+      expect(billing.events.map((e) => e.type)).toEqual([
+        'subscription.created',
+      ]);
+      expect(prisma.auditLog.create.mock.calls[0][0].data).toMatchObject({
+        tenantId: 't1',
+        action: 'subscription.created',
+        actorRole: 'system',
+      });
+    });
+
+    it('creates no subscription when the signup fails (same transaction)', async () => {
+      prisma.tenantUser.create.mockRejectedValue(new Error('boom'));
+      await request(app.getHttpServer())
+        .post('/v1/auth/signup')
+        .send(body)
+        .expect(500);
+      expect(prisma.subscription.create).not.toHaveBeenCalled();
     });
 
     it('ignores plan and status sent by the caller (B1)', async () => {

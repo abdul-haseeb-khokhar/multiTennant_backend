@@ -5,6 +5,7 @@ import {
   PrismaMock,
   prismaError,
 } from '../../test/utils/prisma-mock';
+import { SubscriptionService } from '../billing/subscriptions/subscription.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthService } from './auth.service';
 import { EmailVerificationService } from './email-verification.service';
@@ -20,6 +21,7 @@ describe('AuthService', () => {
   let prisma: PrismaMock;
   let sessionTokens: { sign: jest.Mock };
   let verification: { issue: jest.Mock };
+  let subscriptions: { createStarter: jest.Mock };
   let passwordHash: string;
 
   beforeAll(() => {
@@ -33,12 +35,14 @@ describe('AuthService', () => {
     );
     sessionTokens = { sign: jest.fn().mockReturnValue('signed.jwt.token') };
     verification = { issue: jest.fn().mockResolvedValue({}) };
+    subscriptions = { createStarter: jest.fn().mockResolvedValue({}) };
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AuthService,
         { provide: PrismaService, useValue: prisma },
         { provide: SessionTokenService, useValue: sessionTokens },
         { provide: EmailVerificationService, useValue: verification },
+        { provide: SubscriptionService, useValue: subscriptions },
       ],
     }).compile();
     service = module.get(AuthService);
@@ -153,6 +157,18 @@ describe('AuthService', () => {
         service.login({ ...dto, password: 'wrong-pass' }),
       ).rejects.toMatchObject({ status: 401 });
     });
+
+    it('refuses a closed account with 403 TENANT_CLOSED', async () => {
+      prisma.tenant.findUnique.mockResolvedValue({
+        id: 't1',
+        slug: 'acme',
+        status: 'closed',
+      });
+      await expect(service.login(dto)).rejects.toMatchObject({
+        status: 403,
+        response: { code: 'TENANT_CLOSED' },
+      });
+    });
   });
 
   describe('signup', () => {
@@ -205,6 +221,18 @@ describe('AuthService', () => {
       expect(ownerArg.omit).toEqual({ passwordHash: true });
       expect(res.access_token).toBe('signed.jwt.token');
       expect(sessionTokens.sign).toHaveBeenCalledWith('u1', 't1', 'owner');
+    });
+
+    it('starts the tenant on Starter inside the signup transaction (I2)', async () => {
+      await service.signup(dto);
+      expect(subscriptions.createStarter).toHaveBeenCalledTimes(1);
+      expect(subscriptions.createStarter).toHaveBeenCalledWith(prisma, 't1');
+    });
+
+    it('does not create a subscription when the signup fails (the transaction rolls back)', async () => {
+      prisma.tenantUser.create.mockRejectedValue(new Error('boom'));
+      await expect(service.signup(dto)).rejects.toThrow('boom');
+      expect(subscriptions.createStarter).not.toHaveBeenCalled();
     });
 
     it('normalises the owner email and stores the chosen default locale', async () => {

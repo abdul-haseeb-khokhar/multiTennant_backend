@@ -8,6 +8,7 @@ import {
 import { AuditService } from '../audit/audit.service';
 import { EmailVerificationService } from '../auth/email-verification.service';
 import type { AuthUser } from '../auth/roles';
+import { EntitlementsService } from '../billing/entitlements/entitlements.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { TenantUsersService } from './tenant-users.service';
 
@@ -39,18 +40,23 @@ describe('TenantUsersService', () => {
   let prisma: PrismaMock;
   let audit: { record: jest.Mock };
   let verification: { issue: jest.Mock };
+  let entitlements: { assertSeatAvailable: jest.Mock };
 
   beforeEach(async () => {
     prisma = createPrismaMock();
     mockTransaction(prisma);
     audit = { record: jest.fn().mockResolvedValue(undefined) };
     verification = { issue: jest.fn().mockResolvedValue({}) };
+    entitlements = {
+      assertSeatAvailable: jest.fn().mockResolvedValue(undefined),
+    };
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         TenantUsersService,
         { provide: PrismaService, useValue: prisma },
         { provide: AuditService, useValue: audit },
         { provide: EmailVerificationService, useValue: verification },
+        { provide: EntitlementsService, useValue: entitlements },
       ],
     }).compile();
     service = module.get(TenantUsersService);
@@ -130,6 +136,44 @@ describe('TenantUsersService', () => {
         data: { role: 'admin' },
         omit: { passwordHash: true },
       });
+    });
+
+    it('checks the plan seat limit when a disabled user becomes active again, inside the same transaction', async () => {
+      prisma.tenantUser.findFirst.mockResolvedValue(
+        row({ status: 'disabled' }),
+      );
+      prisma.tenantUser.update.mockResolvedValue(row({ status: 'active' }));
+      await service.update('tenant-a', 'u1', { status: 'active' }, admin);
+      expect(entitlements.assertSeatAvailable).toHaveBeenCalledWith(
+        prisma,
+        'tenant-a',
+        'reactivate',
+      );
+    });
+
+    it('does not reactivate when the plan has no seat left (403 PLAN_LIMIT_REACHED)', async () => {
+      prisma.tenantUser.findFirst.mockResolvedValue(
+        row({ status: 'disabled' }),
+      );
+      entitlements.assertSeatAvailable.mockRejectedValue(
+        Object.assign(new Error('limit'), {
+          status: 403,
+          response: { code: 'PLAN_LIMIT_REACHED' },
+        }),
+      );
+      await expect(
+        service.update('tenant-a', 'u1', { status: 'active' }, admin),
+      ).rejects.toMatchObject({ response: { code: 'PLAN_LIMIT_REACHED' } });
+      expect(prisma.tenantUser.update).not.toHaveBeenCalled();
+    });
+
+    it('does not take a seat for changes that keep the user as they are (already active, or being disabled)', async () => {
+      prisma.tenantUser.findFirst.mockResolvedValue(row());
+      prisma.tenantUser.update.mockResolvedValue(row());
+      await service.update('tenant-a', 'u1', { status: 'active' }, admin);
+      await service.update('tenant-a', 'u1', { status: 'disabled' }, admin);
+      await service.update('tenant-a', 'u1', { role: 'admin' }, admin);
+      expect(entitlements.assertSeatAvailable).not.toHaveBeenCalled();
     });
 
     it('has no password field: a password in the data is never written', async () => {

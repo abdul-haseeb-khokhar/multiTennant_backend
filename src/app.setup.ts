@@ -1,9 +1,12 @@
 import { INestApplication, ValidationPipe } from '@nestjs/common';
+import type { CorsOptionsDelegate } from '@nestjs/common/interfaces/external/cors-options.interface';
 import { ConfigService } from '@nestjs/config';
+import type { Request } from 'express';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AllExceptionsFilter } from './common/errors/all-exceptions.filter';
 import { NoNullBytesPipe } from './common/validation/no-null-bytes.pipe';
 import { requestContextMiddleware } from './common/request-context/request-context.middleware';
+import { WidgetCorsService, isWidgetPath } from './widget/widget-cors.service';
 
 export const API_PREFIX = 'v1';
 
@@ -19,11 +22,26 @@ export function configureApp(app: INestApplication) {
     new ValidationPipe({ whitelist: true, transform: true }),
   );
   app.useGlobalFilters(new AllExceptionsFilter());
-  app.enableCors({
-    // Without FRONTEND_URL no browser origin is allowed ("origin: undefined" would mean "*").
-    origin: app.get(ConfigService).get<string>('FRONTEND_URL') ?? false,
-    exposedHeaders: ['X-Request-Id'],
-  });
+  // D8: two CORS policies. Dashboard routes allow the one FRONTEND_URL origin; the widget routes
+  // (/v1/widget/*) allow only origins listed on a widget key, decided per request.
+  // Without FRONTEND_URL no browser origin is allowed ("origin: undefined" would mean "*").
+  const dashboardOrigin =
+    app.get(ConfigService).get<string>('FRONTEND_URL') ?? false;
+  const widgetCors = app.get(WidgetCorsService, { strict: false });
+  const cors: CorsOptionsDelegate<Request> = (request, callback) => {
+    if (isWidgetPath(request.url, API_PREFIX)) {
+      widgetCors.optionsFor(request).then(
+        (options) => callback(null, options),
+        () => callback(null, { origin: false }),
+      );
+      return;
+    }
+    callback(null, {
+      origin: dashboardOrigin,
+      exposedHeaders: ['X-Request-Id'],
+    });
+  };
+  app.enableCors(cors);
 }
 
 export function buildOpenApiConfig() {

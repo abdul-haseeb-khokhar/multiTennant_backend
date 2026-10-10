@@ -3,7 +3,15 @@ import { JwtService } from '@nestjs/jwt';
 import { Test } from '@nestjs/testing';
 import { AppModule } from '../../src/app.module';
 import { configureApp, setupSwagger } from '../../src/app.setup';
+import { Clock, FakeClock } from '../../src/billing/clock';
+import { EngineClient } from '../../src/engine/engine-client';
+import { MockEngineClient } from '../../src/engine/mock-engine.client';
 import { PrismaService } from '../../src/prisma/prisma.service';
+import {
+  DEFAULT_WIDGET_LIMITS,
+  WIDGET_LIMITS,
+  WidgetLimits,
+} from '../../src/widget/widget.constants';
 import { createPrismaMock } from './prisma-mock';
 
 export interface StaffTokenUser {
@@ -25,11 +33,20 @@ export interface StaffRecord {
  * Prisma replaced by mocks, so the HTTP layer (guards, roles, error shapes, envelopes) is tested
  * without a database. See test/README.md.
  */
-export async function createTestApp() {
+export async function createTestApp(
+  options: { widgetLimits?: Partial<WidgetLimits> } = {},
+) {
   const prisma = createPrismaMock();
+  // Billing reads time from the injected Clock; tests move it instead of waiting.
+  const clock = new FakeClock();
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
     .overrideProvider(PrismaService)
     .useValue(prisma)
+    .overrideProvider(Clock)
+    .useValue(clock)
+    // Small numbers let a test reach a rate limit in a few calls.
+    .overrideProvider(WIDGET_LIMITS)
+    .useValue({ ...DEFAULT_WIDGET_LIMITS, ...options.widgetLimits })
     .compile();
 
   const app: INestApplication = moduleRef.createNestApplication({
@@ -40,6 +57,8 @@ export async function createTestApp() {
   await app.init();
 
   const jwt = app.get(JwtService);
+  // ENGINE_MODE defaults to the in-process mock in tests; tests drive and inspect it directly.
+  const engine = app.get(EngineClient) as MockEngineClient;
 
   // The staff directory: JwtStrategy re-checks every token against the database (H2), so tests
   // describe the users that "exist". `staffToken` registers its user as an active, verified one.
@@ -62,6 +81,9 @@ export async function createTestApp() {
   return {
     app,
     prisma,
+    clock,
+    engine,
+    jwt,
     /** A staff token, as `AuthService.login` would issue it. */
     staffToken,
     /**

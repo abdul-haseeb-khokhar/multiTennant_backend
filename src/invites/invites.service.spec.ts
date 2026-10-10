@@ -9,6 +9,7 @@ import {
 import { AuditService } from '../audit/audit.service';
 import type { AuthUser } from '../auth/roles';
 import { SessionTokenService } from '../auth/session-token.service';
+import { EntitlementsService } from '../billing/entitlements/entitlements.service';
 import { hashToken } from '../common/tokens/tokens';
 import { MailService } from '../mail/mail.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -30,6 +31,7 @@ describe('InvitesService', () => {
   let mail: { sendNow: jest.Mock };
   let audit: { record: jest.Mock };
   let sessions: { sign: jest.Mock };
+  let entitlements: { assertSeatAvailable: jest.Mock };
 
   beforeEach(async () => {
     prisma = createPrismaMock();
@@ -37,6 +39,9 @@ describe('InvitesService', () => {
     mail = { sendNow: jest.fn().mockResolvedValue({}) };
     audit = { record: jest.fn().mockResolvedValue(undefined) };
     sessions = { sign: jest.fn().mockReturnValue('signed.jwt') };
+    entitlements = {
+      assertSeatAvailable: jest.fn().mockResolvedValue(undefined),
+    };
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         InvitesService,
@@ -44,6 +49,7 @@ describe('InvitesService', () => {
         { provide: MailService, useValue: mail },
         { provide: AuditService, useValue: audit },
         { provide: SessionTokenService, useValue: sessions },
+        { provide: EntitlementsService, useValue: entitlements },
       ],
     }).compile();
     service = module.get(InvitesService);
@@ -109,6 +115,30 @@ describe('InvitesService', () => {
         where: { tenantId: 'tenant-a', email: 'agent@acme.com' },
         select: { id: true },
       });
+    });
+
+    it('checks the plan seat limit inside the transaction, ignoring the address being re-invited', async () => {
+      await service.create('tenant-a', { email: ' New@Acme.com ' }, owner);
+      expect(entitlements.assertSeatAvailable).toHaveBeenCalledWith(
+        prisma,
+        'tenant-a',
+        'invite',
+        'new@acme.com',
+      );
+    });
+
+    it('creates nothing and sends no email when the plan has no seat left (403 PLAN_LIMIT_REACHED)', async () => {
+      entitlements.assertSeatAvailable.mockRejectedValue(
+        Object.assign(new Error('limit'), {
+          status: 403,
+          response: { code: 'PLAN_LIMIT_REACHED' },
+        }),
+      );
+      await expect(
+        service.create('tenant-a', { email: 'n@acme.com' }, owner),
+      ).rejects.toMatchObject({ response: { code: 'PLAN_LIMIT_REACHED' } });
+      expect(prisma.staffInvite.create).not.toHaveBeenCalled();
+      expect(mail.sendNow).not.toHaveBeenCalled();
     });
 
     it('returns the link only when the mail service exposes it (MAIL_MODE=link)', async () => {
@@ -409,6 +439,34 @@ describe('InvitesService', () => {
         status: 403,
         response: { code: 'TENANT_SUSPENDED' },
       });
+    });
+
+    it('refuses an invite of a closed account', async () => {
+      prisma.staffInvite.findUnique.mockResolvedValue(
+        invite({ tenant: { status: 'closed' } }),
+      );
+      await expect(service.accept(dto)).rejects.toMatchObject({
+        status: 403,
+        response: { code: 'TENANT_CLOSED' },
+      });
+    });
+
+    it('checks the seat limit when the invite becomes a user, and creates no user when over the limit', async () => {
+      entitlements.assertSeatAvailable.mockRejectedValue(
+        Object.assign(new Error('limit'), {
+          status: 403,
+          response: { code: 'PLAN_LIMIT_REACHED' },
+        }),
+      );
+      await expect(service.accept(dto)).rejects.toMatchObject({
+        response: { code: 'PLAN_LIMIT_REACHED' },
+      });
+      expect(entitlements.assertSeatAvailable).toHaveBeenCalledWith(
+        prisma,
+        'tenant-a',
+        'accept',
+      );
+      expect(prisma.tenantUser.create).not.toHaveBeenCalled();
     });
 
     it('409 EMAIL_TAKEN when the user appeared in the meantime', async () => {

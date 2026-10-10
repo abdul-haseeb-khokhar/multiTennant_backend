@@ -1,5 +1,6 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
-import { AuditAction, AuditService } from '../audit/audit.service';
+import { BillingEventType } from '../billing/billing.constants';
+import { SubscriptionService } from '../billing/subscriptions/subscription.service';
 import { ApiException } from '../common/errors/api.exception';
 import { ErrorCode } from '../common/errors/error-codes';
 import { isPrismaError } from '../common/errors/prisma-errors';
@@ -13,7 +14,7 @@ import { UpdateTenantDto } from './dto/update-tenant.dto';
 export class TenantsService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly audit: AuditService,
+    private readonly subscriptions: SubscriptionService,
   ) {}
 
   async findAll(query: QueryTenantDto) {
@@ -38,53 +39,47 @@ export class TenantsService {
   }
 
   /**
-   * `adminId` is the platform admin making the change. Suspending or reactivating a tenant is
-   * written to that tenant's audit log (H6) in the same transaction.
+   * `adminId` is the platform admin making the change. `name` and `defaultLocale` are plain
+   * columns. `status` and `plan` belong to the subscription (the `tenants` columns are only its
+   * mirrors, written by SubscriptionService alone), so they are applied as billing events, which
+   * audit themselves: `suspended` suspends, `active`/`trial` lifts a suspension, `plan` changes
+   * the plan without a payment. Use the /subscription endpoints for anything richer.
    */
   async update(id: string, dto: UpdateTenantDto, adminId: string) {
-    try {
-      return await this.prisma.$transaction(async (tx) => {
-        const existing = await tx.tenant.findUnique({ where: { id } });
-        if (!existing) {
+    await this.findOne(id);
+    const actor = { userId: adminId, role: 'platform_admin' };
+    const base = { tenantId: id, source: 'manual' as const, actor };
+
+    // Subscription changes first: they can be refused (409/404) and must not leave a half update.
+    if (dto.status !== undefined) {
+      await this.subscriptions.applyEvent(
+        dto.status === 'suspended'
+          ? { ...base, type: BillingEventType.TENANT_SUSPENDED, payload: {} }
+          : { ...base, type: BillingEventType.TENANT_UNSUSPENDED, payload: {} },
+      );
+    }
+    if (dto.plan !== undefined) {
+      await this.subscriptions.applyEvent({
+        ...base,
+        type: BillingEventType.PLAN_CHANGED,
+        payload: { planCode: dto.plan },
+      });
+    }
+
+    if (dto.name !== undefined || dto.defaultLocale !== undefined) {
+      try {
+        await this.prisma.tenant.update({
+          where: { id },
+          data: { name: dto.name, defaultLocale: dto.defaultLocale },
+        });
+      } catch (error) {
+        if (isPrismaError(error, 'P2025')) {
           throw this.notFound(id);
         }
-        const updated = await tx.tenant.update({
-          where: { id },
-          data: {
-            name: dto.name,
-            plan: dto.plan,
-            status: dto.status,
-            defaultLocale: dto.defaultLocale,
-          },
-        });
-        const suspended =
-          updated.status === 'suspended' && existing.status !== 'suspended';
-        const reactivated =
-          existing.status === 'suspended' && updated.status !== 'suspended';
-        if (suspended || reactivated) {
-          await this.audit.record(
-            {
-              tenantId: id,
-              actor: { userId: adminId, role: 'platform_admin' },
-              action: suspended
-                ? AuditAction.TENANT_SUSPENDED
-                : AuditAction.TENANT_REACTIVATED,
-              targetType: 'tenant',
-              targetId: id,
-              before: { status: existing.status },
-              after: { status: updated.status },
-            },
-            tx,
-          );
-        }
-        return updated;
-      });
-    } catch (error) {
-      if (isPrismaError(error, 'P2025')) {
-        throw this.notFound(id);
+        throw error;
       }
-      throw error;
     }
+    return this.findOne(id);
   }
 
   async remove(id: string) {

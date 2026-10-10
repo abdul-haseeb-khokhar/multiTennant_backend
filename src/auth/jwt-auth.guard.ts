@@ -8,12 +8,14 @@ import { AuthGuard } from '@nestjs/passport';
 import { ApiException } from '../common/errors/api.exception';
 import { ErrorCode } from '../common/errors/error-codes';
 import { PrismaService } from '../prisma/prisma.service';
+import { assertTenantUsable } from './tenant-status';
 
 /**
  * Staff authentication for tenant routes:
  * 1. a valid staff JWT (401 otherwise),
  * 2. the token's tenant equals `:tenantId` in the URL (403 TENANT_MISMATCH),
- * 3. the tenant is not suspended (403 TENANT_SUSPENDED, B6).
+ * 3. the tenant is not suspended or closed (403 TENANT_SUSPENDED / TENANT_CLOSED, B6). The check reads
+ *    the `tenants.status` mirror of the subscription, kept in step by SubscriptionService.
  */
 @Injectable()
 export class JwtAuthGuard extends AuthGuard('jwt') {
@@ -44,13 +46,7 @@ export class JwtAuthGuard extends AuthGuard('jwt') {
     if (!tenant) {
       throw new UnauthorizedException();
     }
-    if (tenant.status === 'suspended') {
-      throw new ApiException(
-        HttpStatus.FORBIDDEN,
-        ErrorCode.TENANT_SUSPENDED,
-        'This tenant is suspended',
-      );
-    }
+    assertTenantUsable(tenant.status);
     return true;
   }
 }

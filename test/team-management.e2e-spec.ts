@@ -1,6 +1,8 @@
 import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { hashToken } from '../src/common/tokens/tokens';
+import { FakeClock } from '../src/billing/clock';
+import { installBilling } from './utils/billing-fixtures';
 import { mockTransaction, PrismaMock, prismaError } from './utils/prisma-mock';
 import { createTestApp } from './utils/test-app';
 
@@ -14,6 +16,7 @@ describe('Team management, account recovery, audit and i18n (e2e)', () => {
   let prisma: PrismaMock;
   let staffToken: Awaited<ReturnType<typeof createTestApp>>['staffToken'];
   let allowStaff: () => void;
+  let clock: FakeClock;
 
   const as = (
     role: Role,
@@ -22,7 +25,7 @@ describe('Team management, account recovery, audit and i18n (e2e)', () => {
   ) => `Bearer ${staffToken({ userId: `${role}-1`, tenantId, role }, record)}`;
 
   beforeAll(async () => {
-    ({ app, prisma, staffToken, allowStaff } = await createTestApp());
+    ({ app, prisma, staffToken, allowStaff, clock } = await createTestApp());
   });
 
   afterAll(async () => {
@@ -41,6 +44,10 @@ describe('Team management, account recovery, audit and i18n (e2e)', () => {
 
   describe('invitations (H1)', () => {
     beforeEach(() => {
+      // Starter: 3 seats, one used by the owner.
+      installBilling(prisma, clock, { subscription: { tenantId: 'tenant-a' } });
+      prisma.tenantUser.count.mockResolvedValue(1);
+      prisma.staffInvite.count.mockResolvedValue(0);
       prisma.tenantUser.findFirst.mockResolvedValue(null);
       // like Prisma with `omit: { tokenHash: true }`
       prisma.staffInvite.create.mockImplementation(

@@ -39,6 +39,12 @@ describe('Team management flows (real database)', () => {
         .send({ token: tokenFrom(res.body.verificationLink) })
         .expect(204);
     }
+    // These flows are about roles and lifecycle, not seats: give the tenant an unlimited plan so
+    // the Starter seat limit (covered in billing-flows.db-spec.ts) does not get in the way.
+    await prisma.subscription.update({
+      where: { tenantId: res.body.tenant.id },
+      data: { planCode: 'enterprise', currentPeriodEnd: null },
+    });
     return {
       tenantId: res.body.tenant.id as string,
       slug: res.body.tenant.slug as string,
@@ -177,7 +183,7 @@ describe('Team management flows (real database)', () => {
           role: 'agent',
           emailVerified: true,
         },
-        tenant: { slug: acme.slug, status: 'trial', plan: 'free' },
+        tenant: { slug: acme.slug, status: 'trial', plan: 'starter' },
         locale: 'en',
       });
     });
@@ -697,8 +703,8 @@ describe('Team management flows (real database)', () => {
       );
       expect(suspended).toMatchObject({
         actorRole: 'platform_admin',
-        before: { status: 'trial' },
-        after: { status: 'suspended' },
+        before: expect.objectContaining({ status: 'active' }),
+        after: expect.objectContaining({ status: 'suspended' }),
       });
     });
   });

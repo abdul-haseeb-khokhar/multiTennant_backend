@@ -18,6 +18,21 @@ export const AuditAction = {
   PASSWORD_RESET: 'password.reset',
   TENANT_SUSPENDED: 'tenant.suspended',
   TENANT_REACTIVATED: 'tenant.reactivated',
+  // billing (section I)
+  SUBSCRIPTION_CREATED: 'subscription.created',
+  SUBSCRIPTION_PAYMENT_RECORDED: 'subscription.payment_recorded',
+  SUBSCRIPTION_PAYMENT_FAILED: 'subscription.payment_failed',
+  SUBSCRIPTION_PLAN_CHANGED: 'subscription.plan_changed',
+  SUBSCRIPTION_CANCELED: 'subscription.canceled',
+  SUBSCRIPTION_PERIOD_ENDED: 'subscription.period_ended',
+  SUBSCRIPTION_EXTENDED: 'subscription.extended',
+  SUBSCRIPTION_CLOSED: 'subscription.closed',
+  DATA_USE_GRANTED: 'data_use.granted',
+  DATA_USE_REVOKED: 'data_use.revoked',
+  // gateway (Phase 3)
+  API_KEY_CREATED: 'apikey.created',
+  API_KEY_UPDATED: 'apikey.updated',
+  API_KEY_REVOKED: 'apikey.revoked',
 } as const;
 
 export interface AuditEntry {

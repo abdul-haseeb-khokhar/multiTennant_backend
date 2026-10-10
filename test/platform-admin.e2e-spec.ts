@@ -1,5 +1,7 @@
 import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
+import { FakeClock } from '../src/billing/clock';
+import { installBilling } from './utils/billing-fixtures';
 import { mockTransaction, PrismaMock, prismaError } from './utils/prisma-mock';
 import { createTestApp } from './utils/test-app';
 
@@ -8,6 +10,7 @@ describe('Platform admin routes (e2e)', () => {
   let prisma: PrismaMock;
   let platformToken: (id?: string) => string;
   let allowStaff: () => void;
+  let clock: FakeClock;
   let staffToken: (u: {
     userId: string;
     tenantId: string;
@@ -17,7 +20,7 @@ describe('Platform admin routes (e2e)', () => {
   const asAdmin = () => `Bearer ${platformToken()}`;
 
   beforeAll(async () => {
-    ({ app, prisma, platformToken, staffToken, allowStaff } =
+    ({ app, prisma, platformToken, staffToken, allowStaff, clock } =
       await createTestApp());
   });
 
@@ -85,47 +88,121 @@ describe('Platform admin routes (e2e)', () => {
     expect(res.body.code).toBe('TENANT_NOT_FOUND');
   });
 
-  it('PATCH changes plan and status (suspending a tenant)', async () => {
-    prisma.tenant.findUnique.mockResolvedValue({ id: 't1', status: 'active' });
-    prisma.tenant.update.mockResolvedValue({
-      id: 't1',
-      plan: 'pro',
-      status: 'suspended',
-    });
-    const res = await request(app.getHttpServer())
-      .patch('/v1/admin/tenants/t1')
-      .set('Authorization', asAdmin())
-      .send({ plan: 'pro', status: 'suspended' })
-      .expect(200);
-    expect(res.body).toMatchObject({ plan: 'pro', status: 'suspended' });
-    expect(prisma.tenant.update).toHaveBeenCalledWith({
-      where: { id: 't1' },
-      data: {
-        name: undefined,
-        plan: 'pro',
-        status: 'suspended',
-        defaultLocale: undefined,
-      },
-    });
-  });
+  describe('PATCH plan and status go through the subscription (the tenant columns are mirrors)', () => {
+    let billing: ReturnType<typeof installBilling>;
 
-  it("suspending a tenant is written to that tenant's audit log with the platform admin as actor (H6)", async () => {
-    prisma.tenant.findUnique.mockResolvedValue({ id: 't1', status: 'active' });
-    prisma.tenant.update.mockResolvedValue({ id: 't1', status: 'suspended' });
-    await request(app.getHttpServer())
-      .patch('/v1/admin/tenants/t1')
-      .set('Authorization', asAdmin())
-      .send({ status: 'suspended' })
-      .expect(200);
-    expect(prisma.auditLog.create).toHaveBeenCalledTimes(1);
-    expect(prisma.auditLog.create.mock.calls[0][0].data).toMatchObject({
-      tenantId: 't1',
-      actorUserId: 'admin-1',
-      actorRole: 'platform_admin',
-      action: 'tenant.suspended',
-      before: { status: 'active' },
-      after: { status: 'suspended' },
-      requestId: expect.any(String),
+    beforeEach(() => {
+      billing = installBilling(prisma, clock, {
+        subscription: { tenantId: 't1' },
+      });
+      prisma.tenant.findUnique.mockResolvedValue({
+        id: 't1',
+        name: 'Acme',
+        plan: 'starter',
+        status: 'trial',
+      });
+    });
+
+    it('suspends the tenant: subscription suspended, mirror written by the billing code, name untouched', async () => {
+      const res = await request(app.getHttpServer())
+        .patch('/v1/admin/tenants/t1')
+        .set('Authorization', asAdmin())
+        .send({ status: 'suspended' })
+        .expect(200);
+      expect(res.body).toMatchObject({ id: 't1' });
+      expect(billing.row).toMatchObject({
+        status: 'suspended',
+        statusBeforeSuspension: 'active',
+      });
+      expect(billing.mirrors).toEqual([
+        { id: 't1', plan: 'starter', status: 'suspended' },
+      ]);
+    });
+
+    it("suspending a tenant is written to that tenant's audit log with the platform admin as actor (H6)", async () => {
+      await request(app.getHttpServer())
+        .patch('/v1/admin/tenants/t1')
+        .set('Authorization', asAdmin())
+        .send({ status: 'suspended' })
+        .expect(200);
+      expect(prisma.auditLog.create).toHaveBeenCalledTimes(1);
+      expect(prisma.auditLog.create.mock.calls[0][0].data).toMatchObject({
+        tenantId: 't1',
+        actorUserId: 'admin-1',
+        actorRole: 'platform_admin',
+        action: 'tenant.suspended',
+        before: expect.objectContaining({ status: 'active' }),
+        after: expect.objectContaining({ status: 'suspended' }),
+        requestId: expect.any(String),
+      });
+    });
+
+    it('lifting the suspension restores the previous state and audits tenant.reactivated', async () => {
+      await request(app.getHttpServer())
+        .patch('/v1/admin/tenants/t1')
+        .set('Authorization', asAdmin())
+        .send({ status: 'suspended' })
+        .expect(200);
+      await request(app.getHttpServer())
+        .patch('/v1/admin/tenants/t1')
+        .set('Authorization', asAdmin())
+        .send({ status: 'active' })
+        .expect(200);
+      expect(billing.row).toMatchObject({ status: 'active' });
+      expect(billing.mirrors.at(-1)).toEqual({
+        id: 't1',
+        plan: 'starter',
+        status: 'trial',
+      });
+      expect(
+        prisma.auditLog.create.mock.calls.map(([a]) => a.data.action),
+      ).toEqual(['tenant.suspended', 'tenant.reactivated']);
+    });
+
+    it('a plan in the body is a plan change with no payment and no invoice', async () => {
+      await request(app.getHttpServer())
+        .patch('/v1/admin/tenants/t1')
+        .set('Authorization', asAdmin())
+        .send({ plan: 'free' })
+        .expect(200);
+      expect(billing.row).toMatchObject({
+        planCode: 'free',
+        currentPeriodEnd: null,
+      });
+      expect(billing.mirrors).toEqual([
+        { id: 't1', plan: 'free', status: 'active' },
+      ]);
+      expect(billing.invoices).toEqual([]);
+    });
+
+    it('never writes plan or status straight to the tenant row', async () => {
+      await request(app.getHttpServer())
+        .patch('/v1/admin/tenants/t1')
+        .set('Authorization', asAdmin())
+        .send({ name: 'Renamed', status: 'suspended' })
+        .expect(200);
+      for (const [arg] of prisma.tenant.update.mock.calls) {
+        if (arg.data.name !== undefined) {
+          expect(arg.data).toEqual({
+            name: 'Renamed',
+            defaultLocale: undefined,
+          });
+        }
+      }
+    });
+
+    it('409 INVALID_SUBSCRIPTION_STATE when the plan cannot change (suspended tenant)', async () => {
+      billing.row = {
+        ...billing.row!,
+        status: 'suspended',
+        statusBeforeSuspension: 'active',
+      };
+      const res = await request(app.getHttpServer())
+        .patch('/v1/admin/tenants/t1')
+        .set('Authorization', asAdmin())
+        .send({ plan: 'free' })
+        .expect(409);
+      expect(res.body.code).toBe('INVALID_SUBSCRIPTION_STATE');
     });
   });
 

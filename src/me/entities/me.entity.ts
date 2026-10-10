@@ -1,4 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { SubscriptionSummary } from '../../billing/entities/billing.entities';
 
 class MeUser {
   @ApiProperty({ format: 'uuid' })
@@ -34,10 +35,16 @@ class MeTenant {
   @ApiProperty({ example: 'acme' })
   slug: string;
 
-  @ApiProperty({ enum: ['free', 'pro', 'enterprise'] })
+  @ApiProperty({
+    enum: ['starter', 'free', 'pro', 'enterprise'],
+    description: 'Mirror of the subscription plan; prefer `subscription`.',
+  })
   plan: string;
 
-  @ApiProperty({ enum: ['trial', 'active', 'suspended'] })
+  @ApiProperty({
+    enum: ['trial', 'active', 'suspended', 'closed'],
+    description: 'Mirror of the subscription state; prefer `subscription`.',
+  })
   status: string;
 
   @ApiProperty({ example: 'en' })
@@ -50,6 +57,14 @@ export class Me {
 
   @ApiProperty({ type: MeTenant })
   tenant: MeTenant;
+
+  @ApiProperty({
+    type: SubscriptionSummary,
+    nullable: true,
+    description:
+      'Plan, status, period end, days left and limits, for the dashboard banner (reminders until in-app notifications exist, H5).',
+  })
+  subscription: SubscriptionSummary | null;
 
   @ApiProperty({
     example: 'ur',

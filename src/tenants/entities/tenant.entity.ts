@@ -11,10 +11,18 @@ export class Tenant {
   @ApiProperty({ example: 'acme' })
   slug: string;
 
-  @ApiProperty({ enum: ['free', 'pro', 'enterprise'] })
+  @ApiProperty({
+    enum: ['starter', 'free', 'pro', 'enterprise'],
+    description:
+      'Denormalised mirror of the subscription plan. The source of truth is GET /admin/tenants/:id/subscription.',
+  })
   plan: string;
 
-  @ApiProperty({ enum: ['trial', 'active', 'suspended'] })
+  @ApiProperty({
+    enum: ['trial', 'active', 'suspended', 'closed'],
+    description:
+      'Denormalised mirror of the subscription state (trial = on Starter). The source of truth is GET /admin/tenants/:id/subscription.',
+  })
   status: string;
 
   @ApiProperty({ example: 'en', description: 'Default language (H7)' })

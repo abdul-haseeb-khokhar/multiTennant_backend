@@ -5,3 +5,7 @@ process.env.DATABASE_URL = 'postgresql://unused:unused@localhost:5432/unused';
 process.env.FRONTEND_URL = 'http://localhost:5173';
 // Development mode that also returns emailed links in responses, so flows can be driven over HTTP.
 process.env.MAIL_MODE = 'link';
+// Engine: the in-process mock (the default), with instant tokens and a short first-token timeout so
+// the "model never answers" case takes a fraction of a second.
+process.env.ENGINE_FIRST_TOKEN_TIMEOUT_MS = '400';
+process.env.MOCK_ENGINE_TOKEN_DELAY_MS = '0';
