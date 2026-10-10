@@ -35,18 +35,33 @@ export class TenantUsersController {
   @Get()
   @Roles('owner', 'admin', 'agent')
   @ApiPaginatedResponse(TenantUser)
+  @ApiOperation({
+    summary: 'List the team (every role)',
+    description:
+      '`passwordChangedAt` and `emailVerifiedAt` are left out of the answer for the `agent` role: only owners and admins see them.',
+  })
   findAll(
     @Param('tenantId') tenantId: string,
     @Query() query: QueryTenantUserDto,
+    @CurrentUser() actor: AuthUser,
   ) {
-    return this.tenantUsersService.findAll(tenantId, query);
+    return this.tenantUsersService.findAll(tenantId, query, actor);
   }
 
   @Get(':id')
   @Roles('owner', 'admin', 'agent')
   @ApiOkResponse({ type: TenantUser })
-  findOne(@Param('tenantId') tenantId: string, @Param('id') id: string) {
-    return this.tenantUsersService.findOne(tenantId, id);
+  @ApiOperation({
+    summary: 'One team member (every role)',
+    description:
+      'Same fields as the list: `passwordChangedAt` and `emailVerifiedAt` only for owners and admins.',
+  })
+  findOne(
+    @Param('tenantId') tenantId: string,
+    @Param('id') id: string,
+    @CurrentUser() actor: AuthUser,
+  ) {
+    return this.tenantUsersService.findOne(tenantId, id, actor);
   }
 
   @Patch(':id')

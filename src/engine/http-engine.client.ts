@@ -1,13 +1,21 @@
 import { EngineClient } from './engine-client';
 import {
+  CONVERSATION_STATUSES,
+  ClaimInput,
+  ConversationCounts,
   CreateConversationInput,
   EngineCallContext,
   EngineConversation,
+  EngineConversationPage,
   EngineError,
   EngineMessage,
   EngineMessagePage,
   EngineStreamEvent,
   EscalateInput,
+  HumanMessageInput,
+  ListConversationsQuery,
+  ReleaseInput,
+  ResolveInput,
   SendMessageInput,
 } from './engine.types';
 import { readSse, toWireEvent } from './sse-parser';
@@ -99,6 +107,114 @@ export class HttpEngineClient extends EngineClient {
     return asConversation(body);
   }
 
+  async listConversations(
+    ctx: EngineCallContext,
+    query: ListConversationsQuery,
+  ): Promise<EngineConversationPage> {
+    const params = new URLSearchParams();
+    if (query.status?.length) params.set('status', query.status.join(','));
+    if (query.assignedUserId) {
+      params.set('assignedUserId', query.assignedUserId);
+    }
+    if (query.endCustomerId) params.set('endCustomerId', query.endCustomerId);
+    if (query.sort) params.set('sort', query.sort);
+    if (query.skip !== undefined) params.set('skip', String(query.skip));
+    if (query.take !== undefined) params.set('take', String(query.take));
+    const qs = params.size ? `?${params.toString()}` : '';
+    const record = asRecord(
+      await this.json(ctx, 'GET', `/internal/conversations${qs}`),
+    );
+    if (!Array.isArray(record.data)) {
+      throw new EngineError('protocol', 'The engine response lacks "data"');
+    }
+    const num = (key: string) =>
+      typeof record[key] === 'number' ? (record[key] as number) : 0;
+    return {
+      data: record.data.map(asConversation),
+      total: num('total'),
+      skip: num('skip'),
+      take: num('take'),
+    };
+  }
+
+  async countConversations(
+    ctx: EngineCallContext,
+    filter: { assignedUserId?: string } = {},
+  ): Promise<ConversationCounts> {
+    const qs = filter.assignedUserId
+      ? `?assignedUserId=${encodeURIComponent(filter.assignedUserId)}`
+      : '';
+    const record = asRecord(
+      await this.json(ctx, 'GET', `/internal/conversation-counts${qs}`),
+    );
+    const counts = {} as ConversationCounts;
+    for (const status of CONVERSATION_STATUSES) {
+      const value = record[status];
+      counts[status] = typeof value === 'number' ? value : 0;
+    }
+    return counts;
+  }
+
+  async claimConversation(
+    ctx: EngineCallContext,
+    conversationId: string,
+    input: ClaimInput,
+  ): Promise<EngineConversation> {
+    return asConversation(
+      await this.json(
+        ctx,
+        'POST',
+        this.conversationPath(conversationId, 'claim'),
+        input,
+      ),
+    );
+  }
+
+  async releaseConversation(
+    ctx: EngineCallContext,
+    conversationId: string,
+    input: ReleaseInput,
+  ): Promise<EngineConversation> {
+    return asConversation(
+      await this.json(
+        ctx,
+        'POST',
+        this.conversationPath(conversationId, 'release'),
+        input,
+      ),
+    );
+  }
+
+  async resolveConversation(
+    ctx: EngineCallContext,
+    conversationId: string,
+    input: ResolveInput,
+  ): Promise<EngineConversation> {
+    return asConversation(
+      await this.json(
+        ctx,
+        'POST',
+        this.conversationPath(conversationId, 'resolve'),
+        input,
+      ),
+    );
+  }
+
+  async sendHumanMessage(
+    ctx: EngineCallContext,
+    conversationId: string,
+    input: HumanMessageInput,
+  ): Promise<EngineMessage> {
+    return asMessage(
+      await this.json(
+        ctx,
+        'POST',
+        this.conversationPath(conversationId, 'human-messages'),
+        input,
+      ),
+    );
+  }
+
   async *sendMessage(
     ctx: EngineCallContext,
     conversationId: string,
@@ -124,6 +240,10 @@ export class HttpEngineClient extends EngineClient {
   }
 
   // -------------------------------------------------------------------------------------------
+
+  private conversationPath(conversationId: string, action: string) {
+    return `/internal/conversations/${encodeURIComponent(conversationId)}/${action}`;
+  }
 
   private async *stream(
     ctx: EngineCallContext,
@@ -235,6 +355,8 @@ export class HttpEngineClient extends EngineClient {
       Accept: accept,
     };
     if (ctx.requestId) headers['X-Request-Id'] = ctx.requestId;
+    if (ctx.actingUserId) headers['X-Acting-User-Id'] = ctx.actingUserId;
+    if (ctx.actingRole) headers['X-Acting-Role'] = ctx.actingRole;
     if (ctx.idempotencyKey) headers['Idempotency-Key'] = ctx.idempotencyKey;
     if (body !== undefined) headers['Content-Type'] = 'application/json';
 
@@ -332,6 +454,17 @@ function asConversation(value: unknown): EngineConversation {
     createdAt: str(record, 'createdAt'),
     lastMessageAt:
       typeof record.lastMessageAt === 'string' ? record.lastMessageAt : null,
+    assignedUserId:
+      typeof record.assignedUserId === 'string' ? record.assignedUserId : null,
+    escalatedAt:
+      typeof record.escalatedAt === 'string' ? record.escalatedAt : null,
+    summary: typeof record.summary === 'string' ? record.summary : null,
+    resolvedAt:
+      typeof record.resolvedAt === 'string' ? record.resolvedAt : null,
+    resolvedBy:
+      typeof record.resolvedBy === 'string'
+        ? (record.resolvedBy as EngineConversation['resolvedBy'])
+        : null,
   };
 }
 

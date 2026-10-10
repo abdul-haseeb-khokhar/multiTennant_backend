@@ -8,11 +8,17 @@ describe('BillingScheduler', () => {
         .fn()
         .mockResolvedValue({ processed: 0, skipped: false }),
     };
+    const reminders = { generate: jest.fn().mockResolvedValue({ created: 0 }) };
+    const housekeeping = { purge: jest.fn().mockResolvedValue({}) };
+    const clock = { now: () => new Date('2026-10-10T00:00:00.000Z') };
     const scheduler = new BillingScheduler(
       { get: (key: string) => env[key] } as unknown as ConfigService,
       subscriptions as never,
+      reminders as never,
+      housekeeping as never,
+      clock as never,
     );
-    return { scheduler, subscriptions };
+    return { scheduler, subscriptions, reminders, housekeeping };
   };
 
   beforeEach(() => jest.useFakeTimers());
@@ -52,6 +58,24 @@ describe('BillingScheduler', () => {
     await expect(scheduler.run()).resolves.toBeUndefined();
     await scheduler.run();
     expect(subscriptions.processDueTransitions).toHaveBeenCalledTimes(2);
+  });
+
+  it('after the transitions it creates the reminders and purges, each step failing alone', async () => {
+    const { scheduler, subscriptions, reminders, housekeeping } = make({
+      NODE_ENV: 'production',
+    });
+    subscriptions.processDueTransitions.mockRejectedValueOnce(
+      new Error('db down'),
+    );
+    reminders.generate.mockRejectedValueOnce(new Error('reminders down'));
+    await expect(scheduler.run()).resolves.toBeUndefined();
+    expect(reminders.generate).toHaveBeenCalledTimes(1);
+    expect(housekeeping.purge).toHaveBeenCalledWith(
+      new Date('2026-10-10T00:00:00.000Z'),
+    );
+    await scheduler.run();
+    expect(reminders.generate).toHaveBeenCalledTimes(2);
+    expect(housekeeping.purge).toHaveBeenCalledTimes(2);
   });
 
   it('does not start a second sweep while one is still running', async () => {

@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { TenantUser } from '../../tenant-users/entities/tenant-user.entity';
 import { Tenant } from '../../tenants/entities/tenant.entity';
+import { DEV_ONLY } from '../../common/openapi/dev-only';
 
 export class SignupResponse {
   @ApiProperty({ type: Tenant })
@@ -15,8 +16,9 @@ export class SignupResponse {
   access_token: string;
 
   @ApiPropertyOptional({
+    ...DEV_ONLY,
     description:
-      'Only with MAIL_MODE=link (development): the email-verification link.',
+      'DEVELOPMENT ONLY: present only when the server runs with MAIL_MODE=link (refused in production); the email-verification link.',
   })
   verificationLink?: string;
 }

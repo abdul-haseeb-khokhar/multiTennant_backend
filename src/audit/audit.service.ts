@@ -33,6 +33,10 @@ export const AuditAction = {
   API_KEY_CREATED: 'apikey.created',
   API_KEY_UPDATED: 'apikey.updated',
   API_KEY_REVOKED: 'apikey.revoked',
+  // human takeover (Phase 4); never the message text
+  CONVERSATION_CLAIMED: 'conversation.claimed',
+  CONVERSATION_RELEASED: 'conversation.released',
+  CONVERSATION_RESOLVED: 'conversation.resolved',
 } as const;
 
 export interface AuditEntry {

@@ -1,6 +1,14 @@
 {
   "action.proposed.body": "The AI proposed an action that needs approval: {action}.",
   "action.proposed.title": "An action needs your approval",
+  "billing.downgraded.body": "Your {fromPlan} plan has ended. Your workspace is now on the {toPlan} plan.",
+  "billing.downgraded.title": "Your plan changed",
+  "billing.grace_started.body": "Your {plan} plan was not renewed. It stays active for {graceDaysLeft, plural, one {# more day} other {# more days}}, then your workspace moves to the Free plan.",
+  "billing.grace_started.title": "Your plan payment is overdue",
+  "billing.period_ending.body": "Your {plan} plan ends in {daysLeft, plural, one {# day} other {# days}}. Renew to keep your limits.",
+  "billing.period_ending.title": "Your plan ends soon",
+  "billing.trial_ending.body": "Your trial ends in {daysLeft, plural, one {# day} other {# days}}. Choose a plan to keep your limits.",
+  "billing.trial_ending.title": "Your trial ends soon",
   "conversation.assigned.body": "{customer} was assigned to you.",
   "conversation.assigned.title": "A conversation was assigned to you",
   "conversation.escalated.body": "{customer} was handed over to a human agent.",
@@ -19,6 +27,8 @@
   "ingestion.failed.title": "A knowledge source failed",
   "invite.accepted.body": "{name} accepted the invitation and joined the team.",
   "invite.accepted.title": "A new team member joined",
-  "usage.threshold.body": "You have used {percent}% of your plan this month.",
+  "usage.limit_reached.body": "You have used all {limit} conversations included in your plan. New conversations go to your team until the next period or an upgrade.",
+  "usage.limit_reached.title": "Plan limit reached",
+  "usage.threshold.body": "You have used {percent}% of the {limit} conversations included in your plan.",
   "usage.threshold.title": "Plan usage warning"
 }

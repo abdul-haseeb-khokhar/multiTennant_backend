@@ -24,3 +24,8 @@ export type Namespace = (typeof NAMESPACES)[number];
 export const DEFAULT_LOCALE = 'en';
 
 export const LOCALE_CODES = LOCALES.map((locale) => locale.code);
+
+/** True when `code` is a locale of the registry (exact code, case-sensitive: `ur`, not `UR`). */
+export function isSupportedLocale(code: string): boolean {
+  return LOCALES.some((locale) => locale.code === code);
+}

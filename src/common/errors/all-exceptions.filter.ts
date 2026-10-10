@@ -27,6 +27,8 @@ interface ErrorBody {
   code: string;
   message: string;
   details?: string[];
+  /** 429 only: seconds until the caller may try again (also the `Retry-After` header). */
+  retryAfterSeconds?: number;
   requestId?: string;
 }
 
@@ -58,6 +60,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
     }
 
     if (exception instanceof RateLimitedException) {
+      body.retryAfterSeconds = exception.retryAfterSeconds;
       response.setHeader('Retry-After', String(exception.retryAfterSeconds));
     }
     response.status(body.statusCode).json(body);

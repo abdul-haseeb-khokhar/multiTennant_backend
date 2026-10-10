@@ -15,6 +15,8 @@ export const WIDGET_ALLOWED_HEADERS = [
   'Content-Type',
   'Idempotency-Key',
   'X-Request-Id',
+  // A fetch-based reader of GET /v1/widget/events sends it to resume after a reconnect.
+  'Last-Event-ID',
 ];
 
 /**

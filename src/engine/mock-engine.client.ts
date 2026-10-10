@@ -1,15 +1,26 @@
 import { randomUUID } from 'node:crypto';
 import { EngineClient } from './engine-client';
 import {
+  CONVERSATION_STATUSES,
+  ClaimInput,
+  ConversationCounts,
   ConversationStatus,
   CreateConversationInput,
   EngineCallContext,
   EngineConversation,
+  EngineConversationPage,
   EngineError,
+  EngineEventEnvelope,
+  EngineEventSink,
   EngineMessage,
   EngineStreamEvent,
   EscalateInput,
   EscalationReason,
+  HumanMessageInput,
+  ListConversationsQuery,
+  ReleaseInput,
+  ResolveInput,
+  ResolvedBy,
   SendMessageInput,
 } from './engine.types';
 import { withDeadlines } from './stream-deadlines';
@@ -41,7 +52,19 @@ export const MOCK_COMMANDS = {
   SLOW: '/slow',
   /** The engine starts answering, then reports an error mid-stream. */
   BROKEN_STREAM: '/broken',
+  /** The AI proposes an action that needs approval: the engine emits `action.proposed` (E4). */
+  PROPOSE_ACTION: '/action',
 } as const;
+
+/** The system lines (`contentKey`, keys of the `widget` namespace) the mock engine writes. */
+export const MOCK_SYSTEM_KEYS = {
+  AGENT_JOINED: 'agent.joined',
+  AGENT_LEFT: 'agent.left',
+  RESOLVED: 'resolved.notice',
+} as const;
+
+/** How many delivered events the mock remembers for assertions. */
+const MAX_EMITTED = 500;
 
 interface StoredConversation {
   tenantId: string;
@@ -63,7 +86,7 @@ const HUMAN_REQUEST =
 
 const CANNED: [RegExp, string][] = [
   [
-    /hour|open|وقت|کھلے/i,
+    /hour|open|وقت|کھلے/i,
     'We are open from 9:00 to 18:00, Monday to Saturday.',
   ],
   [
@@ -79,6 +102,8 @@ const GENERIC_REPLY =
   'Thanks for your message. I am checking our knowledge base. Could you share a few more details, such as your order number?';
 const HANDOFF_REPLY =
   'I will bring in a colleague who can help you with this. Please stay in the chat.';
+const ACTION_REPLY =
+  'I have asked a colleague to approve a refund for you. You will hear from us soon.';
 
 /**
  * An in-process stand-in for the AI engine that behaves like the contract in
@@ -88,13 +113,22 @@ const HANDOFF_REPLY =
  * and the reply is streamed token by token. Selected with `ENGINE_MODE=mock`; refused in
  * production. State is lost on restart.
  *
+ * Since Phase 4 it also plays the staff side (list, counts, claim, release, resolve, human
+ * messages) and pushes the events of D5 to the backend's event receiver (`setEventSink`), exactly
+ * the events the real engine will POST to `/internal/events`: the dashboard, the notifications and
+ * the widget stream can be driven end to end without the engine.
+ *
  * Force behaviour with the customer message (see `MOCK_COMMANDS`), or from a test with
- * `setDown`, `setTokenDelay` and `postHumanMessage`.
+ * `setDown`, `setTokenDelay`, `postHumanMessage`, `resolve` and `flushEvents`.
  */
 export class MockEngineClient extends EngineClient {
   private readonly conversations = new Map<string, StoredConversation>();
   private readonly idempotent = new Map<string, unknown>();
   private down = false;
+  private sink?: EngineEventSink;
+  private delivery: Promise<void> = Promise.resolve();
+  /** Every event the mock produced (newest last, bounded): for assertions in tests. */
+  readonly emitted: EngineEventEnvelope[] = [];
 
   constructor(private options: MockEngineOptions = DEFAULT_MOCK_OPTIONS) {
     super();
@@ -111,9 +145,24 @@ export class MockEngineClient extends EngineClient {
     this.options = { ...this.options, ...options };
   }
 
+  /** Where events are delivered, in order, one at a time (the backend's receiver). */
+  setEventSink(sink: EngineEventSink | undefined) {
+    this.sink = sink;
+  }
+
+  /** Resolves when every event produced so far has been handed to the sink. */
+  async flushEvents() {
+    let pending: Promise<void>;
+    do {
+      pending = this.delivery;
+      await pending;
+    } while (pending !== this.delivery);
+  }
+
   reset() {
     this.conversations.clear();
     this.idempotent.clear();
+    this.emitted.length = 0;
     this.down = false;
   }
 
@@ -134,7 +183,14 @@ export class MockEngineClient extends EngineClient {
     ).length;
   }
 
-  /** Simulates a staff member replying (Phase 4 makes this real): `author_type=human`. */
+  /** The events of one type produced for a tenant (assertions in tests). */
+  eventsOf(tenantId: string, type: string) {
+    return this.emitted.filter(
+      (e) => e.tenantId === tenantId && e.type === type,
+    );
+  }
+
+  /** Simulates a staff member replying: assigns them and stores an `author_type=human` message. */
   postHumanMessage(
     tenantId: string,
     conversationId: string,
@@ -143,6 +199,7 @@ export class MockEngineClient extends EngineClient {
   ) {
     const stored = this.require(tenantId, conversationId);
     stored.conversation.status = 'human_active';
+    stored.conversation.assignedUserId = userId;
     this.addMessage(stored, {
       authorType: 'human',
       authorUserId: userId,
@@ -150,9 +207,13 @@ export class MockEngineClient extends EngineClient {
     });
   }
 
-  /** Simulates a staff member resolving the conversation: it accepts no more messages. */
-  resolve(tenantId: string, conversationId: string) {
-    this.require(tenantId, conversationId).conversation.status = 'resolved';
+  /** Simulates the conversation being resolved: it accepts no more messages. */
+  resolve(
+    tenantId: string,
+    conversationId: string,
+    resolvedBy: ResolvedBy = 'human',
+  ) {
+    this.finish(this.require(tenantId, conversationId), resolvedBy);
   }
 
   // ---- EngineClient -------------------------------------------------------------------------
@@ -176,14 +237,24 @@ export class MockEngineClient extends EngineClient {
         escalationReason: null,
         createdAt: now,
         lastMessageAt: null,
+        assignedUserId: null,
+        escalatedAt: null,
+        summary: null,
+        resolvedAt: null,
+        resolvedBy: null,
       };
       this.conversations.set(key(ctx.tenantId, conversation.id), {
         tenantId: ctx.tenantId,
         conversation,
         messages: [],
       });
+      this.emit(ctx.tenantId, 'conversation.created', {
+        conversationId: conversation.id,
+        endCustomerId: input.endCustomerId,
+        channel: input.channel,
+      });
       return conversation;
-    }).then(clone);
+    });
   }
 
   async getConversation(
@@ -212,15 +283,173 @@ export class MockEngineClient extends EngineClient {
     input: EscalateInput,
   ): Promise<EngineConversation> {
     this.assertUp();
-    const stored = this.require(ctx.tenantId, conversationId);
-    if (stored.conversation.status === 'resolved') {
-      throw new EngineError('conflict', 'The conversation is resolved', 409);
+    return this.once(ctx, `escalate:${conversationId}`, () => {
+      const stored = this.require(ctx.tenantId, conversationId);
+      if (stored.conversation.status === 'resolved') {
+        throw new EngineError('conflict', 'The conversation is resolved', 409);
+      }
+      if (stored.conversation.status === 'active') {
+        this.markEscalated(stored, input.reason, input.summary);
+      }
+      return stored.conversation;
+    });
+  }
+
+  async listConversations(
+    ctx: EngineCallContext,
+    query: ListConversationsQuery,
+  ): Promise<EngineConversationPage> {
+    this.assertUp();
+    const skip = Math.max(query.skip ?? 0, 0);
+    const take = Math.min(Math.max(query.take ?? 20, 1), 100);
+    const wanted = query.status?.length ? new Set(query.status) : undefined;
+    const rows = [...this.conversations.values()]
+      // The tenant is part of the lookup: another tenant's conversations do not exist for you.
+      .filter((s) => s.tenantId === ctx.tenantId)
+      .map((s) => s.conversation)
+      .filter((c) => !wanted || wanted.has(c.status))
+      .filter(
+        (c) =>
+          !query.assignedUserId || c.assignedUserId === query.assignedUserId,
+      )
+      .filter(
+        (c) => !query.endCustomerId || c.endCustomerId === query.endCustomerId,
+      );
+    const instant = (value: string | null, fallback: string) =>
+      Date.parse(value ?? fallback);
+    rows.sort((a, b) => {
+      if (query.sort === 'escalatedAt') {
+        // Oldest waiting first; a conversation that never escalated sorts last.
+        const diff =
+          instant(a.escalatedAt, '9999-12-31T00:00:00.000Z') -
+          instant(b.escalatedAt, '9999-12-31T00:00:00.000Z');
+        return diff || a.id.localeCompare(b.id);
+      }
+      const diff =
+        instant(b.lastMessageAt, b.createdAt) -
+        instant(a.lastMessageAt, a.createdAt);
+      return diff || a.id.localeCompare(b.id);
+    });
+    return {
+      data: rows.slice(skip, skip + take).map(clone),
+      total: rows.length,
+      skip,
+      take,
+    };
+  }
+
+  async countConversations(
+    ctx: EngineCallContext,
+    filter: { assignedUserId?: string } = {},
+  ): Promise<ConversationCounts> {
+    this.assertUp();
+    const counts = Object.fromEntries(
+      CONVERSATION_STATUSES.map((status) => [status, 0]),
+    ) as ConversationCounts;
+    for (const stored of this.conversations.values()) {
+      if (stored.tenantId !== ctx.tenantId) continue;
+      const c = stored.conversation;
+      if (filter.assignedUserId && c.assignedUserId !== filter.assignedUserId) {
+        continue;
+      }
+      counts[c.status] += 1;
     }
-    if (stored.conversation.status === 'active') {
-      stored.conversation.status = 'escalated';
-      stored.conversation.escalationReason = input.reason;
-    }
-    return clone(stored.conversation);
+    return counts;
+  }
+
+  async claimConversation(
+    ctx: EngineCallContext,
+    conversationId: string,
+    input: ClaimInput,
+  ): Promise<EngineConversation> {
+    this.assertUp();
+    return this.once(ctx, `claim:${conversationId}`, () => {
+      const stored = this.require(ctx.tenantId, conversationId);
+      const c = stored.conversation;
+      if (c.status === 'resolved') throw resolvedConflict();
+      // Atomic by construction (one synchronous step): only an unassigned active/escalated
+      // conversation can be claimed.
+      if (c.status === 'human_active' || c.assignedUserId) {
+        throw new EngineError(
+          'conflict',
+          'The conversation is already claimed',
+          409,
+          'CONVERSATION_ALREADY_CLAIMED',
+        );
+      }
+      c.status = 'human_active';
+      c.assignedUserId = input.userId;
+      this.emit(ctx.tenantId, 'conversation.assigned', {
+        conversationId,
+        assignedUserId: input.userId,
+        assignedByUserId: input.userId,
+      });
+      this.addSystemLine(stored, MOCK_SYSTEM_KEYS.AGENT_JOINED);
+      return c;
+    });
+  }
+
+  async releaseConversation(
+    ctx: EngineCallContext,
+    conversationId: string,
+    input: ReleaseInput,
+  ): Promise<EngineConversation> {
+    this.assertUp();
+    return this.once(ctx, `release:${conversationId}`, () => {
+      const stored = this.require(ctx.tenantId, conversationId);
+      const c = stored.conversation;
+      this.assertHolder(c, input.userId, input.force === true);
+      const previousUserId = c.assignedUserId;
+      if (input.to === 'resolved') {
+        this.finish(stored, 'human');
+        return c;
+      }
+      c.status = input.to;
+      c.assignedUserId = null;
+      if (input.to === 'escalated') c.escalatedAt ??= new Date().toISOString();
+      this.emit(ctx.tenantId, 'conversation.released', {
+        conversationId,
+        to: input.to,
+        previousUserId,
+        ...(input.reason && { reason: input.reason }),
+      });
+      this.addSystemLine(stored, MOCK_SYSTEM_KEYS.AGENT_LEFT);
+      return c;
+    });
+  }
+
+  async resolveConversation(
+    ctx: EngineCallContext,
+    conversationId: string,
+    input: ResolveInput,
+  ): Promise<EngineConversation> {
+    this.assertUp();
+    return this.once(ctx, `resolve:${conversationId}`, () => {
+      const stored = this.require(ctx.tenantId, conversationId);
+      this.assertHolder(stored.conversation, input.userId, false);
+      this.finish(stored, 'human');
+      return stored.conversation;
+    });
+  }
+
+  async sendHumanMessage(
+    ctx: EngineCallContext,
+    conversationId: string,
+    input: HumanMessageInput,
+  ): Promise<EngineMessage> {
+    this.assertUp();
+    return this.once(ctx, `human:${conversationId}`, () => {
+      const stored = this.require(ctx.tenantId, conversationId);
+      this.assertHolder(stored.conversation, input.userId, false);
+      if (!input.content.trim()) {
+        throw new EngineError('rejected', 'The message is empty', 400);
+      }
+      return this.addMessage(stored, {
+        authorType: 'human',
+        authorUserId: input.userId,
+        content: input.content,
+      });
+    });
   }
 
   async *sendMessage(
@@ -269,7 +498,7 @@ export class MockEngineClient extends EngineClient {
         ) as MessageResult | undefined)
       : undefined;
     if (replay) {
-      yield* this.emit(replay, signal, true);
+      yield* this.emitStream(replay, signal, true);
       return;
     }
 
@@ -300,7 +529,7 @@ export class MockEngineClient extends EngineClient {
 
     if (!wantsReply) {
       remember();
-      yield* this.emit(result, signal, false);
+      yield* this.emitStream(result, signal, false);
       return;
     }
 
@@ -323,11 +552,15 @@ export class MockEngineClient extends EngineClient {
       );
     }
 
+    const proposeAction = text.startsWith(MOCK_COMMANDS.PROPOSE_ACTION);
     const handoff =
       text.startsWith(MOCK_COMMANDS.ESCALATE) || HUMAN_REQUEST.test(text);
     result.replyText = handoff
       ? HANDOFF_REPLY
-      : (CANNED.find(([pattern]) => pattern.test(text))?.[1] ?? GENERIC_REPLY);
+      : proposeAction
+        ? ACTION_REPLY
+        : (CANNED.find(([pattern]) => pattern.test(text))?.[1] ??
+          GENERIC_REPLY);
     const reply = this.addMessage(stored, {
       authorType: 'ai',
       content: result.replyText,
@@ -337,21 +570,38 @@ export class MockEngineClient extends EngineClient {
       tokensIn: Math.ceil(input.content.length / 4) + 50,
       tokensOut: Math.ceil(result.replyText.length / 4),
     };
+    this.emit(ctx.tenantId, 'usage.recorded', {
+      conversationId: stored.conversation.id,
+      messageId: reply.id,
+      tokensIn: result.usage.tokensIn,
+      tokensOut: result.usage.tokensOut,
+      model: 'mock-llm-1',
+    });
+    if (proposeAction) {
+      this.emit(ctx.tenantId, 'action.proposed', {
+        actionId: randomUUID(),
+        conversationId: stored.conversation.id,
+        action: 'refund',
+      });
+    }
     if (handoff) {
-      stored.conversation.status = 'escalated';
-      stored.conversation.escalationReason = 'customer_requested';
       result.escalation = {
         reason: 'customer_requested',
         summary: 'The customer asked for a human.',
       };
+      this.markEscalated(
+        stored,
+        result.escalation.reason,
+        result.escalation.summary,
+      );
     }
     result.status = stored.conversation.status;
     remember();
-    yield* this.emit(result, signal, true, true);
+    yield* this.emitStream(result, signal, true, true);
   }
 
   /** Streams a stored result (first run and replay look the same, as the contract says). */
-  private async *emit(
+  private async *emitStream(
     result: MessageResult,
     signal: AbortSignal,
     withReply: boolean,
@@ -415,6 +665,61 @@ export class MockEngineClient extends EngineClient {
     return stored;
   }
 
+  /** Release, resolve and reply need a `human_active` conversation held by `userId` (unless forced). */
+  private assertHolder(c: EngineConversation, userId: string, force: boolean) {
+    if (c.status === 'resolved') throw resolvedConflict();
+    if (
+      c.status !== 'human_active' ||
+      (!force && c.assignedUserId !== userId)
+    ) {
+      throw new EngineError(
+        'conflict',
+        'The conversation is not assigned to this user',
+        409,
+        'CONVERSATION_NOT_ASSIGNED_TO_YOU',
+      );
+    }
+  }
+
+  private markEscalated(
+    stored: StoredConversation,
+    reason: EscalationReason,
+    summary?: string,
+  ) {
+    const c = stored.conversation;
+    c.status = 'escalated';
+    c.escalationReason = reason;
+    c.escalatedAt = new Date().toISOString();
+    c.summary = summary ?? c.summary;
+    this.emit(stored.tenantId, 'conversation.escalated', {
+      conversationId: c.id,
+      endCustomerId: c.endCustomerId,
+      reason,
+      ...(summary && { summary }),
+    });
+  }
+
+  private finish(stored: StoredConversation, resolvedBy: ResolvedBy) {
+    const c = stored.conversation;
+    c.status = 'resolved';
+    c.assignedUserId = null;
+    c.resolvedAt = new Date().toISOString();
+    c.resolvedBy = resolvedBy;
+    this.emit(stored.tenantId, 'conversation.resolved', {
+      conversationId: c.id,
+      resolvedBy,
+    });
+    this.addSystemLine(stored, MOCK_SYSTEM_KEYS.RESOLVED);
+  }
+
+  private addSystemLine(stored: StoredConversation, contentKey: string) {
+    return this.addMessage(stored, {
+      authorType: 'system',
+      content: '',
+      contentKey,
+    });
+  }
+
   private addMessage(
     stored: StoredConversation,
     message: Pick<EngineMessage, 'authorType' | 'content'> &
@@ -431,21 +736,51 @@ export class MockEngineClient extends EngineClient {
     };
     stored.messages.push(full);
     stored.conversation.lastMessageAt = now;
+    this.emit(stored.tenantId, 'message.created', {
+      conversationId: full.conversationId,
+      messageId: full.id,
+      authorType: full.authorType,
+      createdAt: full.createdAt,
+      // The text travels only for what a customer may see (staff replies and system lines).
+      ...((full.authorType === 'human' || full.authorType === 'system') && {
+        content: full.content,
+        contentKey: full.contentKey,
+        authorUserId: full.authorUserId,
+      }),
+    });
     return full;
   }
 
-  /** Runs `create` once per Idempotency-Key (per tenant and operation). */
+  /** Queues an event for the sink; delivery is in order and never breaks the engine call. */
+  private emit(tenantId: string, type: string, data: Record<string, unknown>) {
+    const envelope: EngineEventEnvelope = {
+      id: randomUUID(),
+      type,
+      tenantId,
+      occurredAt: new Date().toISOString(),
+      data,
+    };
+    this.emitted.push(envelope);
+    if (this.emitted.length > MAX_EMITTED) this.emitted.shift();
+    const sink = this.sink;
+    if (!sink) return;
+    this.delivery = this.delivery
+      .then(() => sink(envelope))
+      .catch(() => undefined);
+  }
+
+  /** Runs `create` once per Idempotency-Key (per tenant and operation); a replay returns a copy of the first result. */
   private async once<T>(
     ctx: EngineCallContext,
     operation: string,
     create: () => T,
   ): Promise<T> {
-    if (!ctx.idempotencyKey) return create();
+    if (!ctx.idempotencyKey) return clone(create());
     const k = idemKey(ctx.tenantId, operation, ctx);
-    if (this.idempotent.has(k)) return this.idempotent.get(k) as T;
-    const created = create();
+    if (this.idempotent.has(k)) return clone(this.idempotent.get(k) as T);
+    const created = clone(create());
     this.idempotent.set(k, created);
-    return created;
+    return clone(created);
   }
 }
 
@@ -455,6 +790,15 @@ function key(tenantId: string, id: string) {
 
 function idemKey(tenantId: string, operation: string, ctx: EngineCallContext) {
   return `${tenantId}|${operation}|${ctx.idempotencyKey}`;
+}
+
+function resolvedConflict() {
+  return new EngineError(
+    'conflict',
+    'The conversation is resolved',
+    409,
+    'CONVERSATION_RESOLVED',
+  );
 }
 
 function clone<T>(value: T): T {

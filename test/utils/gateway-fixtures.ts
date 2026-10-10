@@ -31,7 +31,7 @@ const sha256 = (value: string) =>
   createHash('sha256').update(value).digest('hex');
 
 /** Does `row` satisfy a Prisma-style `where` (the small subset the gateway uses)? */
-function matches(row: Row, where: Row = {}): boolean {
+export function matches(row: Row, where: Row = {}): boolean {
   return Object.entries(where).every(([field, condition]) => {
     if (field === 'OR') {
       return (condition as Row[]).some((alternative) =>
@@ -47,6 +47,8 @@ function matches(row: Row, where: Row = {}): boolean {
     ) {
       if ('has' in condition)
         return (value as unknown[]).includes(condition.has);
+      if ('in' in condition) return (condition.in as unknown[]).includes(value);
+      if ('lte' in condition) return value !== null && value <= condition.lte;
       if ('lt' in condition) return value !== null && value < condition.lt;
       if ('gte' in condition) return value >= condition.gte;
       if ('gt' in condition) return value > condition.gt;

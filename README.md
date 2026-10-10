@@ -7,10 +7,12 @@ Backend core of a multi-tenant **AI customer-support platform**. Businesses and 
 | Phase | Scope | State |
 |---|---|---|
 | 0 | Foundation and hardening (roles, `/v1`, error codes, platform admin, tests, CI) | merged |
-| 1 | Account and team management (invites, password reset, email verification, audit log, i18n) | merged (real mail provider still open, H3) |
+| 1 | Account and team management (invites, password reset, email verification, audit log, i18n) | merged (mail provider: Resend chosen, built in Phase 4C) |
 | 2B | Billing foundation (plans, Starter → Free, subscriptions, entitlements, manual payments) | merged (tax wording and training-data consent stay open) |
 | 3 | Gateway and widget entry (API keys, widget sessions, streamed chat, usage, fallbacks) | merged; runs against a **mock engine** only |
-| 4 and later | Human-agent flow, notifications, tenant configuration, WhatsApp and voice, hardening | planned, see [docs/backend-roadmap.md](docs/backend-roadmap.md) |
+| 3B | Frontend gap-report fixes (password limit, proxy-aware IPs, invite preview, locale validation, OpenAPI fixes) | done on branch `phase-4-human-agent`, not merged yet |
+| 4 | Human takeover (conversation API, claim/reply/release/resolve), engine event receiver, live streams, in-app notifications and billing reminders | done on branch `phase-4-human-agent` against the **mock engine** only, not merged yet |
+| 4B and later | Overage setting, mail provider, tenant configuration, WhatsApp and voice, hardening | planned, see [docs/backend-roadmap.md](docs/backend-roadmap.md) |
 
 ## Documentation
 
@@ -36,7 +38,7 @@ npx prisma generate
 npm run start:dev           # http://localhost:3000, API under /v1, docs at /docs
 ```
 
-For local development MAIL_MODE=link returns invite, reset and verification links in the API responses (the app refuses to start with it when NODE_ENV=production). The engine defaults to the in-process mock (`ENGINE_MODE=mock`); see [docs/contracts/README.md](docs/contracts/README.md) for a curl walkthrough, or run `npm run widget:walkthrough` against the running server.
+For local development MAIL_MODE=link returns invite, reset and verification links in the API responses (the app refuses to start with it when NODE_ENV=production). The engine defaults to the in-process mock (`ENGINE_MODE=mock`); see [docs/contracts/README.md](docs/contracts/README.md) for a curl walkthrough, or run `npm run widget:walkthrough` / `npm run handoff:walkthrough` against the running server.
 
 Create a platform admin (needed for `/v1/admin/...`):
 
@@ -53,6 +55,8 @@ npm run test:e2e         # HTTP tests over the real AppModule, Prisma mocked
 TEST_DATABASE_URL=postgresql://…/<throwaway db> npm run test:db   # account, billing and gateway flows against a REAL throwaway Postgres
 npm run lint             # oxlint (type-aware)
 npm run openapi:export   # regenerate docs/openapi.json after changing a route or DTO
+npm run widget:walkthrough   # scripted widget chat against a running backend (mock engine)
+npm run handoff:walkthrough  # the whole human hand-off: escalate, notify, claim, reply, release, resolve (mock engine, MAIL_MODE=link)
 npm run i18n:check       # warn about translation keys missing in a locale
 ```
 

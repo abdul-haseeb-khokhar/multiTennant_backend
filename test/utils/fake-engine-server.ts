@@ -132,17 +132,74 @@ export class FakeEngineServer {
       tenantId,
       requestId: header(req, 'x-request-id'),
       idempotencyKey: header(req, 'idempotency-key'),
+      actingUserId: header(req, 'x-acting-user-id'),
+      actingRole: header(req, 'x-acting-role'),
     };
     const input = (body ?? {}) as Record<string, any>;
 
     try {
+      if (path === '/internal/conversation-counts' && req.method === 'GET') {
+        return json(
+          res,
+          200,
+          await this.engine.countConversations(ctx, {
+            assignedUserId: url.searchParams.get('assignedUserId') ?? undefined,
+          }),
+        );
+      }
       const route =
-        /^\/internal\/conversations(?:\/([^/]+)(?:\/(messages|escalate))?)?$/.exec(
+        /^\/internal\/conversations(?:\/([^/]+)(?:\/(messages|escalate|claim|release|resolve|human-messages))?)?$/.exec(
           path,
         );
       if (!route) return json(res, 404, errorBody(404, 'NOT_FOUND'));
       const [, id, action] = route;
 
+      if (!id && req.method === 'GET') {
+        const num = (name: string) =>
+          url.searchParams.has(name)
+            ? Number(url.searchParams.get(name))
+            : undefined;
+        return json(
+          res,
+          200,
+          await this.engine.listConversations(ctx, {
+            status: url.searchParams.get('status')?.split(',') as any,
+            assignedUserId: url.searchParams.get('assignedUserId') ?? undefined,
+            endCustomerId: url.searchParams.get('endCustomerId') ?? undefined,
+            sort: (url.searchParams.get('sort') as any) ?? undefined,
+            skip: num('skip'),
+            take: num('take'),
+          }),
+        );
+      }
+      if (id && req.method === 'POST' && action === 'claim') {
+        return json(
+          res,
+          200,
+          await this.engine.claimConversation(ctx, id, input as any),
+        );
+      }
+      if (id && req.method === 'POST' && action === 'release') {
+        return json(
+          res,
+          200,
+          await this.engine.releaseConversation(ctx, id, input as any),
+        );
+      }
+      if (id && req.method === 'POST' && action === 'resolve') {
+        return json(
+          res,
+          200,
+          await this.engine.resolveConversation(ctx, id, input as any),
+        );
+      }
+      if (id && req.method === 'POST' && action === 'human-messages') {
+        return json(
+          res,
+          201,
+          await this.engine.sendHumanMessage(ctx, id, input as any),
+        );
+      }
       if (!id && req.method === 'POST') {
         return json(
           res,

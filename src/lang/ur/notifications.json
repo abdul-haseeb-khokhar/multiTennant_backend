@@ -1,6 +1,14 @@
 {
   "action.proposed.body": "اے آئی نے ایک کارروائی تجویز کی ہے جس کی منظوری درکار ہے: {action}۔",
   "action.proposed.title": "ایک کارروائی کو آپ کی منظوری چاہیے",
+  "billing.downgraded.body": "آپ کا {fromPlan} پلان ختم ہو گیا ہے۔ آپ کا ورک اسپیس اب {toPlan} پلان پر ہے۔",
+  "billing.downgraded.title": "آپ کا پلان تبدیل ہو گیا",
+  "billing.grace_started.body": "آپ کا {plan} پلان تجدید نہیں ہوا۔ یہ مزید {graceDaysLeft, plural, one {# دن} other {# دن}} فعال رہے گا، پھر آپ کا ورک اسپیس فری پلان پر چلا جائے گا۔",
+  "billing.grace_started.title": "آپ کے پلان کی ادائیگی واجب الادا ہے",
+  "billing.period_ending.body": "آپ کا {plan} پلان {daysLeft, plural, one {# دن} other {# دنوں}} میں ختم ہو جائے گا۔ حدود برقرار رکھنے کے لیے تجدید کریں۔",
+  "billing.period_ending.title": "آپ کا پلان جلد ختم ہونے والا ہے",
+  "billing.trial_ending.body": "آپ کی آزمائش {daysLeft, plural, one {# دن} other {# دنوں}} میں ختم ہو جائے گی۔ حدود برقرار رکھنے کے لیے کوئی پلان منتخب کریں۔",
+  "billing.trial_ending.title": "آپ کی آزمائش جلد ختم ہونے والی ہے",
   "conversation.assigned.body": "{customer} کی گفتگو آپ کے سپرد کی گئی ہے۔",
   "conversation.assigned.title": "ایک گفتگو آپ کے سپرد کی گئی",
   "conversation.escalated.body": "{customer} کی گفتگو انسانی ایجنٹ کو منتقل کر دی گئی ہے۔",
@@ -19,6 +27,8 @@
   "ingestion.failed.title": "علمی ذریعہ ناکام ہو گیا",
   "invite.accepted.body": "{name} نے دعوت قبول کر لی ہے اور ٹیم میں شامل ہو گئے ہیں۔",
   "invite.accepted.title": "ٹیم میں نیا رکن شامل ہوا",
-  "usage.threshold.body": "آپ اس ماہ اپنے پلان کا {percent}% استعمال کر چکے ہیں۔",
+  "usage.limit_reached.body": "آپ اپنے پلان میں شامل تمام {limit} گفتگوئیں استعمال کر چکے ہیں۔ نئی گفتگوئیں اگلی مدت یا اپ گریڈ تک آپ کی ٹیم کو جائیں گی۔",
+  "usage.limit_reached.title": "پلان کی حد پوری ہو گئی",
+  "usage.threshold.body": "آپ اپنے پلان میں شامل {limit} گفتگوؤں میں سے {percent}% استعمال کر چکے ہیں۔",
   "usage.threshold.title": "پلان کے استعمال کی تنبیہ"
 }

@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { NewPasswordProperty } from '../../common/validation/password-length';
 
 export class AcceptInviteDto {
   @ApiProperty({ description: 'The token from the emailed invite link' })
@@ -8,10 +9,7 @@ export class AcceptInviteDto {
   @MaxLength(256)
   token: string;
 
-  @ApiProperty({ minLength: 8, maxLength: 72 })
-  @IsString()
-  @MinLength(8)
-  @MaxLength(72)
+  @NewPasswordProperty()
   password: string;
 
   @ApiPropertyOptional({ example: 'Sana Malik' })

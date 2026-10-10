@@ -11,6 +11,7 @@ import {
   MinLength,
   validateSync,
 } from 'class-validator';
+import { parseTrustProxy } from './trust-proxy';
 
 export class EnvironmentVariables {
   @IsString()
@@ -42,6 +43,15 @@ export class EnvironmentVariables {
   @Max(65535)
   PORT: number = 3000;
 
+  /**
+   * Proxies in front of the app, so `req.ip` (audit log, rate limits) is the real client: a number
+   * of hops (`1` behind the dashboard's server), or a list of addresses/CIDRs/`loopback`. Unset
+   * trusts nobody. `true` is refused (see `parseTrustProxy`).
+   */
+  @IsOptional()
+  @IsString()
+  TRUST_PROXY?: string;
+
   @IsOptional()
   @IsIn(['development', 'test', 'production'])
   NODE_ENV: string = 'development';
@@ -70,6 +80,22 @@ export class EnvironmentVariables {
   @Min(1)
   @Max(1440)
   BILLING_JOB_INTERVAL_MINUTES: number = 60;
+
+  /**
+   * The job that re-delivers escalations the gateway could not hand to the engine
+   * (`gateway_conversations.escalation_pending`). `off` disables the timer on this instance.
+   */
+  @IsOptional()
+  @IsIn(['on', 'off'])
+  ESCALATION_RETRY_JOB: string = 'on';
+
+  /** How often that job sweeps, in seconds (default 60). */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(5)
+  @Max(3600)
+  ESCALATION_RETRY_INTERVAL_SECONDS: number = 60;
 
   /**
    * Which AI engine the gateway talks to. `http` = the real engine (ENGINE_BASE_URL and
@@ -144,6 +170,13 @@ export function validateEnv(config: Record<string, unknown>) {
   }
 
   const problems: string[] = [];
+  try {
+    parseTrustProxy(validated.TRUST_PROXY);
+  } catch (error) {
+    problems.push(
+      error instanceof Error ? error.message : 'TRUST_PROXY invalid',
+    );
+  }
   if (validated.ENGINE_MODE === 'http') {
     if (!validated.ENGINE_BASE_URL) {
       problems.push('ENGINE_BASE_URL is required when ENGINE_MODE=http');

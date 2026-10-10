@@ -10,10 +10,11 @@ import { AuditService } from '../audit/audit.service';
 import type { AuthUser } from '../auth/roles';
 import { SessionTokenService } from '../auth/session-token.service';
 import { EntitlementsService } from '../billing/entitlements/entitlements.service';
+import { RateLimiter } from '../common/throttle/rate-limiter';
 import { hashToken } from '../common/tokens/tokens';
 import { MailService } from '../mail/mail.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { InvitesService } from './invites.service';
+import { InvitesService, PREVIEW_LIMIT_PER_IP } from './invites.service';
 
 const owner: AuthUser = {
   userId: 'o1',
@@ -50,6 +51,7 @@ describe('InvitesService', () => {
         { provide: AuditService, useValue: audit },
         { provide: SessionTokenService, useValue: sessions },
         { provide: EntitlementsService, useValue: entitlements },
+        RateLimiter,
       ],
     }).compile();
     service = module.get(InvitesService);
@@ -317,6 +319,79 @@ describe('InvitesService', () => {
       await expect(
         service.revoke('tenant-a', 'inv-1', admin),
       ).rejects.toMatchObject({ status: 404 });
+    });
+  });
+
+  describe('preview (G20)', () => {
+    const token = 'tok-preview';
+    const pending = (over: Record<string, unknown> = {}) => ({
+      id: 'inv-1',
+      tenantId: 'tenant-a',
+      email: 'new@acme.com',
+      role: 'agent',
+      expiresAt: new Date(Date.now() + DAY),
+      acceptedAt: null,
+      revokedAt: null,
+      tenant: { name: 'Acme Support', status: 'active' },
+      ...over,
+    });
+
+    it('shows workspace, role, address and expiry for a valid token, and nothing else', async () => {
+      const invite = pending();
+      prisma.staffInvite.findUnique.mockResolvedValue(invite);
+      await expect(service.preview(token, '1.1.1.1')).resolves.toEqual({
+        tenantName: 'Acme Support',
+        role: 'agent',
+        email: 'new@acme.com',
+        expiresAt: invite.expiresAt,
+      });
+      expect(prisma.staffInvite.findUnique).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { tokenHash: hashToken(token) } }),
+      );
+    });
+
+    it.each([
+      ['unknown', null],
+      ['expired', pending({ expiresAt: new Date(Date.now() - 1000) })],
+      ['already used', pending({ acceptedAt: new Date() })],
+      ['revoked', pending({ revokedAt: new Date() })],
+      [
+        'of a suspended tenant',
+        pending({ tenant: { name: 'A', status: 'suspended' } }),
+      ],
+      [
+        'of a closed tenant',
+        pending({ tenant: { name: 'A', status: 'closed' } }),
+      ],
+    ])(
+      'answers INVITE_INVALID, the same for a token that is %s',
+      async (_n, row) => {
+        prisma.staffInvite.findUnique.mockResolvedValue(row);
+        await expect(service.preview(token, '1.1.1.1')).rejects.toMatchObject({
+          status: 400,
+          response: {
+            code: 'INVITE_INVALID',
+            message: 'This invitation is invalid or has expired',
+          },
+        });
+      },
+    );
+
+    it('is limited per IP address with a Retry-After', async () => {
+      prisma.staffInvite.findUnique.mockResolvedValue(null);
+      for (let i = 0; i < PREVIEW_LIMIT_PER_IP; i++) {
+        await expect(service.preview(token, '9.9.9.9')).rejects.toMatchObject({
+          status: 400,
+        });
+      }
+      await expect(service.preview(token, '9.9.9.9')).rejects.toMatchObject({
+        status: 429,
+        retryAfterSeconds: expect.any(Number),
+      });
+      // another address is not affected
+      await expect(service.preview(token, '8.8.8.8')).rejects.toMatchObject({
+        status: 400,
+      });
     });
   });
 

@@ -16,6 +16,8 @@ export interface WidgetClaims {
   /** The widget key the session was started with; re-checked (revoked? origin?) on every request. */
   keyId: string;
   locale: string;
+  /** Set by `verify`: when the token expires (epoch ms). A stream ends then. Not part of what is signed. */
+  expiresAtMs?: number;
 }
 
 /**
@@ -86,6 +88,8 @@ export class WidgetTokenService {
       conversationId: text('conversationId'),
       keyId: text('keyId'),
       locale: typeof payload.locale === 'string' ? payload.locale : 'en',
+      expiresAtMs:
+        typeof payload.exp === 'number' ? payload.exp * 1000 : undefined,
     };
   }
 }

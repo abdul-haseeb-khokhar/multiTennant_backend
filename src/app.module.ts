@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { APP_INTERCEPTOR } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
 import { ApiKeysModule } from './api-keys/api-keys.module';
+import { ConversationsModule } from './conversations/conversations.module';
 import { AuditModule } from './audit/audit.module';
 import { AuthModule } from './auth/auth.module';
 import { BillingModule } from './billing/billing.module';
@@ -9,12 +10,15 @@ import { RequestContextInterceptor } from './common/request-context/request-cont
 import { validateEnv } from './config/env.validation';
 import { DataUseModule } from './data-use/data-use.module';
 import { EndCustomersModule } from './end-customers/end-customers.module';
+import { EngineEventsModule } from './events/engine-events.module';
 import { EngineModule } from './engine/engine.module';
 import { HealthModule } from './health/health.module';
 import { I18nModule } from './i18n/i18n.module';
 import { InvitesModule } from './invites/invites.module';
 import { MailModule } from './mail/mail.module';
 import { MeModule } from './me/me.module';
+import { NotificationsModule } from './notifications/notifications.module';
+import { RealtimeModule } from './realtime/realtime.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { TenantUsersModule } from './tenant-users/tenant-users.module';
 import { TenantsModule } from './tenants/tenants.module';
@@ -39,6 +43,10 @@ import { WidgetModule } from './widget/widget.module';
     DataUseModule,
     ApiKeysModule,
     UsageModule,
+    RealtimeModule,
+    NotificationsModule,
+    EngineEventsModule,
+    ConversationsModule,
     WidgetModule,
     MeModule,
     I18nModule,

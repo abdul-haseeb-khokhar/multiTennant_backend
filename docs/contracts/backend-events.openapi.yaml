@@ -1,0 +1,193 @@
+openapi: 3.0.3
+info:
+  title: Backend event receiver (called by the AI engine, Phase 4)
+  version: 0.1.0-draft
+  description: |
+    The one route of the backend that the AI engine calls (team-alignment D5). **Status: proposed
+    by the backend, to be reviewed by the AI engine owner.** Until the engine implements it, the
+    backend's in-process mock engine (`ENGINE_MODE=mock`) delivers the very same events straight to
+    the same code that handles this route, so the dashboard, the notifications and the widget stream
+    already work end to end.
+
+    This route is **outside `/v1`** on purpose: it is service-to-service, not part of the public API
+    the frontend consumes (it is not in `docs/openapi.json`), and it must be reachable only on the
+    private network (a reverse proxy must not route `/internal/*` to the internet).
+
+    **Authentication (D2, D5): a signature, so the service token is never sent.** The engine signs
+    each request with the shared `INTERNAL_API_TOKEN`:
+
+    ```
+    X-Engine-Timestamp: <unix seconds when the request is built>
+    X-Engine-Signature: sha256=<hex of HMAC-SHA256(INTERNAL_API_TOKEN, "<timestamp>.<raw request body>")>
+    ```
+
+    The timestamp must be within 5 minutes of the backend's clock (a captured request cannot be
+    replayed later; replays inside the window are harmless because delivery is idempotent). Compare
+    over the exact bytes of the body that was sent.
+
+    **Delivery rules**
+    * `tenantId` of the **envelope** is the only tenant the backend uses. Ids inside `data` are
+      never trusted to name a tenant, and every lookup the backend does for an event is scoped to
+      the envelope's tenant. An unknown tenant answers 404 `TENANT_NOT_FOUND`.
+    * `id` is unique per event. Sending the same `(tenantId, id)` again is safe: the backend
+      answers 200 `duplicate` and does nothing. **Retry on any non-2xx answer and on a timeout**
+      (the backend commits the event before it answers, so a retry after a lost answer is a no-op).
+    * An event type the backend does not know is acknowledged (200 `ignored`) and logged, never
+      refused, so the engine can add event types before the backend learns them.
+    * Order is not guaranteed across retries; every handler is written so that a late event only
+      refreshes state (the dashboard re-reads by id).
+    * Message text travels only where a customer may see it: `message.created` of a human or
+      system line carries `content`/`contentKey`; customer and AI messages carry ids only.
+servers:
+  - url: http://backend.internal:3000
+    description: Private address of the backend
+paths:
+  /internal/events:
+    post:
+      summary: Deliver one event
+      parameters:
+        - name: X-Engine-Timestamp
+          in: header
+          required: true
+          schema: { type: string, example: '1760000000' }
+        - name: X-Engine-Signature
+          in: header
+          required: true
+          schema: { type: string, example: 'sha256=3f5a...' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Envelope'
+      responses:
+        '200':
+          description: Accepted (or a duplicate / an event type the backend ignores)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    enum: [processed, duplicate, ignored]
+        '400':
+          description: The envelope is malformed (VALIDATION_ERROR)
+        '401':
+          description: Missing, wrong or stale signature (UNAUTHORIZED)
+        '404':
+          description: The envelope's tenant does not exist (TENANT_NOT_FOUND)
+        '503':
+          description: The backend has no INTERNAL_API_TOKEN configured
+components:
+  schemas:
+    Envelope:
+      type: object
+      required: [id, type, tenantId, occurredAt, data]
+      properties:
+        id:
+          type: string
+          maxLength: 100
+          description: Unique per event (a UUID).
+        type:
+          type: string
+          example: conversation.escalated
+        tenantId:
+          type: string
+          description: The tenant the event belongs to. The only tenant the backend uses.
+        occurredAt:
+          type: string
+          format: date-time
+        data:
+          type: object
+          description: Payload by event type, see below.
+    Events:
+      description: |
+        Documentation only: the `data` payload of each event type the backend handles.
+        Ids are the engine's; `endCustomerId` and every user id are the backend's ids.
+      type: object
+      properties:
+        conversation.created:
+          type: object
+          required: [conversationId]
+          properties:
+            conversationId: { type: string }
+            endCustomerId: { type: string, nullable: true }
+            channel: { type: string, enum: [widget, whatsapp, voice] }
+        conversation.escalated:
+          description: >-
+            The conversation needs a human. All active staff get a notification and the queue refreshes.
+          type: object
+          required: [conversationId, reason]
+          properties:
+            conversationId: { type: string }
+            endCustomerId: { type: string, nullable: true }
+            reason:
+              type: string
+              enum: [customer_requested, low_confidence, failed_action, sentiment, topic, outside_hours, ai_unavailable, limit_reached, other]
+            summary: { type: string }
+        conversation.assigned:
+          description: >-
+            A staff member now holds the conversation. The assignee gets a notification unless they
+            assigned it to themselves (assignedByUserId equals assignedUserId, a plain claim).
+          type: object
+          required: [conversationId, assignedUserId]
+          properties:
+            conversationId: { type: string }
+            assignedUserId: { type: string }
+            assignedByUserId: { type: string }
+        conversation.released:
+          type: object
+          required: [conversationId, to]
+          properties:
+            conversationId: { type: string }
+            to: { type: string, enum: [active, escalated] }
+            previousUserId: { type: string, nullable: true }
+            reason: { type: string }
+        conversation.resolved:
+          type: object
+          required: [conversationId, resolvedBy]
+          properties:
+            conversationId: { type: string }
+            resolvedBy: { type: string, enum: [ai, human, customer, system] }
+        message.created:
+          type: object
+          required: [conversationId, messageId, authorType]
+          properties:
+            conversationId: { type: string }
+            messageId: { type: string }
+            authorType: { type: string, enum: [customer, ai, human, system, tool] }
+            createdAt: { type: string, format: date-time }
+            content:
+              type: string
+              description: Only for `human` and `system` messages.
+            contentKey:
+              type: string
+              nullable: true
+              description: Only for `system` lines, a key of the `widget` translation namespace, for example `agent.joined`.
+            authorUserId: { type: string, nullable: true }
+        usage.recorded:
+          description: >-
+            Tokens of one assistant message. Counted once per message id (the gateway may have counted it already from the reply stream).
+          type: object
+          required: [conversationId, messageId, tokensIn, tokensOut]
+          properties:
+            conversationId: { type: string }
+            messageId: { type: string }
+            tokensIn: { type: integer }
+            tokensOut: { type: integer }
+            model: { type: string }
+        action.proposed:
+          description: The AI wants to run an action that needs approval. Owners and admins get a notification.
+          type: object
+          required: [actionId]
+          properties:
+            actionId: { type: string }
+            conversationId: { type: string }
+            action:
+              type: string
+              description: Short action name shown in the notification, for example `refund`.
+        'action.executed, call.ended, ingestion.completed, ingestion.failed':
+          description: Reserved (later phases). Acknowledged and ignored today.
+          type: object

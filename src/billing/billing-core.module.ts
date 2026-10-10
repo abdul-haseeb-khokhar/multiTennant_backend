@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { NotificationsCoreModule } from '../notifications/notifications-core.module';
 import { BillingScheduler } from './billing.scheduler';
 import { Clock, SystemClock } from './clock';
 import { EntitlementsService } from './entitlements/entitlements.service';
@@ -7,6 +8,7 @@ import {
   UsageProvider,
 } from './entitlements/usage.provider';
 import { PlansService } from './plans/plans.service';
+import { BillingRemindersService } from './reminders/billing-reminders.service';
 import { BillingProviders } from './providers/billing-providers';
 import { ManualProvider } from './providers/manual.provider';
 import { InvoiceNumberService } from './subscriptions/invoice-number.service';
@@ -21,6 +23,8 @@ import { TenantBillingService } from './tenant/tenant-billing.service';
  * To add a payment provider: implement `BillingProvider`, add it here and in `BillingProviders`.
  */
 @Module({
+  // Reminders and the purge need the notification table service, which has no auth imports.
+  imports: [NotificationsCoreModule],
   providers: [
     { provide: Clock, useClass: SystemClock },
     { provide: UsageProvider, useClass: DefaultUsageProvider },
@@ -31,6 +35,7 @@ import { TenantBillingService } from './tenant/tenant-billing.service';
     ManualProvider,
     BillingProviders,
     TenantBillingService,
+    BillingRemindersService,
     BillingScheduler,
   ],
   exports: [

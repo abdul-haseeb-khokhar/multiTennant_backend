@@ -23,16 +23,22 @@ export class TenantUser {
   })
   status: string;
 
-  @ApiPropertyOptional({ type: String, format: 'date-time', nullable: true })
-  emailVerifiedAt: Date | null;
+  @ApiPropertyOptional({
+    type: String,
+    format: 'date-time',
+    nullable: true,
+    description: 'Absent for the `agent` role: owners and admins only.',
+  })
+  emailVerifiedAt?: Date | null;
 
   @ApiPropertyOptional({
     type: String,
     format: 'date-time',
     nullable: true,
-    description: 'Tokens issued before this instant are rejected.',
+    description:
+      'Tokens issued before this instant are rejected. Absent for the `agent` role: owners and admins only.',
   })
-  passwordChangedAt: Date | null;
+  passwordChangedAt?: Date | null;
 
   @ApiPropertyOptional({
     type: String,

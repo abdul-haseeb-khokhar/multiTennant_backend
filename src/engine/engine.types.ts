@@ -8,6 +8,19 @@ export type EngineChannel = (typeof ENGINE_CHANNELS)[number];
 export type ConversationStatus =
   'active' | 'escalated' | 'human_active' | 'resolved';
 
+export const CONVERSATION_STATUSES: readonly ConversationStatus[] = [
+  'active',
+  'escalated',
+  'human_active',
+  'resolved',
+];
+
+/** Who closed a conversation (C1). */
+export type ResolvedBy = 'ai' | 'human' | 'customer' | 'system';
+
+/** Where a released conversation goes (Phase 4). `resolved` is the same as resolving it. */
+export type ReleaseTarget = 'active' | 'escalated' | 'resolved';
+
 /**
  * Stable escalation reason codes. `ai_unavailable` and `limit_reached` are set by the backend,
  * the others by the engine (C6).
@@ -33,6 +46,14 @@ export interface EngineConversation {
   escalationReason: EscalationReason | null;
   createdAt: string;
   lastMessageAt: string | null;
+  /** The staff user (a `tenant_user.id`) handling it while `human_active`; the engine stores the id, the backend resolves the name. */
+  assignedUserId: string | null;
+  /** When it was (last) escalated, for the queue order (oldest waiting first). */
+  escalatedAt: string | null;
+  /** Short handoff note the engine wrote on escalation. */
+  summary: string | null;
+  resolvedAt: string | null;
+  resolvedBy: ResolvedBy | null;
 }
 
 export type EngineAuthorType = 'customer' | 'ai' | 'human' | 'system' | 'tool';
@@ -57,6 +78,9 @@ export interface EngineMessagePage {
 /** Who the call is for. The tenant is the ONLY source of `X-Tenant-Id`. */
 export interface EngineCallContext {
   tenantId: string;
+  /** Staff calls (Phase 4): the acting user, sent as `X-Acting-User-Id` / `X-Acting-Role` for the engine's own audit. Never a source of the tenant. */
+  actingUserId?: string;
+  actingRole?: string;
   requestId?: string;
   idempotencyKey?: string;
   /** Aborts the call (customer closed the widget). */
@@ -80,6 +104,71 @@ export interface EscalateInput {
   reason: EscalationReason;
   summary?: string;
 }
+
+export type ConversationSort = 'lastMessageAt' | 'escalatedAt';
+
+/** Filters of the staff conversation list (`GET /internal/conversations`). */
+export interface ListConversationsQuery {
+  /** Any of these statuses (the queue is `escalated`). */
+  status?: ConversationStatus[];
+  assignedUserId?: string;
+  endCustomerId?: string;
+  /** Default `lastMessageAt` (newest first); `escalatedAt` is oldest first, the order of the queue. */
+  sort?: ConversationSort;
+  skip?: number;
+  take?: number;
+}
+
+export interface EngineConversationPage {
+  data: EngineConversation[];
+  total: number;
+  skip: number;
+  take: number;
+}
+
+/** Number of conversations per status (always all four keys). */
+export type ConversationCounts = Record<ConversationStatus, number>;
+
+export interface ClaimInput {
+  userId: string;
+}
+
+export interface ReleaseInput {
+  userId: string;
+  to: ReleaseTarget;
+  /**
+   * The backend sets it only when it releases a conversation on behalf of a holder who is gone
+   * (disabled or deleted): the engine then skips the "you are the assignee" check.
+   */
+  force?: boolean;
+  reason?: string;
+}
+
+export interface ResolveInput {
+  userId: string;
+}
+
+export interface HumanMessageInput {
+  userId: string;
+  content: string;
+}
+
+/**
+ * What the engine pushes to `POST /internal/events` (D5) and what the mock delivers in-process.
+ * `tenantId` is the ENVELOPE's: the backend never takes a tenant from `data`.
+ */
+export interface EngineEventEnvelope {
+  /** Unique per event; delivery is idempotent by (tenantId, id). */
+  id: string;
+  type: string;
+  tenantId: string;
+  /** ISO-8601 instant the event happened. */
+  occurredAt: string;
+  data: Record<string, unknown>;
+}
+
+/** Where the mock engine delivers its events. Set by the event receiver at start-up. */
+export type EngineEventSink = (event: EngineEventEnvelope) => Promise<void>;
 
 /** Events of the message stream, in the order the engine sends them. */
 export type EngineStreamEvent =

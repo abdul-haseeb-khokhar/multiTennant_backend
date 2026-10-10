@@ -1,6 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsIn, IsObject, IsOptional, IsString } from 'class-validator';
-import { LOCALE_CODES } from '../../i18n/locales';
+import { IsObject, IsOptional, IsString } from 'class-validator';
+import { OptionalLocaleProperty } from '../../common/validation/locale';
 
 export class CreateEndCustomerDto {
   @ApiProperty({
@@ -15,12 +15,9 @@ export class CreateEndCustomerDto {
   @IsString()
   name?: string;
 
-  @ApiPropertyOptional({
-    enum: LOCALE_CODES,
+  @OptionalLocaleProperty({
     description: "The customer's language (H7); unset means unknown.",
   })
-  @IsOptional()
-  @IsIn(LOCALE_CODES)
   locale?: string;
 
   @ApiPropertyOptional({ type: 'object', additionalProperties: true })

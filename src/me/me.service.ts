@@ -45,10 +45,15 @@ export class MeService {
     const { tenant, emailVerifiedAt, ...profile } = user;
     // Due plan transitions are applied on read, so the banner never shows a plan that has ended.
     const subscription = await this.subscriptions.getEffective(actor.tenantId);
+    // For the bell: how many of MY notifications are unread (H5).
+    const unreadNotifications = await this.prisma.notification.count({
+      where: { tenantId: actor.tenantId, userId: actor.userId, readAt: null },
+    });
     return {
       user: { ...profile, emailVerified: emailVerifiedAt !== null },
       tenant,
       subscription: subscription ? toSubscriptionSummary(subscription) : null,
+      unreadNotifications,
       locale: user.locale ?? tenant.defaultLocale ?? DEFAULT_LOCALE,
     };
   }

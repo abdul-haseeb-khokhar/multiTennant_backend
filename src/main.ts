@@ -5,7 +5,11 @@ import { configureApp, setupSwagger } from './app.setup';
 import { JsonLogger } from './common/logging/json-logger';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule, { bufferLogs: true });
+  // rawBody: the engine's event deliveries are verified over the exact bytes it signed.
+  const app = await NestFactory.create(AppModule, {
+    bufferLogs: true,
+    rawBody: true,
+  });
   app.useLogger(new JsonLogger());
   configureApp(app);
   setupSwagger(app);

@@ -9,6 +9,8 @@ import { SessionTokenService } from '../auth/session-token.service';
 import { ApiException } from '../common/errors/api.exception';
 import { ErrorCode } from '../common/errors/error-codes';
 import { isPrismaError } from '../common/errors/prisma-errors';
+import { RateLimitedException } from '../common/errors/rate-limited.exception';
+import { RateLimiter } from '../common/throttle/rate-limiter';
 import { resolvePage, toPage } from '../common/pagination/pagination';
 import { generateToken, hashToken } from '../common/tokens/tokens';
 import { normalizeEmail } from '../common/validation/email';
@@ -20,6 +22,9 @@ import { QueryInviteDto } from './dto/query-invite.dto';
 
 const SALT_ROUNDS = 10;
 const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+/** The public preview is limited per IP address: a window of one minute (in process memory, Phase 8). */
+export const PREVIEW_LIMIT_PER_IP = 30;
+export const PREVIEW_WINDOW_MS = 60_000;
 
 /**
  * Staff invitations (H1): an owner or admin never sets another person's password; they invite by
@@ -35,6 +40,7 @@ export class InvitesService {
     private readonly audit: AuditService,
     private readonly sessionTokens: SessionTokenService,
     private readonly entitlements: EntitlementsService,
+    private readonly limiter: RateLimiter,
   ) {}
 
   /**
@@ -165,6 +171,44 @@ export class InvitesService {
       }
       throw error;
     }
+  }
+
+  /**
+   * Public: what the accept page shows before the invitee chooses a password (G20): the workspace,
+   * the role, the address and when the link ends. Every token that cannot be accepted (unknown,
+   * expired, used, revoked, or a tenant that is suspended or closed) gets the SAME answer, 400
+   * INVITE_INVALID, so the endpoint tells a stranger nothing about which tokens exist. Limited
+   * per IP address (429 with Retry-After) so tokens cannot be guessed at speed.
+   */
+  async preview(token: string, ip: string) {
+    const attempt = this.limiter.hit(
+      `invite-preview:ip:${ip}`,
+      PREVIEW_LIMIT_PER_IP,
+      PREVIEW_WINDOW_MS,
+    );
+    if (!attempt.allowed) {
+      throw new RateLimitedException(attempt.retryAfterSeconds);
+    }
+    const invite = await this.prisma.staffInvite.findUnique({
+      where: { tokenHash: hashToken(token) },
+      include: { tenant: { select: { name: true, status: true } } },
+    });
+    if (
+      !invite ||
+      invite.acceptedAt ||
+      invite.revokedAt ||
+      invite.expiresAt <= new Date() ||
+      invite.tenant.status === 'suspended' ||
+      invite.tenant.status === 'closed'
+    ) {
+      throw this.invalid();
+    }
+    return {
+      tenantName: invite.tenant.name,
+      role: invite.role,
+      email: invite.email,
+      expiresAt: invite.expiresAt,
+    };
   }
 
   /** Public: turns a valid token into a user (already verified) and a session. */

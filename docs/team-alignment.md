@@ -124,10 +124,12 @@ Status: ☐
 **Proposal:** `conversations.status` ∈ `active` (AI answers) · `escalated` (waiting for a human) · `human_active` (a human is handling it) · `resolved`. Add:
 `assigned_user_id text null`, `escalated_at`, `escalation_reason text null`, `resolved_at`, `resolved_by` (`ai`/`human`/`customer`/`system`), `summary text null` (engine writes a short handoff summary on escalation), `last_message_at`.
 Index for the staff queue: `(tenant_id, status, last_message_at desc)`.
+**Built (Phase 4), backend side:** the staff API and the dashboard read `status`, `assigned_user_id`, `escalated_at`, `escalation_reason`, `summary`, `resolved_at` and `resolved_by` through the engine calls proposed in `contracts/engine-internal.openapi.yaml` (the mock engine implements them; the AI side has not confirmed, J9).
 Status: ☐
 
 ### C2. Who authored a message: AI
 `role` stays for the LLM (`user`/`assistant`/`system`/`tool`). Add `author_type` (`customer`/`ai`/`human`/`system`/`tool`) and `author_user_id text null`. A human agent's reply is `role=assistant`, `author_type=human`, `author_user_id=<id>`, so the model and the UI both read it correctly.
+**Built (Phase 4), backend side:** a staff reply is `POST …/conversations/:id/messages` → engine `human-messages` (`author_type=human`, `author_user_id`); the dashboard shows the author's name resolved from `tenant_user` (a deleted user gives `null`); system lines are `contentKey`s of the `widget` namespace (`agent.joined`, `agent.left`, `resolved.notice`), never English text.
 Status: ☐
 
 ### C3. Idempotency for inbound messages: AI
@@ -137,6 +139,7 @@ Status: ☐
 
 ### C4. AI must stay silent while a human is active: AI
 **Proposal:** the claim operation is atomic (`UPDATE … WHERE status IN ('active','escalated') AND assigned_user_id IS NULL`, 409 otherwise). Before generating any AI reply the engine re-checks status inside the same transaction, so a message that arrives at the moment of claim cannot produce a late AI answer.
+**Built (Phase 4), backend side:** the backend claims only through the engine (atomic claim, 409 codes `CONVERSATION_ALREADY_CLAIMED|RESOLVED|NOT_ASSIGNED_TO_YOU`) and checks the assignee itself before every reply, release and resolve; the mock engine stays silent while `human_active` (tested). The real engine must do the same.
 Status: ☐
 
 ### C5. Usage fields: AI
@@ -175,6 +178,7 @@ Status: ☐
 Customer-bound replies are **streamed in the HTTP response** (SSE) from the engine to the backend to the widget. Asynchronous events need a push path.
 **Proposal (v1):** the engine calls `POST /internal/events` on the backend with a signed body (HMAC, same token family as D2). Event types: `conversation.created`, `conversation.escalated`, `conversation.resolved`, `message.created`, `action.proposed`, `action.executed`, `call.ended`, `ingestion.completed`, `ingestion.failed`, `usage.recorded`.
 The backend fans out to the dashboard over SSE (`GET /v1/tenants/:tenantId/events`). When we run more than one backend instance we add Redis pub/sub (and BullMQ for retries).
+**Built (Phase 4):** the receiver `POST /internal/events` (outside `/v1`, not in the public OpenAPI) verifies an HMAC-SHA256 signature over `<timestamp>.<raw body>` made with `INTERNAL_API_TOKEN` (the token itself is never sent; 5 minute window), takes the tenant from the envelope only, and is idempotent by (tenant, event id) with the effects in the same transaction; contract: `contracts/backend-events.openapi.yaml`. Dashboard stream `GET /v1/tenants/:tenantId/events` (Bearer header, or a single-use 30 second ticket from `POST …/events/ticket` for a browser `EventSource`; heartbeat, `Last-Event-ID`, 5 streams per user) and the customer stream `GET /v1/widget/events`. The fan-out is in process memory: several backend instances need Redis (Phase 8). The AI side has not confirmed names, payloads or the signing (J9).
 Status: ☐
 
 ### D6. How the backend reads engine data (dashboard lists, queues): BE + AI
@@ -183,6 +187,7 @@ Writes always go through the engine API. For **reads** there are two options:
 - **(b) Read-only Postgres views** owned by the engine (`ai_engine_api.v_conversations`, `v_messages`) and queried by the backend through a read-only role: fast to build, but the views become a published contract.
 
 **Proposal:** (a) for conversation detail and messages, (b) for list/queue/search queries, with the views versioned and documented in this repo. AI to confirm they accept the views as a contract.
+**Built (Phase 4), option (a) only:** the backend reads conversations and messages through the engine's HTTP API (list, counts, detail with paginated messages); no database views are used.
 Status: ☐
 
 ### D7. Timeouts, retries and fallback: BE + AI
@@ -281,7 +286,7 @@ Status: ☐
 ## G. Frontend contract
 
 ### G1. Lists and pagination: BE (change affects FE)
-Lists currently return a bare array. **Proposal (changing now is cheap, later it is a breaking change):** `GET` lists return `{ "data": [...], "total": n, "skip": 0, "take": 20 }`, default `take=20`, maximum 100.
+Lists first returned a bare array. **Proposal (changing early was cheap, later it would have been a breaking change):** `GET` lists return `{ "data": [...], "total": n, "skip": 0, "take": 20 }`, default `take=20`, maximum 100.
 **Built (Phase 0):** as proposed, for users, customers and admin tenants. `take` above 100, or a negative `skip`, returns 400 `VALIDATION_ERROR` instead of being clamped. Lists are ordered by `createdAt`, then `id`, so paging is stable. **FE: please review this one.**
 Status: ☐
 
@@ -317,11 +322,19 @@ Add `tenant_user.status` (`active`/`disabled`) and `password_changed_at`; `JwtSt
 **Built (Phase 1):** `POST /v1/auth/password-reset/request` answers 202 whether or not the account exists (with `MAIL_MODE=link` the body carries `link` for a real account only, a development convenience); throttled at 10 requests per IP per hour (429 `TOO_MANY_REQUESTS`) and 3 per tenant+email per hour (further ones are silently ignored). Counters are in process memory, so they are per instance until Phase 8. `POST …/confirm` `{ token, password }` answers 204; a bad token gives 400 `RESET_TOKEN_INVALID`; it sets `password_changed_at`. `JwtStrategy.validate` now loads the user on every request: a deleted user gives 401, a disabled user 401 `ACCOUNT_DISABLED` (login gives 403 `ACCOUNT_DISABLED` after the password checked out), a token whose `iat` second is earlier than `password_changed_at` gives 401, and **`role` for authorisation comes from the database, not the token**, so a demotion is immediate. The frontend page is `{FRONTEND_URL}/reset-password?token=…`.
 Status: ☐
 
-### H3. Email delivery: BE (**needs a decision from Abdul**)
+### H3. Email delivery: BE (**decided 2026-10-10: Resend**)
 Invites, resets and verification need to reach a person, even though notifications themselves are in-app only.
-**Proposal:** a `Mailer` interface with two implementations: `ConsoleMailer` (logs the link; used in dev) and a real provider (SMTP, SES or Resend) chosen later. Until a provider is chosen, the invite and reset-request responses can also return the link to the owner/admin to pass on manually (flag `MAIL_MODE=link`), and that mode is **disabled in production**.
-Open: which provider and sender domain.
-**Built (Phase 1):** `Mailer` (abstract class, injectable) with `ConsoleMailer` bound in `MailModule`; `MailService` builds the links and, with `MAIL_MODE=link`, also returns them (invite response `link`, reset request `link`, signup `verificationLink`). `MAIL_MODE=link` makes the app refuse to start when `NODE_ENV=production`, and production also requires `FRONTEND_URL`. Still open: the provider and sender domain. The message gives the recipient `locale` and a template name; a provider renders the `email.<template>.*` keys of the `notifications` namespace (already written in en and ur).
+**Decision (Abdul):** use **Resend**, behind the existing `Mailer` interface (a switch to SES, Brevo or another provider later is one new class and one setting). No sending domain exists yet, so the first stage runs in Resend's **test mode**: the shared sender `onboarding@resend.dev`, which (per third-party sources; confirm in Resend's docs) delivers only to the email address of the Resend account itself and rejects other recipients with a 403. Free plan: 3,000 emails a month, at most 100 a day, no overage (sending pauses at the cap); the paid plan is about $20 a month for 50,000. Pricing and limits come from comparison sites, not Resend; check resend.com/pricing.
+**Settings (names only, values stay in `.env`, never in chat or git):**
+- `MAIL_PROVIDER` = `console` (default, logs the link) | `resend`; production refuses to start with `console`.
+- `RESEND_API_KEY` (secret; a send-only key from the Resend dashboard).
+- `MAIL_FROM` = `onboarding@resend.dev` for now; later an address on the verified domain.
+- `MAIL_FROM_NAME` = the product name shown to recipients.
+- `MAIL_REDIRECT_TO` = the Resend account's own email, **test stage only**: every outgoing message goes to that one address, and the subject/body header names the intended recipient so invites and resets can still be exercised. Production refuses to start with it set.
+- `MAIL_MODE=link` stays a separate development switch (links also returned in API responses); it is refused in production.
+**Design points for the implementation:** HTML and plain-text templates rendered from the `email.<template>.*` keys of the `notifications` namespace in the recipient's locale (Urdu right-to-left); the send failing must not break the flow (the invite or reset still exists) but must be logged without the link and visible to the caller (for example `delivery: sent | failed | skipped` in the response so the dashboard can offer "resend"); a bounded timeout and one retry; no recipient address or link in logs; a health warning when sending fails repeatedly; the 100-a-day cap makes a burst of signups fail silently, so watch the failure log and upgrade the plan when needed. Bounce and complaint webhooks (suppression list) come later.
+**Moving to production mail:** buy or reuse a domain, verify it in Resend (SPF, DKIM, DMARC records), set `MAIL_FROM` to an address on it, remove `MAIL_REDIRECT_TO`.
+**Built (Phase 1):** `Mailer` (abstract class, injectable) with `ConsoleMailer` bound in `MailModule`; `MailService` builds the links and, with `MAIL_MODE=link`, also returns them (invite response `link`, reset request `link`, signup `verificationLink`). `MAIL_MODE=link` makes the app refuse to start when `NODE_ENV=production`, and production also requires `FRONTEND_URL`. The message gives the recipient `locale` and a template name; a provider renders the templates (the keys are written in en and ur). **Not built yet:** `ResendMailer` (Phase 4C).
 Status: ☐
 
 ### H4. Email verification: BE
@@ -335,6 +348,7 @@ Notifications are shown in the app only (no push, no email).
 - Table `notifications` (id, tenant_id, user_id, type, title_key, body_key, params jsonb, link, read_at, created_at); one row per recipient (staff teams are small), purged after 90 days. Text is stored as **translation keys plus params** so it renders in each user's language (H7).
 - Created by the backend from engine events (D5) and its own events: `conversation.escalated` (all agents), `conversation.assigned` (assignee), `action.proposed` (owners/admins), `ingestion.failed`, `invite.accepted`, `usage.threshold` (80% and 100% of plan limit).
 - API: `GET /v1/tenants/:tenantId/notifications?unread=true`, `POST …/:id/read`, `POST …/read-all`; unread count in `GET /me`; live delivery over the existing SSE stream as `notification.created`.
+**Built (Phase 4):** the table has no `title_key`/`body_key` (the keys derive from `type`: `<type>.title`, `<type>.body`), plus `dedupe_key` for idempotent reminders. API: `GET …/notifications` (`?unread=true`, own rows only), `POST …/:id/read`, `POST …/read-all`; `unreadNotifications` in `GET /v1/me`; `notification.created` on the dashboard stream; 90-day purge. Created today: `conversation.escalated` (all active staff), `conversation.assigned` (the assignee, not for a plain claim), `action.proposed` (owners and admins) and the billing reminders of I8, `usage.threshold` / `usage.limit_reached`. Types and params: architecture section 5.7. Not yet: `ingestion.failed`, `invite.accepted`, `tenant.suspended`.
 Status: ☐
 
 ### H6. Staff audit log: BE
@@ -381,7 +395,7 @@ Plans are rows with `code`, `name`, `visibility` (`public` | `hidden`), `price_m
 | Price (excl. tax) | not sold, granted at signup | PKR 0 | PKR 19,999 per month, PKR 199,990 per year (10 months) | custom quote, set by a platform admin |
 | Duration | 15 days, then falls back to Free | no end | per period | per contract |
 | Staff seats | 3 | 1 | 10 | custom |
-| AI conversations | 100 in total | 30 per month | 1,500 per month, extra PKR 15 each | custom |
+| AI conversations | 100 in total | 30 per month | 1,500 per month, extra PKR 15 each (overage on by default; the owner can switch it off for a hard stop, J6) | custom |
 | Knowledge base | 20 MB | 10 MB | 500 MB | custom |
 | Channels | chat | chat, "powered by" label | chat + WhatsApp | all |
 | Voice | none | none | add-on, about PKR 25 per minute | custom |
@@ -446,6 +460,7 @@ Status: ☐
 In-app notifications (H5) and a dashboard banner: Starter ends in 7, 3 and 1 days; paid period ends in 7, 3 and 1 days; grace period started; plan limit at 80% and 100%; downgrade to Free happened; data deletion notices (I10). A daily job applies time-based transitions; request-time checks guarantee correctness if the job is late.
 
 **Built (Phase 2B), reminders NOT built:** the job and the request-time checks are done (the job sweeps on boot and hourly in every instance, one holding an advisory lock). The notifications need H5 (Phase 4). Until then `GET /v1/me` carries `subscription` (plan, status, `currentPeriodEnd`, `daysLeft`, `graceEndsAt`, `graceDaysLeft`, `cancelAtPeriodEnd`, limits) so the frontend can show the banner.
+**Built (Phase 4):** the reminders are in-app notifications for owners and admins, created idempotently by the hourly billing job: the Starter trial or a paid period ends in 7, 3 and 1 days, the grace period started, the tenant was moved to a lower plan, and 80% and 100% of the conversation allowance (one reminder per tenant, kind, threshold and period). The data-deletion notices of I10 wait for Phase 8.
 Status: ☐
 
 ### I9. Abuse and cost guards: BE
@@ -494,6 +509,7 @@ A frontend prototype (`D:\multiTennant_frontend`, report `GAP-REPORT.md` there) 
 7. Invite preview for the accept page: `GET /v1/auth/invites/preview?token=` returning tenant name, role, email, expiry (G20).
 8. Re-check G29.6 (reactivating a suspended tenant must restore its previous state; the billing state machine should already do this).
 9. Fix stale text in this file (section G1 still says lists return a bare array).
+**Built (Phase 3B, branch `phase-4-human-agent`):** items 1 to 9. Notes: the password limit counts BYTES (72, what bcrypt really hashes) and also applies to invite acceptance and password reset; `Retry-After` was already sent, the real gaps were that CORS did not expose it and the body had no remaining seconds (now `retryAfterSeconds`); the five DELETE routes already agreed (200 with the removed object), the convention is now tested and documented, so the frontend needs no change; reactivation (item 8) was already correct (a Starter trial returns as the trial, a past-due tenant as past due), now also covered by a database test.
 Status: ☐
 
 ### J1. Logout and token revocation (G3, security): BE
@@ -513,6 +529,7 @@ Status: ☐
 
 ### J4. Role matrix rows B2 does not decide (G22): BE
 **Proposal:** billing and usage readable by owner and admin (built); approvals list for owner and admin; integration endpoints and API-key details hidden from agents; data-use consent owner only (built); an owner or admin cannot reply into a conversation claimed by someone else until transfer exists (H8); nobody disables, demotes or deletes themselves (the last-owner rule stays).
+**Built (Phase 4), partly:** an owner or admin cannot reply, release or resolve a conversation someone else holds (409 `CONVERSATION_NOT_ASSIGNED_TO_YOU`); there is no transfer and no idle timeout yet (H8); a disabled or deleted holder's conversations go back to the queue. The other rows of the proposal are as before.
 Status: ☐
 
 ### J5. Upgrading while payments are manual (G17): BE
@@ -520,8 +537,16 @@ An owner cannot request a plan today.
 **Proposal:** `POST /v1/tenants/:tenantId/billing/upgrade-request {planCode, note}` (owner) that notifies platform admins (in-app once H5 exists, audit entry now), and a platform-admin view of pending requests. `PATCH /v1/admin/tenants/:id` stops accepting `plan` and `status` (the subscription routes are the only way).
 Status: ☐
 
-### J6. What counts as a conversation and what happens over the limit (G18): BE (**needs Abdul's answer**)
-**Proposal:** a conversation counts once, when the AI first replies (built: counted at start). On Free and Starter the limit is hard: the customer gets the fallback and the conversation escalates (built). **Open:** on Pro, hard stop at 1,500 or bill overage at PKR 15 per extra conversation (I1 lists the price)? Also whether tenants should see token counts at all (cost leakage).
+### J6. Conversation limit and overage (G18): BE (**decided 2026-10-10**)
+**Decision (Abdul):** on plans that have an overage price (Pro: PKR 15 per extra conversation, I1) it is the tenant's choice, **on by default**. With overage **on**, the AI keeps answering after the included conversations are used up and every extra conversation is billed at the plan's price. With overage **switched off** in the settings, the limit is a **hard stop** like running out of credit: the customer gets the fallback and the conversation escalates with `limit_reached` (this is what is built today for every plan). Free and Starter have no overage price, so they always stop hard and show no setting.
+**How it is built (Phase 4B):**
+- A per-tenant billing setting `overageEnabled` (default true) on the subscription, changed by the **owner only** (audited as `billing.overage_changed`), read by everyone through `GET /v1/me` and `GET …/billing`.
+- `EntitlementsService.check('conversations')` returns allowed with `overage: true` past the included amount when the setting is on and the plan has `overageConversationMinor`; otherwise it denies with `PLAN_LIMIT_REACHED` as today.
+- The overage count of a period is `max(0, conversations used − included)`, derived from `usage_daily` (a conversation counts once, as before); the billing summary shows included, used, overage count and the amount in minor units.
+- Invoicing while payments are manual: a platform admin sees the overage count and amount per period (admin subscription `GET`) and records one payment that includes it; the period-end invoice line is added by the admin command. A provider later bills it as metered usage (Phase 9).
+- Notifications (H5, I8): 80% and 100% of the included amount, and "overage started" when it is on, "limit reached, AI stopped" when it is off.
+- **Recommended, not yet decided:** an optional monthly **spending cap** for overage (owner sets a maximum extra amount; at the cap the tenant falls back to the hard stop), so a traffic spike cannot create a surprise invoice. Tokens stay internal and are not shown to tenants (cost leakage).
+- The frontend needs one switch on the billing screen (owner only) with a clear warning about the extra charges.
 Status: ☐
 
 ### J7. Tenant time zone (G13, G19): BE
@@ -543,6 +568,7 @@ Everything the backend knows about the engine is *our proposal* in [contracts/en
 5. Event names and payloads the engine sends back (`conversation.escalated`, `usage.recorded`, `ingestion.*`, `action.proposed`, …), signed as in D5 (G6).
 6. `end_customer_id` on conversations (B5) and the other column requests in C1, C2, C5.
 7. Agent-config schema (G13) and knowledge-base limits, status values and failure codes (G14).
+**Phase 4 questions** are numbered 6 to 11 under "Open questions for the AI engine owner (Phase 4)" in [contracts/README.md](contracts/README.md): the staff calls and their 409 codes, the extra conversation fields and `X-Acting-*` headers, the system lines, the event receiver with its HMAC signing, and silence while `human_active`. Items 4 and 5 above are now concrete proposals in `contracts/engine-internal.openapi.yaml` and `contracts/backend-events.openapi.yaml`.
 Status: ☐
 
 ---
@@ -551,7 +577,9 @@ Status: ☐
 
 **Phase 3 wrote the subset the gateway uses as an OpenAPI file: [contracts/engine-internal.openapi.yaml](contracts/engine-internal.openapi.yaml)** (create conversation, get conversation with messages, send a message with the streamed reply, health) and added two things to it that this table does not have yet, for the AI owner to confirm: `POST /internal/conversations/:id/escalate` `{ reason, summary? }` (the backend tells the engine to escalate without calling the model: `limit_reached`, `ai_unavailable`) and `aiReply: false` on the message call (store a message, generate no reply). The rest of the table (human messages, claim, release, knowledge, actions, erasure) is unchanged and not yet in the file.
 
-All calls carry `Authorization`, `X-Tenant-Id`, `X-Request-Id` (D2) and, for commands, `Idempotency-Key`.
+All calls carry `Authorization`, `X-Tenant-Id`, `X-Request-Id` (D2) and, for commands, `Idempotency-Key`; staff calls also carry `X-Acting-User-Id` and `X-Acting-Role`.
+
+**Phase 4 wrote the staff side into the contract file** (all marked "proposed addition", none confirmed by the AI side): `GET /internal/conversations` (list with `status`, `assignedUserId`, `endCustomerId`, `sort=escalatedAt`, paging), `GET /internal/conversation-counts`, `claim`, `release` (with `escalated` and `force`), `resolve` and `human-messages`, and the conversation fields `assignedUserId`, `escalatedAt`, `summary`, `resolvedAt`, `resolvedBy`.
 
 | Method and path | Purpose |
 |---|---|
@@ -560,7 +588,7 @@ All calls carry `Authorization`, `X-Tenant-Id`, `X-Request-Id` (D2) and, for com
 | `POST /internal/conversations/:id/messages` | customer message → stored, AI reply **streamed** (SSE) if `active` |
 | `POST /internal/conversations/:id/human-messages` | `{ userId, content }` → stored as `author_type=human` |
 | `POST /internal/conversations/:id/claim` | `{ userId }` → 200 / 409 |
-| `POST /internal/conversations/:id/release` | `{ to: "active" \| "resolved" }` |
+| `POST /internal/conversations/:id/release` | `{ userId, to: "active" \| "escalated" \| "resolved", force?, reason? }` (`force` only for a holder who was disabled or deleted) |
 | `POST /internal/knowledge/ingest` | `{ sourceId, storageKey, type }` |
 | `DELETE /internal/knowledge/:sourceId` | remove chunks |
 | `POST /internal/actions/:id/approve` and `/reject` | `{ userId }` |
@@ -568,7 +596,7 @@ All calls carry `Authorization`, `X-Tenant-Id`, `X-Request-Id` (D2) and, for com
 | `DELETE /internal/tenants/:id/data` | offboarding (§5.6) |
 | `GET /health` | liveness |
 
-Engine → backend: `POST /internal/events` (D5), `GET /internal/tenants/:id/agent-config`, `GET /internal/tenants/:id/integrations/:kind` (E4).
+Engine → backend: `POST /internal/events` (D5; **built in Phase 4**, contract in [contracts/backend-events.openapi.yaml](contracts/backend-events.openapi.yaml)), `GET /internal/tenants/:id/agent-config`, `GET /internal/tenants/:id/integrations/:kind` (E4).
 
 ## Appendix B: Proposed backend public API for FE (`/v1`)
 
@@ -577,19 +605,19 @@ Engine → backend: `POST /internal/events` (D5), `GET /internal/tenants/:id/age
 | Auth | `POST /auth/signup`, `POST /auth/login`, `GET/PATCH /me` (built), `POST /auth/verify-email`, `POST /auth/verify-email/resend` (H4, built) |
 | Tenant | `GET/PATCH /tenants/:tenantId` (own tenant), usage: `GET /tenants/:tenantId/usage` |
 | Users | `GET /tenants/:tenantId/users`, `GET/PATCH/DELETE …/users/:id` (no create: invites, H1) |
-| Customers | CRUD `/tenants/:tenantId/customers`, `GET …/customers/:id/conversations` |
-| Conversations | `GET /tenants/:tenantId/conversations?status=&assignedTo=`, `GET …/:id`, `POST …/:id/claim`, `POST …/:id/messages`, `POST …/:id/release`, `POST …/:id/resolve` |
+| Customers | CRUD `/tenants/:tenantId/customers`; **built (Phase 4):** `GET …/customers/:id/conversations` |
+| Conversations | **Built (Phase 4):** `GET /tenants/:tenantId/conversations?status=&assignedTo=&customerId=&sort=`, `GET …/counts`, `GET …/:id` (messages paginated), `POST …/:id/claim`, `…/release`, `…/resolve`, `…/messages`; the customer view is `GET …/customers/:id/conversations` |
 | Actions | `GET …/actions?status=proposed`, `POST …/actions/:id/approve`, `POST …/actions/:id/reject` |
 | Knowledge | `POST …/knowledge` (upload), `GET …/knowledge`, `DELETE …/knowledge/:id` |
 | Agent config | `GET/PUT /tenants/:tenantId/agent-config` |
 | Integrations | `PUT/DELETE /tenants/:tenantId/integrations/:kind` (write-only secrets) |
 | API keys | **Built (Phase 3):** `POST`, `GET`, `GET :id`, `PATCH :id` (name, origins), `DELETE :id` (revoke) on `/tenants/:tenantId/api-keys`; rotation is Phase 5 |
-| Realtime | `GET /tenants/:tenantId/events` (SSE) |
+| Realtime | **Built (Phase 4):** `GET /tenants/:tenantId/events` (SSE; Bearer header or `?ticket=`), `POST …/events/ticket`; the customer side is `GET /widget/events` |
 | Widget | **Built (Phase 3):** `POST /widget/sessions`, `POST /widget/messages` (answers `text/event-stream`; there is no separate stream route), `GET /widget/conversation` |
 | Platform admin | `/admin/auth/login`, `/admin/tenants…` |
-| Invites | `POST/GET /tenants/:tenantId/invites`, `DELETE …/:id`, `POST /auth/invites/accept` (H1) |
+| Invites | `POST/GET /tenants/:tenantId/invites`, `DELETE …/:id`, `POST /auth/invites/accept` (H1); **built (Phase 3B):** `GET /auth/invites/preview?token=` |
 | Password reset | `POST /auth/password-reset/request`, `POST /auth/password-reset/confirm` (H2) |
-| Notifications | `GET /tenants/:tenantId/notifications`, `POST …/:id/read`, `POST …/read-all` (H5) |
+| Notifications | **Built (Phase 4):** `GET /tenants/:tenantId/notifications` (`?unread=true`), `POST …/:id/read`, `POST …/read-all` (H5); unread count in `GET /me` |
 | Audit log | `GET /tenants/:tenantId/audit-logs` (H6) |
 | Billing | `GET /plans` (public), `GET /tenants/:tenantId/billing` (owner/admin), `GET/PUT /tenants/:tenantId/data-use` (owner), `/admin/tenants/:id/subscription` + `activate`, `record-payment`, `extend`, `change-plan`, `cancel` (I1-I6, I11; built in Phase 2B) |
 | Languages | `GET /i18n/locales`, `GET /i18n/:locale/:namespace` (H7, public) |

@@ -1,28 +1,24 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import {
-  IsIn,
-  IsOptional,
-  IsString,
-  MaxLength,
-  MinLength,
-} from 'class-validator';
-import { LOCALE_CODES } from '../../i18n/locales';
+import { IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { OptionalLocaleProperty } from '../../common/validation/locale';
 
 export class UpdateMeDto {
-  @ApiPropertyOptional({ example: 'Sana Malik' })
+  @ApiPropertyOptional({
+    example: 'Sana Malik',
+    type: String,
+    nullable: true,
+    description: 'Display name. `null` clears it (an empty string is refused).',
+  })
   @IsOptional()
   @IsString()
   @MinLength(1)
   @MaxLength(100)
-  name?: string;
+  name?: string | null;
 
-  @ApiPropertyOptional({
-    enum: LOCALE_CODES,
+  @OptionalLocaleProperty({
     nullable: true,
     description:
       'Dashboard language. `null` clears it, so the tenant default applies.',
   })
-  @IsOptional()
-  @IsIn(LOCALE_CODES)
   locale?: string | null;
 }

@@ -20,7 +20,10 @@
   "persona.default": "Assistant",
   "powered_by": "Powered by {name}",
   "reconnecting": "Connection lost. Reconnecting…",
+  "resolved.notice": "This conversation has been closed. Send a message to start a new one.",
   "send": "Send",
+  "status.chat_unavailable": "Chat is unavailable right now.",
+  "status.waiting_colleague": "Waiting for a colleague to join…",
   "title": "Chat with us",
   "typing": "Typing…",
   "unread": "{count, plural, one {# unread message} other {# unread messages}}"

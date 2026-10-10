@@ -51,6 +51,7 @@ export async function createTestApp(
 
   const app: INestApplication = moduleRef.createNestApplication({
     logger: false,
+    rawBody: true,
   });
   configureApp(app);
   setupSwagger(app);

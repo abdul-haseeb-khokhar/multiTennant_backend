@@ -12,13 +12,20 @@ import {
 import {
   ApiBearerAuth,
   ApiCreatedResponse,
+  ApiNotFoundResponse,
   ApiOkResponse,
+  ApiOperation,
   ApiTags,
 } from '@nestjs/swagger';
+import { CurrentUser } from '../auth/current-user.decorator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { Roles } from '../auth/roles';
+import type { AuthUser } from '../auth/roles';
 import { RolesGuard } from '../auth/roles.guard';
 import { ApiPaginatedResponse } from '../common/pagination/api-paginated-response.decorator';
+import { ConversationsService } from '../conversations/conversations.service';
+import { QueryConversationDto } from '../conversations/dto/conversation.dto';
+import { Conversation } from '../conversations/entities/conversation.entity';
 import { CreateEndCustomerDto } from './dto/create-end-customer.dto';
 import { QueryEndCustomerDto } from './dto/query-end-customer.dto';
 import { UpdateEndCustomerDto } from './dto/update-end-customer.dto';
@@ -30,7 +37,10 @@ import { EndCustomer } from './entities/end-customer.entity';
 @Controller('tenants/:tenantId/customers')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class EndCustomersController {
-  constructor(private readonly endCustomersService: EndCustomersService) {}
+  constructor(
+    private readonly endCustomersService: EndCustomersService,
+    private readonly conversations: ConversationsService,
+  ) {}
 
   @Post()
   @Roles('owner', 'admin', 'agent')
@@ -57,6 +67,23 @@ export class EndCustomersController {
   @ApiOkResponse({ type: EndCustomer })
   findOne(@Param('tenantId') tenantId: string, @Param('id') id: string) {
     return this.endCustomersService.findOne(tenantId, id);
+  }
+
+  @Get(':id/conversations')
+  @Roles('owner', 'admin', 'agent')
+  @ApiOperation({
+    summary: 'Conversations of one customer (every role)',
+    description:
+      'The customer view: the same list as `GET …/conversations?customerId=`, newest activity first. A customer of another tenant is a 404 CUSTOMER_NOT_FOUND.',
+  })
+  @ApiPaginatedResponse(Conversation)
+  @ApiNotFoundResponse({ description: 'CUSTOMER_NOT_FOUND' })
+  conversationsOf(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Query() query: QueryConversationDto,
+  ) {
+    return this.conversations.listForCustomer(user, id, query);
   }
 
   @Patch(':id')

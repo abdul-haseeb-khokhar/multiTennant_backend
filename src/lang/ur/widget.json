@@ -20,7 +20,10 @@
   "persona.default": "اسسٹنٹ",
   "powered_by": "{name} کی جانب سے",
   "reconnecting": "رابطہ منقطع ہو گیا۔ دوبارہ جوڑا جا رہا ہے…",
+  "resolved.notice": "یہ گفتگو بند کر دی گئی ہے۔ نئی گفتگو شروع کرنے کے لیے پیغام بھیجیں۔",
   "send": "بھیجیں",
+  "status.chat_unavailable": "چیٹ اس وقت دستیاب نہیں ہے۔",
+  "status.waiting_colleague": "ہمارے ساتھی کے شامل ہونے کا انتظار ہے…",
   "title": "ہم سے بات کریں",
   "typing": "لکھ رہا ہے…",
   "unread": "{count, plural, one {# غیر پڑھا پیغام} other {# غیر پڑھے پیغامات}}"

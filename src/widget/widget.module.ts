@@ -3,12 +3,15 @@ import { ApiKeysModule } from '../api-keys/api-keys.module';
 import { BillingCoreModule } from '../billing/billing-core.module';
 import { RateLimiter } from '../common/throttle/rate-limiter';
 import { I18nModule } from '../i18n/i18n.module';
+import { RealtimeCoreModule } from '../realtime/realtime-core.module';
 import { UsageModule } from '../usage/usage.module';
+import { EscalationRetryService } from './escalation-retry.service';
 import { WidgetAuthGuard } from './widget-auth.guard';
 import { WidgetCorsService } from './widget-cors.service';
 import { WidgetMessagesService } from './widget-messages.service';
 import { WidgetRateLimitService } from './widget-rate-limit.service';
 import { WidgetSessionsService } from './widget-sessions.service';
+import { WidgetStreamService } from './widget-stream.service';
 import {
   DefaultWidgetSettingsProvider,
   WidgetSettingsProvider,
@@ -24,7 +27,13 @@ import { DEFAULT_WIDGET_LIMITS, WIDGET_LIMITS } from './widget.constants';
  * `JWT_SECRET` (see `WidgetTokenService`), so the staff and platform guards cannot accept them.
  */
 @Module({
-  imports: [ApiKeysModule, BillingCoreModule, UsageModule, I18nModule],
+  imports: [
+    ApiKeysModule,
+    BillingCoreModule,
+    UsageModule,
+    I18nModule,
+    RealtimeCoreModule,
+  ],
   controllers: [WidgetController],
   providers: [
     // Its own limiter instance: the widget's counters are separate from the password-reset ones.
@@ -39,6 +48,8 @@ import { DEFAULT_WIDGET_LIMITS, WIDGET_LIMITS } from './widget.constants';
     WidgetTextService,
     WidgetSessionsService,
     WidgetMessagesService,
+    WidgetStreamService,
+    EscalationRetryService,
     WidgetAuthGuard,
     WidgetCorsService,
   ],

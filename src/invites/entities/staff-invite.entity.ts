@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { TenantUser } from '../../tenant-users/entities/tenant-user.entity';
+import { DEV_ONLY } from '../../common/openapi/dev-only';
 
 /** Response shape of an invitation. The token and its hash are never returned. */
 export class StaffInvite {
@@ -29,10 +30,43 @@ export class StaffInvite {
   createdAt: Date;
 
   @ApiPropertyOptional({
+    type: String,
+    format: 'date-time',
+    nullable: true,
     description:
-      'Only on creation and only with MAIL_MODE=link (development): the invite link, so it can be passed on by hand.',
+      'When the invitation was accepted. Always null in the pending list; set on an invite that was used.',
+  })
+  acceptedAt?: Date | null;
+
+  @ApiPropertyOptional({
+    type: String,
+    format: 'date-time',
+    nullable: true,
+    description:
+      'When the invitation was revoked. Null in the pending list; set on the answer to a revoke.',
+  })
+  revokedAt?: Date | null;
+
+  @ApiPropertyOptional({
+    ...DEV_ONLY,
+    description:
+      'DEVELOPMENT ONLY. Present only on the answer to creating an invite, and only when the server runs with MAIL_MODE=link (refused in production): the invite link, so it can be passed on by hand. Never in lists, never in production.',
   })
   link?: string;
+}
+
+export class InvitePreview {
+  @ApiProperty({ example: 'Acme Support' })
+  tenantName: string;
+
+  @ApiProperty({ enum: ['owner', 'admin', 'agent'] })
+  role: string;
+
+  @ApiProperty({ example: 'agent@acme.com' })
+  email: string;
+
+  @ApiProperty({ type: String, format: 'date-time' })
+  expiresAt: Date;
 }
 
 export class AcceptInviteResponse {

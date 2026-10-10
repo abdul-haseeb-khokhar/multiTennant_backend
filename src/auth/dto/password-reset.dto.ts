@@ -2,6 +2,7 @@ import { ApiProperty } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 import { IsString, MaxLength, MinLength } from 'class-validator';
 import { NormalizedEmailProperty } from '../../common/validation/email';
+import { NewPasswordProperty } from '../../common/validation/password-length';
 
 export class PasswordResetRequestDto {
   @ApiProperty({ example: 'acme', description: 'The tenant slug' })
@@ -22,9 +23,6 @@ export class PasswordResetConfirmDto {
   @MaxLength(256)
   token: string;
 
-  @ApiProperty({ minLength: 8, maxLength: 72 })
-  @IsString()
-  @MinLength(8)
-  @MaxLength(72)
+  @NewPasswordProperty()
   password: string;
 }

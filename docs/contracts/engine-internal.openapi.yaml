@@ -21,12 +21,16 @@ info:
     Items marked **[proposed addition]** are not in Appendix A yet; they are needed for D7 and I5
     ("never drop the end customer") and are listed as questions in team-alignment.md.
 
-    Events the engine will later push to the backend (`POST /internal/events`, D5, built in
-    Phase 4, **not** part of this file) and which the backend already relies on by name:
-    `conversation.created`, `conversation.escalated`, `conversation.resolved`, `message.created`,
-    `usage.recorded` (payload `{ conversationId, messageId, tokensIn, tokensOut, model }`).
-    The gateway already records usage from the message stream below; `usage.recorded` for the same
-    message id is then a no-op (usage is idempotent per conversation and message id).
+    **Phase 4 additions (all [proposed addition], for the staff side):** list and count
+    conversations, claim, release, resolve and store a human message, plus the fields a dashboard
+    needs on a conversation (`assignedUserId`, `escalatedAt`, `summary`, `resolvedAt`,
+    `resolvedBy`). Staff calls also carry `X-Acting-User-Id` and `X-Acting-Role` (for the engine's
+    own audit; never a source of the tenant). The backend does the authorisation (only the assignee
+    may reply, release or resolve) and checks it again with the engine's answer, so the engine must
+    enforce "claim only when unassigned" atomically and answer 409 with the codes below.
+
+    The events the engine pushes back are the other direction (engine calls the backend) and are
+    described in [backend-events.openapi.yaml](backend-events.openapi.yaml).
 servers:
   - url: http://engine.internal:4000
     description: Private network address (ENGINE_BASE_URL)
@@ -35,6 +39,7 @@ security:
 tags:
   - name: health
   - name: conversations
+  - name: staff
 paths:
   /health:
     get:
@@ -54,6 +59,59 @@ paths:
                     type: string
                     example: ok
   /internal/conversations:
+    get:
+      tags: [staff]
+      summary: List the tenant's conversations **[proposed addition]**
+      description: |
+        The staff queue and lists (dashboard, D6). Always limited to the tenant in `X-Tenant-Id`.
+        `status` is a comma-separated list; `sort=escalatedAt` orders oldest first (the queue),
+        the default is the latest message first. Paginated with `skip` / `take`
+        (default 20, maximum 100).
+      parameters:
+        - $ref: '#/components/parameters/TenantId'
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/ActingUserId'
+        - $ref: '#/components/parameters/ActingRole'
+        - name: status
+          in: query
+          description: Comma-separated statuses, for example `escalated,human_active`.
+          schema: { type: string }
+        - name: assignedUserId
+          in: query
+          schema: { type: string }
+        - name: endCustomerId
+          in: query
+          schema: { type: string }
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum: [lastMessageAt, escalatedAt]
+            default: lastMessageAt
+        - name: skip
+          in: query
+          schema: { type: integer, minimum: 0, default: 0 }
+        - name: take
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+      responses:
+        '200':
+          description: A page of conversations
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, total, skip, take]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Conversation'
+                  total: { type: integer }
+                  skip: { type: integer }
+                  take: { type: integer }
+        '400':
+          $ref: '#/components/responses/Error'
     post:
       tags: [conversations]
       summary: Create a conversation
@@ -259,6 +317,192 @@ paths:
           $ref: '#/components/responses/Error'
         '409':
           $ref: '#/components/responses/Error'
+  /internal/conversation-counts:
+    get:
+      tags: [staff]
+      summary: Number of conversations per status **[proposed addition]**
+      description: |
+        For the sidebar badge. All four statuses are always present. `assignedUserId` narrows it
+        to the conversations one staff member holds.
+      parameters:
+        - $ref: '#/components/parameters/TenantId'
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/ActingUserId'
+        - $ref: '#/components/parameters/ActingRole'
+        - name: assignedUserId
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: Counts
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationCounts'
+  /internal/conversations/{id}/claim:
+    post:
+      tags: [staff]
+      summary: A staff member takes the conversation **[proposed addition]**
+      description: |
+        **Atomic** (C4): succeeds only when the status is `active` or `escalated` and nobody is
+        assigned; the conversation becomes `human_active` with `assignedUserId = userId`, the AI
+        stops answering, a system line `agent.joined` is stored and `conversation.assigned` is
+        emitted. Otherwise 409: `CONVERSATION_ALREADY_CLAIMED` (somebody holds it, possibly the
+        caller) or `CONVERSATION_RESOLVED`. With the same Idempotency-Key a retry of a claim that
+        succeeded answers 200 with the same conversation, not 409.
+      parameters:
+        - $ref: '#/components/parameters/TenantId'
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/ActingUserId'
+        - $ref: '#/components/parameters/ActingRole'
+        - $ref: '#/components/parameters/ConversationId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [userId]
+              properties:
+                userId:
+                  type: string
+                  description: The staff member's `tenant_user.id` (the backend verified it).
+      responses:
+        '200':
+          description: The conversation after the claim
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Conversation'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+  /internal/conversations/{id}/release:
+    post:
+      tags: [staff]
+      summary: The assignee gives the conversation back **[proposed addition]**
+      description: |
+        `to: active` lets the AI answer again, `to: escalated` puts it back in the queue (it keeps
+        its original `escalatedAt`), `to: resolved` closes it (same as `/resolve`; this is the
+        value Appendix A already listed). The status must be `human_active` and `userId` the
+        assignee, otherwise 409 `CONVERSATION_NOT_ASSIGNED_TO_YOU` (or `CONVERSATION_RESOLVED`).
+        `force: true` skips the assignee check; the backend sets it **only** to release the
+        conversations of a staff member who was disabled or deleted (`to: escalated`). A system
+        line `agent.left` is stored and `conversation.released` is emitted.
+      parameters:
+        - $ref: '#/components/parameters/TenantId'
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/ActingUserId'
+        - $ref: '#/components/parameters/ActingRole'
+        - $ref: '#/components/parameters/ConversationId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [userId, to]
+              properties:
+                userId: { type: string }
+                to:
+                  $ref: '#/components/schemas/ReleaseTarget'
+                force: { type: boolean, default: false }
+                reason:
+                  type: string
+                  description: Free tag for the engine's log, for example `assignee_disabled`.
+      responses:
+        '200':
+          description: The conversation after the release
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Conversation'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+  /internal/conversations/{id}/resolve:
+    post:
+      tags: [staff]
+      summary: The assignee closes the conversation **[proposed addition]**
+      description: |
+        Sets `resolved`, `resolvedAt`, `resolvedBy: human`, clears the assignee, stores the
+        system line `resolved.notice` and emits `conversation.resolved`. Same preconditions and
+        409 codes as `release` (without `force`). A resolved conversation accepts no more
+        messages (409 `CONVERSATION_RESOLVED`).
+      parameters:
+        - $ref: '#/components/parameters/TenantId'
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/ActingUserId'
+        - $ref: '#/components/parameters/ActingRole'
+        - $ref: '#/components/parameters/ConversationId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [userId]
+              properties:
+                userId: { type: string }
+      responses:
+        '200':
+          description: The conversation after resolving
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Conversation'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+  /internal/conversations/{id}/human-messages:
+    post:
+      tags: [staff]
+      summary: Store a staff reply **[proposed addition]**
+      description: |
+        Stores a message with `author_type=human` and `author_user_id` (C2), role `assistant` for
+        the model's context. Only the assignee of a `human_active` conversation may (409
+        `CONVERSATION_NOT_ASSIGNED_TO_YOU`, `CONVERSATION_RESOLVED`). No AI reply is generated.
+        Emits `message.created` (with the text, because the customer may see it). The backend
+        limits the text to 2,000 characters; the engine enforces it as well (F6).
+      parameters:
+        - $ref: '#/components/parameters/TenantId'
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/ActingUserId'
+        - $ref: '#/components/parameters/ActingRole'
+        - $ref: '#/components/parameters/ConversationId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [userId, content]
+              properties:
+                userId: { type: string }
+                content:
+                  type: string
+                  minLength: 1
+                  maxLength: 2000
+      responses:
+        '201':
+          description: The stored message
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '400':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
 components:
   securitySchemes:
     internalToken:
@@ -289,6 +533,18 @@ components:
       in: path
       required: true
       schema: { type: string }
+    ActingUserId:
+      name: X-Acting-User-Id
+      in: header
+      required: false
+      schema: { type: string }
+      description: The staff member the call is made for (staff calls, Phase 4). For the engine's audit only.
+    ActingRole:
+      name: X-Acting-Role
+      in: header
+      required: false
+      schema: { type: string, enum: [owner, admin, agent] }
+      description: Their role at the time of the call. For the engine's audit only.
   responses:
     Error:
       description: Error
@@ -309,6 +565,29 @@ components:
     Channel:
       type: string
       enum: [widget, whatsapp, voice]
+    ReleaseTarget:
+      type: string
+      enum: [active, escalated, resolved]
+    ResolvedBy:
+      type: string
+      enum: [ai, human, customer, system]
+    ConversationCounts:
+      type: object
+      required: [active, escalated, human_active, resolved]
+      properties:
+        active: { type: integer }
+        escalated: { type: integer }
+        human_active: { type: integer }
+        resolved: { type: integer }
+    ErrorCodes:
+      description: |
+        Codes of 409 answers on the staff calls (documentation only). The backend maps them to its
+        own stable codes of the same names.
+      type: string
+      enum:
+        - CONVERSATION_ALREADY_CLAIMED
+        - CONVERSATION_RESOLVED
+        - CONVERSATION_NOT_ASSIGNED_TO_YOU
     ConversationStatus:
       type: string
       enum: [active, escalated, human_active, resolved]
@@ -345,6 +624,27 @@ components:
           nullable: true
         createdAt: { type: string, format: date-time }
         lastMessageAt: { type: string, format: date-time, nullable: true }
+        assignedUserId:
+          type: string
+          nullable: true
+          description: '**[proposed addition]** The staff member handling it (`human_active`). The engine stores the id; the backend resolves the name.'
+        escalatedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: '**[proposed addition]** When it was escalated, for the queue order.'
+        summary:
+          type: string
+          nullable: true
+          description: '**[proposed addition]** The handoff note written on escalation (C1).'
+        resolvedAt:
+          type: string
+          format: date-time
+          nullable: true
+        resolvedBy:
+          allOf:
+            - $ref: '#/components/schemas/ResolvedBy'
+          nullable: true
     Message:
       type: object
       required: [id, conversationId, authorType, content, createdAt]
