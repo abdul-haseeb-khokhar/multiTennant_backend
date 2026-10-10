@@ -12,7 +12,8 @@ Size: **S** ≈ days · **M** ≈ 1–2 weeks · **L** ≈ 2+ weeks (rough, solo
 | 1 | Account and team management | M | nothing (H3 mail provider can follow) | FE (auth, invite, audit, language screens) |
 | 2 | Shared infrastructure and engine contract | S–M | AI: A1–A6, D2, schema requests | everything that talks to the engine |
 | 2B | Billing foundation (plans, subscriptions, entitlements, manual payments) | M | nothing (can run beside 2); **built**, reminders wait for H5 | Phase 3 enforcement, FE billing screens |
-| 3 | Gateway and widget entry | M | AI: B5, D1–D3, engine create/message API; Phase 2B | FE widget, first end-to-end chat |
+| 3 | Gateway and widget entry (**built**, mock engine only) | M | AI: B5, D1–D3, engine create/message API; Phase 2B | FE widget, first end-to-end chat |
+| 3B | Frontend gap-report fixes (confirmed defects, section J of team-alignment) | S | nothing; decisions J1–J8 from Abdul | FE (correct, safe API) |
 | 4 | Human-agent flow and notifications | L | AI: C1–C4, D5, D6 | FE dashboard conversations |
 | 5 | Tenant configuration, knowledge, actions, usage | L | AI: E1–E4 | AI personalisation, plan limits |
 | 6 | Channels: WhatsApp and voice | L | AI: D4, E5; provider accounts | phone/WhatsApp customers |
@@ -39,7 +40,7 @@ Scope:
 - [x] Health endpoint, request-id middleware, JSON logging with `tenantId` (F3)
 - [x] Tests: unit tests for every service (mocked Prisma, including tenant-isolation cases), e2e tests against a test database (auth, tenant mismatch → 403, role denials); CI running lint + test + build
 
-Implementation status (branch `phase-0-foundation`, not committed): all items are built; `npm test` (127), `npm run test:e2e` (67), `npm run build` and a full `tsc --noEmit` pass locally. Caveats, details in `CLAUDE.md` known issues 6, 8 and 9: the e2e suite uses **mocked Prisma** (the database-backed check is the CI `migrations` job), the new migration is **not applied** anywhere yet, the CI workflow has **not run yet**, and `oxlint` could not run on the build machine (blocked native binary), so lint is unverified locally. The static OpenAPI document is `docs/openapi.json` (served live at `/docs`).
+Implementation status (merged to main, PR #1): all items are built; `npm test` (127), `npm run test:e2e` (67), `npm run build` and a full `tsc --noEmit` pass locally. Caveats, details in `CLAUDE.md` known issues 6, 8 and 9: the e2e suite uses **mocked Prisma** (the database-backed check is the CI `migrations` job), the new migration is **not applied** anywhere yet, the CI workflow has **not run yet**, and `oxlint` could not run on the build machine (blocked native binary), so lint is unverified locally. The static OpenAPI document is `docs/openapi.json` (served live at `/docs`).
 
 Depends on: nothing. Decisions needed: B1, B2, B3, F5, G1 (all backend-owned; frontend should review G1).
 **Done when:** known issues 1–9 in `CLAUDE.md` are closed, CI is green, and the OpenAPI document is published for the frontend.
@@ -58,7 +59,7 @@ Scope:
 - [x] `GET /me` (profile, role, tenant, locale)
 - [x] Also done in this phase: email normalisation (known issue 7) and an atomic last-owner check (known issue 4)
 
-Implementation status (branch `phase-1-account-team`, not committed): everything above is built except the mail provider. `npm test` (unit), `npm run test:e2e` (mocked Prisma), `npm run test:db` (new: the account flows over HTTP against a throwaway Postgres, including the constraints, the append-only trigger and the last-owner race), `npm run build` pass locally; `oxlint` could not run on the build machine (see `CLAUDE.md` known issue 9), so lint is unverified locally. Migrations `20261007120000_phase1_account_team` (additive) and `20261007120100_normalize_emails` (data guard plus CHECK constraints) are applied to the local `multitenant` database. Urdu translations were reviewed and accepted by the owner.
+Implementation status (merged to main, PR #2): everything above is built except the mail provider. `npm test` (unit), `npm run test:e2e` (mocked Prisma), `npm run test:db` (new: the account flows over HTTP against a throwaway Postgres, including the constraints, the append-only trigger and the last-owner race), `npm run build` pass locally; `oxlint` could not run on the build machine (see `CLAUDE.md` known issue 9), so lint is unverified locally. Migrations `20261007120000_phase1_account_team` (additive) and `20261007120100_normalize_emails` (data guard plus CHECK constraints) are applied to the local `multitenant` database. Urdu translations were reviewed and accepted by the owner.
 
 Depends on: Phase 0. Decision needed: H3 (mail provider; everything else is built behind the `Mailer` interface).
 **Done when:** an owner can invite an agent who sets their own password, reset flows work end to end, role changes appear in the audit log, and the frontend can load `en` and `ur`. (All four are covered by `test/db/team-flows.db-spec.ts`; only the real mail provider is outstanding.)
@@ -93,7 +94,7 @@ Scope:
 - [x] Error codes and `en`/`ur` translations: `PLAN_LIMIT_REACHED`, `PLAN_FEATURE_UNAVAILABLE`, `SUBSCRIPTION_PAST_DUE`, `TENANT_SUSPENDED` (existing), plus `NO_ACTIVE_SUBSCRIPTION`, `TENANT_CLOSED`, `INVALID_SUBSCRIPTION_STATE`, `SUBSCRIPTION_NOT_FOUND`, `PLAN_NOT_FOUND`, `NOT_IMPLEMENTED`. The Urdu text was written by an AI and needs a native-speaker check
 - [x] `data_use_consents` table and owner API (`GET`/`PUT /v1/tenants/:tenantId/data-use`, default off, I11), without any training export
 
-Implementation status (branch `phase-2b-billing`, not committed): everything above is built except the in-app reminder notifications (they need H5). `npm test` (517), `npm run test:e2e` (187), `npm run test:db` (49, against a throwaway database, run twice) and `npm run build` pass; `oxlint` could not run on the build machine (CLAUDE.md known issue 9). Migration `20261007140000_phase2b_billing` is additive only (new tables, CHECK constraints, the append-only trigger on `billing_events`, the four seeded plans, a Starter subscription for every existing tenant starting at deployment); it was generated against a throwaway database and applied to the local `multitenant` database after a `pg_dump` of `tenant_core`.
+Implementation status (merged to main with Phase 3, PR #4): everything above is built except the in-app reminder notifications (they need H5). `npm test` (517), `npm run test:e2e` (187), `npm run test:db` (49, against a throwaway database, run twice) and `npm run build` pass; `oxlint` could not run on the build machine (CLAUDE.md known issue 9). Migration `20261007140000_phase2b_billing` is additive only (new tables, CHECK constraints, the append-only trigger on `billing_events`, the four seeded plans, a Starter subscription for every existing tenant starting at deployment); it was generated against a throwaway database and applied to the local `multitenant` database after a `pg_dump` of `tenant_core`.
 
 How it works (details: `CLAUDE.md` rule 10 and the I-section of team-alignment.md):
 - **One writer.** `SubscriptionService.applyEvent` is the only place that changes `subscriptions`, `invoices`, `billing_events` and the `tenants.plan`/`status` mirrors, in one transaction with an audit entry. The transitions are pure functions in `billing/subscriptions/state-machine.ts`.
@@ -115,12 +116,29 @@ Scope:
 - [x] `usage_daily` and the real `UsageProvider`: `conversationsPerPeriod` is enforced from real usage when a conversation starts (the roadmap said Phase 5; it was cheap and the exit criteria need it)
 - [ ] `usage.recorded` event receiver (`POST /internal/events`, Phase 4): the event name and payload are fixed in `docs/contracts/`, the gateway already counts from the reply stream and `UsageService` dedupes per conversation and message id
 
-Implementation status (branch `phase-3-gateway`, cut from `phase-2b-billing`, not committed): everything above is built and tested against the **mock engine and a contract-faithful fake engine server only**; no real engine exists yet, so the second half of "Done when" (a full chat against the real engine) is open and waits for the AI side to implement `docs/contracts/engine-internal.openapi.yaml`. Migration `20261008100000_phase3_gateway` is additive (tables `api_keys`, `gateway_conversations`, `usage_daily`, `usage_events`); it was applied from empty to a throwaway database (drift check against `schema.prisma`: none; `npm run test:db`: 62 tests, repeated runs, which also caught and fixed a parallel-start race) and then to the local `multitenant` database after a `pg_dump` (the 11 existing tenants and their Starter subscriptions untouched). `npm run widget:walkthrough` was run against the real server on real Postgres with the mock engine and passes every step. How it works and how the frontend runs against the mock: `docs/contracts/README.md`; rules and known issues: `CLAUDE.md` rule 11 and known issue 12.
+Implementation status (merged to main, PR #4): everything above is built and tested against the **mock engine and a contract-faithful fake engine server only**; no real engine exists yet, so the second half of "Done when" (a full chat against the real engine) is open and waits for the AI side to implement `docs/contracts/engine-internal.openapi.yaml`. Migration `20261008100000_phase3_gateway` is additive (tables `api_keys`, `gateway_conversations`, `usage_daily`, `usage_events`); it was applied from empty to a throwaway database (drift check against `schema.prisma`: none; `npm run test:db`: 62 tests, repeated runs, which also caught and fixed a parallel-start race) and then to the local `multitenant` database after a `pg_dump` (the 11 existing tenants and their Starter subscriptions untouched). `npm run widget:walkthrough` was run against the real server on real Postgres with the mock engine and passes every step. How it works and how the frontend runs against the mock: `docs/contracts/README.md`; rules and known issues: `CLAUDE.md` rule 11 and known issue 12.
 
 Decisions the docs did not settle (taken in Phase 3, change them in code if you disagree): a blocked or engine-less start is **HTTP 200 `status: "blocked"`** with a fallback text and no token (not 403); an over-limit conversation is created, counted and given to humans (`status: "limited"`); **`month` allowance = UTC calendar month**, `total` = since the UTC day the period began; widget origins are exact (no wildcards, https or http for localhost); a missing `Origin` header is refused; reading and managing API keys is owner/admin only (agents get 403); at most 10 active API keys per tenant; the widget token is signed with a secret derived from `JWT_SECRET`; `visitorId` must be 16 to 64 characters of `A-Za-z0-9_-`; `past_due` keeps chatting but cannot create new widget keys.
 
 Depends on: Phase 2; engine endpoints for create/message; B4, B5, C3.
 **Done when:** the frontend widget completes a full chat against the real engine, and a suspended tenant or wrong origin is refused. (Met against the mock engine; the real engine is outstanding.)
+
+## Phase 3B: Frontend gap-report fixes
+**Goal:** close the defects a frontend prototype found in the backend (report: `D:multiTennant_frontendGAP-REPORT.md`, triage in team-alignment section J). Small items, no new product decisions.
+
+Scope (J0 in team-alignment; each with a test):
+- [ ] Signup password `@MaxLength(72)` (G23.11)
+- [ ] Hide `passwordChangedAt` and `emailVerifiedAt` from agents in the user list (G23.3)
+- [ ] `TRUST_PROXY` setting so audit `ip` and per-IP limits are correct behind the frontend proxy (G25)
+- [ ] `PATCH /me` accepts `name: null`; 429 responses carry `Retry-After` (G29.1, G29.4)
+- [ ] OpenAPI: invite `acceptedAt`/`revokedAt`, dev-only `link` fields marked, one delete-response convention (G23.4, G23.6, G23.13)
+- [ ] Locale fields validated against the locale registry instead of an `en|ur` enum (G23.5)
+- [ ] `GET /v1/auth/invites/preview?token=` for the accept page (G20)
+- [ ] Re-check that reactivating a suspended tenant restores its previous state (G29.6)
+- [ ] Fix stale text in team-alignment (G1 "bare array")
+
+Decisions J1–J8 (logout and revocation, slug discovery, owner self-service, role rows, upgrade request, conversation unit, time zone, translation keys) become further items here once Abdul answers.
+**Done when:** every box above is ticked, tests cover each, and the OpenAPI document and CLAUDE.md are updated.
 
 ## Phase 4: Human-agent flow and notifications
 **Goal:** staff see escalated conversations, take over, reply and hand back, with live updates.
