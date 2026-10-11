@@ -17,7 +17,7 @@ Size: **S** ≈ days · **M** ≈ 1–2 weeks · **L** ≈ 2+ weeks (rough, solo
 | 4 | Human-agent flow and notifications | L | AI: C1–C4, D5, D6 | FE dashboard conversations |
 | 4C | Mail provider: Resend, test mode (H3, decided) | S | Resend account and API key from Abdul | invites, resets and verification reach a real inbox |
 | 4B | Pro overage setting and optional spending cap (J6, decided) | S | nothing; follows Phase 4 | FE billing switch |
-| 3C | Account decisions: logout and revocation, owner self-service and slug rename, upgrade request, time zone (J1, J3, J4, J5, J7; J2 and J8 after Abdul answers) | M | nothing | FE (logout, settings, upgrade request) |
+| 3C | Account decisions: logout and revocation, owner self-service and slug rename, upgrade request, time zone (J1, J2, J3, J4, J5, J7; J8 deferred) | M | nothing | FE (logout, settings, upgrade request) |
 | 5 | Tenant configuration, knowledge, actions, usage | L | AI: E1–E4 | AI personalisation, plan limits |
 | 6 | Channels: WhatsApp and voice | L | AI: D4, E5; provider accounts | phone/WhatsApp customers |
 | 7 | Human-agent productivity (deferred) | M | product decision | team efficiency |
@@ -223,7 +223,7 @@ Decisions the docs did not settle (change them in code if you disagree): signup 
 
 Follow-ups: send the billing reminders by email (templates exist; needs the recipients' addresses and locales, the 100-a-day cap in mind and a dedupe on the notification rows); bounce and complaint webhooks (suppression list); Urdu email texts need a native-speaker check.
 
-## Phase 3C: Account decisions (J1, J3, J4, J5, J7)
+## Phase 3C: Account decisions (J1, J2, J3, J4, J5, J7)
 **Goal:** build the account-level decisions Abdul took on 2026-10-11 (team-alignment section J).
 
 Scope:
@@ -231,7 +231,8 @@ Scope:
 - [ ] J3 + J7: `GET`/`PATCH /v1/tenants/:tenantId` (owner edits name, defaultLocale, timezone, slug); `tenants.timezone` default `Asia/Karachi`; slug rename rules (availability with suggestions, once per 30 days, old slug accepted for 30 days and reserved for 90, audit `tenant.slug_changed`)
 - [ ] J4 rows: approvals list for owner and admin, integration and API-key details hidden from agents, nobody disables, demotes or deletes themselves (consent row stays owner only)
 - [ ] J5: `upgrade_requests` table, owner request route, platform-admin list and handle routes, mail to `PLATFORM_ADMIN_NOTIFY_EMAIL`, `PATCH /v1/admin/tenants/:id` no longer accepts `plan` or `status`
-- [ ] J2 (workspace discovery) and J8 (translation keys) once Abdul has answered
+- [ ] J2: `POST /v1/auth/login-email` and `POST /v1/auth/select-workspace` (selection token, workspace list with availability reasons, `unmatchedCount`, single-workspace shortcut), login throttling per email and per IP on both login routes with `Retry-After`, constant-time failure, password reset by email only (one email, one link, new password on every membership with that email, all sessions ended), `GET /v1/auth/slug-available` with suggestions; the old slug login keeps working
+- [ ] J8 (translation keys) is deferred: not in this phase
 - [ ] Tests (unit, e2e, DB flows), OpenAPI, translations en and ur for every new code and text, docs
 
 Depends on: nothing. **Done when:** the boxes above are ticked and the frontend can call logout, tenant settings and the upgrade request.
