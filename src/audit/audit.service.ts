@@ -27,6 +27,7 @@ export const AuditAction = {
   SUBSCRIPTION_PERIOD_ENDED: 'subscription.period_ended',
   SUBSCRIPTION_EXTENDED: 'subscription.extended',
   SUBSCRIPTION_CLOSED: 'subscription.closed',
+  BILLING_OVERAGE_CHANGED: 'billing.overage_changed',
   DATA_USE_GRANTED: 'data_use.granted',
   DATA_USE_REVOKED: 'data_use.revoked',
   // gateway (Phase 3)

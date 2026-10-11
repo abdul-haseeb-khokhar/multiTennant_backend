@@ -2,7 +2,7 @@ import { HttpStatus, Injectable } from '@nestjs/common';
 import { ApiException } from '../common/errors/api.exception';
 import { ErrorCode } from '../common/errors/error-codes';
 import { generateToken, hashToken } from '../common/tokens/tokens';
-import { MailService } from '../mail/mail.service';
+import { MailResult, MailService } from '../mail/mail.service';
 import { DEFAULT_LOCALE } from '../i18n/locales';
 import { PrismaService } from '../prisma/prisma.service';
 import type { AuthUser } from './roles';
@@ -18,14 +18,15 @@ export class EmailVerificationService {
   ) {}
 
   /**
-   * Creates a verification link for the user and emails it in the background. Earlier unused
-   * links stop working. Returns the link only when `MAIL_MODE=link`.
+   * Creates a verification link for the user and emails it. Earlier unused links stop
+   * working. A failed send does not undo the link: the caller learns it from `delivery`. Returns the
+   * link only when `MAIL_MODE=link`.
    */
   async issue(user: {
     id: string;
     email: string;
     locale: string;
-  }): Promise<{ link?: string }> {
+  }): Promise<MailResult> {
     const { token, tokenHash } = generateToken();
     const now = new Date();
     await this.prisma.emailVerification.updateMany({
@@ -39,7 +40,7 @@ export class EmailVerificationService {
         expiresAt: new Date(now.getTime() + VERIFICATION_TTL_MS),
       },
     });
-    return this.mail.queue({
+    return this.mail.sendNow({
       to: user.email,
       template: 'email-verification',
       token,
@@ -48,7 +49,7 @@ export class EmailVerificationService {
   }
 
   /** Sends a fresh link to the signed-in user; a user who is already verified gets nothing. */
-  async resend(actor: AuthUser): Promise<{ link?: string }> {
+  async resend(actor: AuthUser): Promise<MailResult> {
     const user = await this.prisma.tenantUser.findFirst({
       where: { id: actor.userId, tenantId: actor.tenantId },
       select: {
@@ -60,7 +61,8 @@ export class EmailVerificationService {
       },
     });
     if (!user || user.emailVerifiedAt) {
-      return {};
+      // nothing to verify: nothing was sent
+      return { delivery: 'skipped' };
     }
     return this.issue({
       id: user.id,

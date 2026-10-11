@@ -87,6 +87,7 @@ The blocked and limit paths do not need the mock; they come from the tenant itse
 
 * **Plan limit** (`status: "limited"`, messages answered with `fallback` `limit_reached`): as a platform admin,
   `POST /v1/admin/tenants/$TENANT/subscription/change-plan` with `{"planCode":"free","entitlementsOverride":{"conversationsPerPeriod":1}}`, then start sessions with new visitor ids. A visitor with an open conversation is never stopped by the limit.
+* **Overage** (Pro, J6): with `change-plan` to `pro` and `{"conversationsPerPeriod":1}` as `entitlementsOverride`, new visitors keep getting `status: "ready"` past the limit (overage is on by default). As the tenant owner `PATCH /v1/tenants/$TENANT/billing/settings` with `{"overageEnabled":false}` turns that back into the `limited` path above; nothing changes in the engine contract (the engine is simply not told about the extra conversations, the backend decides).
 * **Blocked tenant** (`status: "blocked"`, no token): `PATCH /v1/admin/tenants/$TENANT` with `{"status":"suspended"}`. Set it back to `active` afterwards.
 
 ## What the widget needs to know

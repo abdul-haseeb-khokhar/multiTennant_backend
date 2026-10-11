@@ -16,6 +16,7 @@ export const NotificationType = {
   BILLING_DOWNGRADED: 'billing.downgraded',
   USAGE_THRESHOLD: 'usage.threshold',
   USAGE_LIMIT_REACHED: 'usage.limit_reached',
+  USAGE_OVERAGE_STARTED: 'usage.overage_started',
 } as const;
 export type NotificationType =
   (typeof NotificationType)[keyof typeof NotificationType];
@@ -114,8 +115,25 @@ export const NOTIFICATION_TYPES: Record<
     },
     link: '/billing',
   },
+  [NotificationType.USAGE_OVERAGE_STARTED]: {
+    recipients:
+      'active owners and admins; once per period at 100% when the plan has an overage price and overage is on (J6); the AI keeps answering',
+    params: {
+      metric: 'conversations',
+      percent: '100',
+      used: 'conversations used in the period',
+      limit: 'conversations included in the plan',
+      period: 'month | total',
+      priceMinor: 'price of one extra conversation, minor units',
+      price:
+        'the same in major units (priceMinor / 100), for number formatting',
+      currency: 'ISO currency code, for example PKR',
+    },
+    link: '/billing',
+  },
   [NotificationType.USAGE_LIMIT_REACHED]: {
-    recipients: 'active owners and admins; once per period at 100%',
+    recipients:
+      'active owners and admins; once per period at 100% when the AI stops (no overage price, or overage switched off, J6)',
     params: {
       metric: 'conversations',
       percent: '100',

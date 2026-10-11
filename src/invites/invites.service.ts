@@ -117,13 +117,13 @@ export class InvitesService {
       return created;
     });
 
-    const { link } = await this.mail.sendNow({
+    const { link, delivery } = await this.mail.sendNow({
       to: email,
       template: 'staff-invite',
       token,
       locale: tenant.defaultLocale ?? DEFAULT_LOCALE,
     });
-    return { ...invite, link };
+    return { ...invite, link, delivery };
   }
 
   /** Pending invites only: not accepted, not revoked, not expired. */

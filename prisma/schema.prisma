@@ -236,6 +236,9 @@ model Subscription {
   closedAt               DateTime? @map("closed_at")
   // Per-tenant overrides merged over the plan's entitlements (custom Enterprise contracts).
   entitlementsOverride   Json?     @map("entitlements_override")
+  // Phase 4B (J6): whether conversations past the included amount are answered and billed (only on plans
+  // that have an overage price). Changed only by the owner through SubscriptionService.setOverageEnabled.
+  overageEnabled         Boolean   @default(true) @map("overage_enabled")
   provider               String    @default("manual")
   providerCustomerId     String?   @map("provider_customer_id")
   providerSubscriptionId String?   @map("provider_subscription_id")
@@ -272,6 +275,9 @@ model Invoice {
   recordedBy        String?   @map("recorded_by")
   providerInvoiceId String?   @map("provider_invoice_id")
   paidAt            DateTime? @map("paid_at")
+  // Phase 4B: the part of amountMinor that is overage (extra conversations), recorded by the admin. No tax lines.
+  overageCount       Int?      @map("overage_count")
+  overageAmountMinor Int?      @map("overage_amount_minor")
   createdAt         DateTime  @default(now()) @map("created_at")
   updatedAt         DateTime  @default(now()) @updatedAt @map("updated_at")
 

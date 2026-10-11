@@ -528,6 +528,75 @@ describe('Widget gateway (e2e, mocked database, mock engine)', () => {
         });
         expect(third.status).toBe('ready');
       });
+
+      describe('overage (J6)', () => {
+        const proWithAllowanceOf = (conversations: number) =>
+          changeSubscription('tenant-a', {
+            planCode: 'pro',
+            interval: 'month',
+            entitlementsOverride: { conversationsPerPeriod: conversations },
+          });
+        const visitor = (n: number) => ({
+          visitorId: `visitor-overage-${n}-0123456789`,
+        });
+        const aiBlockedOf = (conversationId: string) =>
+          gateway.conversations.find((c) => c.conversationId === conversationId)
+            ?.aiBlocked;
+
+        it('Pro with overage on keeps answering past the included conversations and still counts them', async () => {
+          proWithAllowanceOf(1);
+          const first = await openSession(visitor(1));
+          const second = await openSession(visitor(2));
+          const third = await openSession(visitor(3));
+          for (const session of [first, second, third]) {
+            expect(session.status).toBe('ready');
+            expect(session.fallback).toBeUndefined();
+            expect(aiBlockedOf(session.conversationId)).toBe(false);
+          }
+          const total = gateway
+            .usageOf('tenant-a')
+            .reduce((sum, r) => sum + r.conversations, 0);
+          expect(total).toBe(3);
+        });
+
+        it('with overage switched off the next conversation past the limit is held for a human (hard stop)', async () => {
+          proWithAllowanceOf(1);
+          await openSession(visitor(1));
+          const extra = await openSession(visitor(2));
+          expect(extra.status).toBe('ready');
+          changeSubscription('tenant-a', { overageEnabled: false });
+          const stopped = await openSession(visitor(3));
+          expect(stopped).toMatchObject({
+            status: 'limited',
+            fallback: { reason: 'limit_reached' },
+          });
+          expect(aiBlockedOf(stopped.conversationId)).toBe(true);
+          // switching it on again answers again; the one held for a human stays with a human
+          changeSubscription('tenant-a', { overageEnabled: true });
+          expect((await openSession(visitor(4))).status).toBe('ready');
+          expect((await openSession(visitor(3))).status).toBe('limited');
+        });
+
+        it('a plan without an overage price stops hard even though the stored setting is on', async () => {
+          changeSubscription('tenant-a', {
+            planCode: 'free',
+            overageEnabled: true,
+            entitlementsOverride: { conversationsPerPeriod: 1 },
+          });
+          await openSession(visitor(1));
+          expect((await openSession(visitor(2))).status).toBe('limited');
+        });
+
+        it('past_due keeps answering within the limit but does not run up overage', async () => {
+          proWithAllowanceOf(1);
+          changeSubscription('tenant-a', {
+            status: 'past_due',
+            graceEndsAt: new Date(clock.now().getTime() + 5 * 86_400_000),
+          });
+          expect((await openSession(visitor(1))).status).toBe('ready');
+          expect((await openSession(visitor(2))).status).toBe('limited');
+        });
+      });
     });
   });
 

@@ -2,6 +2,7 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { TenantUser } from '../../tenant-users/entities/tenant-user.entity';
 import { Tenant } from '../../tenants/entities/tenant.entity';
 import { DEV_ONLY } from '../../common/openapi/dev-only';
+import { DELIVERY_DESCRIPTION, DELIVERY_STATUSES } from '../../mail/delivery';
 
 export class SignupResponse {
   @ApiProperty({ type: Tenant })
@@ -21,4 +22,10 @@ export class SignupResponse {
       'DEVELOPMENT ONLY: present only when the server runs with MAIL_MODE=link (refused in production); the email-verification link.',
   })
   verificationLink?: string;
+
+  @ApiProperty({
+    enum: DELIVERY_STATUSES,
+    description: `Of the verification email. ${DELIVERY_DESCRIPTION} Signup succeeds either way; resend with POST /v1/auth/verify-email/resend.`,
+  })
+  verificationDelivery: 'sent' | 'failed' | 'skipped';
 }

@@ -71,6 +71,9 @@ export type BillingEventPayloads = {
     reference?: string;
     providerInvoiceId?: string;
     entitlementsOverride?: EntitlementsOverride | null;
+    /** J6: extra conversations this payment covers and their share of `amountMinor`, recorded as given (no tax lines). */
+    overageCount?: number;
+    overageAmountMinor?: number;
   };
   [BillingEventType.PAYMENT_FAILED]: {
     reason?: string;
@@ -103,6 +106,8 @@ export interface InvoiceDraft {
   method: string;
   reference: string | null;
   providerInvoiceId: string | null;
+  overageCount: number | null;
+  overageAmountMinor: number | null;
 }
 
 export interface Step {
@@ -413,6 +418,30 @@ export function applyEventToState<T extends AppliedEventType>(
           'amountMinor must be a positive integer (minor units)',
         );
       }
+      if (
+        (p.overageCount === undefined) !==
+        (p.overageAmountMinor === undefined)
+      ) {
+        throw invalidInput(
+          'overageCount and overageAmountMinor go together: send both or neither',
+        );
+      }
+      if (
+        p.overageAmountMinor !== undefined &&
+        (!Number.isInteger(p.overageAmountMinor) ||
+          p.overageAmountMinor < 0 ||
+          p.overageAmountMinor > p.amountMinor)
+      ) {
+        throw invalidInput(
+          'overageAmountMinor must be an integer between 0 and amountMinor',
+        );
+      }
+      if (
+        p.overageCount !== undefined &&
+        (!Number.isInteger(p.overageCount) || p.overageCount < 0)
+      ) {
+        throw invalidInput('overageCount must be a non-negative integer');
+      }
       const target = requirePlan(plans, p.planCode ?? state.planCode);
       if (!isPaidPlan(target)) {
         throw invalidInput(
@@ -482,6 +511,10 @@ export function applyEventToState<T extends AppliedEventType>(
             method: p.method,
             reference: p.reference ?? null,
             renewal,
+            ...(p.overageCount !== undefined && {
+              overageCount: p.overageCount,
+              overageAmountMinor: p.overageAmountMinor,
+            }),
           },
           invoice: {
             planCode: target.code,
@@ -492,6 +525,8 @@ export function applyEventToState<T extends AppliedEventType>(
             method: p.method,
             reference: p.reference ?? null,
             providerInvoiceId: p.providerInvoiceId ?? null,
+            overageCount: p.overageCount ?? null,
+            overageAmountMinor: p.overageAmountMinor ?? null,
           },
         },
       };

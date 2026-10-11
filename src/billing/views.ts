@@ -1,4 +1,6 @@
 import type { BillingEvent, Invoice } from '@prisma/client';
+import { overageSettings } from './overage';
+import type { ConversationUsageSummary } from './overage.service';
 import type { EffectiveSubscription } from './subscriptions/effective-subscription';
 
 /** Mappers from database rows to API shapes (see `entities/billing.entities.ts`). Internal columns stay out. */
@@ -16,6 +18,21 @@ export function toSubscriptionSummary(s: EffectiveSubscription) {
     graceEndsAt: s.graceEndsAt,
     graceDaysLeft: s.graceDaysLeft,
     limits: s.entitlements,
+    overage: overageSettings(s),
+  };
+}
+
+/** The period's conversation figures for the billing screens (J6). */
+export function toConversationUsageView(u: ConversationUsageSummary) {
+  return {
+    period: u.period,
+    periodStart: u.periodStart,
+    included: u.included,
+    used: u.used,
+    overageCount: u.overage.count,
+    overageAmountMinor: u.overage.amountMinor,
+    overagePriceMinor: u.overage.priceMinor,
+    currency: u.overage.currency,
   };
 }
 
@@ -41,6 +58,8 @@ export function toInvoiceView(i: Invoice) {
     method: i.method,
     reference: i.reference,
     paidAt: i.paidAt,
+    overageCount: i.overageCount,
+    overageAmountMinor: i.overageAmountMinor,
     createdAt: i.createdAt,
   };
 }

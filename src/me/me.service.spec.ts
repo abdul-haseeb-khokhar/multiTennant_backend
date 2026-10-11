@@ -117,6 +117,8 @@ describe('MeService', () => {
         daysLeft: 9,
         graceDaysLeft: null,
         provider: 'manual',
+        currency: 'PKR',
+        overageEnabled: true,
         entitlements: limits,
         entitlementsOverride: null,
         nextTransitionAt: new Date('2026-10-16'),
@@ -135,6 +137,13 @@ describe('MeService', () => {
         graceEndsAt: null,
         graceDaysLeft: null,
         limits,
+        // Starter has no overage price: the switch does not exist for it
+        overage: {
+          available: false,
+          enabled: false,
+          priceMinor: null,
+          currency: 'PKR',
+        },
       });
       // Internal billing columns do not leak into /me.
       expect(me.subscription).not.toHaveProperty('provider');

@@ -13,7 +13,7 @@ describe('ConsoleMailer', () => {
         locale: 'en',
         link: 'http://x/reset-password?token=t',
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toBe('skipped');
     expect(log).toHaveBeenCalledWith(
       expect.objectContaining({
         to: 'a@b.co',

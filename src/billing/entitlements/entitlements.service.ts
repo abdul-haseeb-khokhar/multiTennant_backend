@@ -4,6 +4,7 @@ import { ApiException } from '../../common/errors/api.exception';
 import { ErrorCode } from '../../common/errors/error-codes';
 import { SubscriptionStatus } from '../billing.constants';
 import { Clock } from '../clock';
+import { overageSettings } from '../overage';
 import { EffectiveSubscription } from '../subscriptions/effective-subscription';
 import { SubscriptionService } from '../subscriptions/subscription.service';
 import { EntitlementKey, LIMIT_KEYS, LimitKey, limitFor } from './entitlements';
@@ -19,6 +20,11 @@ export type EntitlementDecision =
       /** The limit that applied (null = unlimited or not a numeric limit). */
       limit: number | null;
       used: number | null;
+      /**
+       * Conversations only (J6): the included amount is used up but the plan has an overage price and
+       * the owner has overage switched on, so this conversation is allowed and billed as an extra.
+       */
+      overage?: true;
     }
   | {
       allowed: false;
@@ -163,6 +169,16 @@ export class EntitlementsService {
         conversationPeriod: entitlements.conversationPeriod,
       }));
     if (used + amount > limit) {
+      // J6: past the included conversations the AI keeps answering when the plan has an overage
+      // price and the owner left overage on. Not while a payment is overdue: that tenant keeps
+      // answering within its limit (I5) but must not run up more charges.
+      if (
+        limitKey === 'conversations' &&
+        subscription.status !== SubscriptionStatus.PAST_DUE &&
+        overageSettings(subscription).enabled
+      ) {
+        return { allowed: true, planCode: plan, limit, used, overage: true };
+      }
       return {
         allowed: false,
         code: ErrorCode.PLAN_LIMIT_REACHED,

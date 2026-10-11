@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { TenantUser } from '../../tenant-users/entities/tenant-user.entity';
 import { DEV_ONLY } from '../../common/openapi/dev-only';
+import { DELIVERY_DESCRIPTION, DELIVERY_STATUSES } from '../../mail/delivery';
 
 /** Response shape of an invitation. The token and its hash are never returned. */
 export class StaffInvite {
@@ -53,6 +54,12 @@ export class StaffInvite {
       'DEVELOPMENT ONLY. Present only on the answer to creating an invite, and only when the server runs with MAIL_MODE=link (refused in production): the invite link, so it can be passed on by hand. Never in lists, never in production.',
   })
   link?: string;
+
+  @ApiPropertyOptional({
+    enum: DELIVERY_STATUSES,
+    description: `Only on the answer to creating an invite. ${DELIVERY_DESCRIPTION}`,
+  })
+  delivery?: 'sent' | 'failed' | 'skipped';
 }
 
 export class InvitePreview {

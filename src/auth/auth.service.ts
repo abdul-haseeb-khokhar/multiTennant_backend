@@ -84,7 +84,8 @@ export class AuthService {
           passwordHash,
         );
         // The owner can use the trial straight away; inviting staff waits for the verification
-        // link (H4). A mail problem must not undo a completed signup, hence the background send.
+        // link (H4). A mail problem must not undo a completed signup: a failed send is reported as
+        // `verificationDelivery: 'failed'` and the owner can resend from the dashboard.
         const verification = await this.emailVerification.issue({
           id: owner.id,
           email: owner.email,
@@ -100,6 +101,7 @@ export class AuthService {
           ),
           // Only with MAIL_MODE=link (development).
           verificationLink: verification.link,
+          verificationDelivery: verification.delivery,
         };
       } catch (error) {
         // A new tenant has no users yet, so the only unique constraint that can fire is the slug.

@@ -329,12 +329,12 @@ Invites, resets and verification need to reach a person, even though notificatio
 - `MAIL_PROVIDER` = `console` (default, logs the link) | `resend`; production refuses to start with `console`.
 - `RESEND_API_KEY` (secret; a send-only key from the Resend dashboard).
 - `MAIL_FROM` = `onboarding@resend.dev` for now; later an address on the verified domain.
-- `MAIL_FROM_NAME` = the product name shown to recipients.
+- `MAIL_FROM_NAME` = the product name shown to recipients. **Default: `SupportDesk AI` (a working name, decided 2026-10-10; still configurable).**
 - `MAIL_REDIRECT_TO` = the Resend account's own email, **test stage only**: every outgoing message goes to that one address, and the subject/body header names the intended recipient so invites and resets can still be exercised. Production refuses to start with it set.
 - `MAIL_MODE=link` stays a separate development switch (links also returned in API responses); it is refused in production.
 **Design points for the implementation:** HTML and plain-text templates rendered from the `email.<template>.*` keys of the `notifications` namespace in the recipient's locale (Urdu right-to-left); the send failing must not break the flow (the invite or reset still exists) but must be logged without the link and visible to the caller (for example `delivery: sent | failed | skipped` in the response so the dashboard can offer "resend"); a bounded timeout and one retry; no recipient address or link in logs; a health warning when sending fails repeatedly; the 100-a-day cap makes a burst of signups fail silently, so watch the failure log and upgrade the plan when needed. Bounce and complaint webhooks (suppression list) come later.
 **Moving to production mail:** buy or reuse a domain, verify it in Resend (SPF, DKIM, DMARC records), set `MAIL_FROM` to an address on it, remove `MAIL_REDIRECT_TO`.
-**Built (Phase 1):** `Mailer` (abstract class, injectable) with `ConsoleMailer` bound in `MailModule`; `MailService` builds the links and, with `MAIL_MODE=link`, also returns them (invite response `link`, reset request `link`, signup `verificationLink`). `MAIL_MODE=link` makes the app refuse to start when `NODE_ENV=production`, and production also requires `FRONTEND_URL`. The message gives the recipient `locale` and a template name; a provider renders the templates (the keys are written in en and ur). **Not built yet:** `ResendMailer` (Phase 4C).
+**Built (Phase 1):** `Mailer` (abstract class, injectable) with `ConsoleMailer` bound in `MailModule`; `MailService` builds the links and, with `MAIL_MODE=link`, also returns them (invite response `link`, reset request `link`, signup `verificationLink`). `MAIL_MODE=link` makes the app refuse to start when `NODE_ENV=production`, and production also requires `FRONTEND_URL`. The message gives the recipient `locale` and a template name; a provider renders the templates (the keys are written in en and ur). **Built (Phase 4C):** `ResendMailer` and `MAIL_PROVIDER=console|resend` (production refuses `console`, `MAIL_REDIRECT_TO`, a `resend.dev` sender), `RESEND_API_KEY`, `MAIL_FROM` (default `onboarding@resend.dev`), `MAIL_FROM_NAME` (default `SupportDesk AI`), `MAIL_REDIRECT_TO` (subject `[TEST for <recipient>]` plus a marked line in the body), optional `MAIL_TIMEOUT_MS` (5 s per attempt, one retry after a network error, timeout or 5xx, never after 4xx/429). HTML and plain-text templates from the `email.*` keys in en and ur (right-to-left), HTML escaped, no tracking. A failed send never breaks the flow: invite create (`delivery`), signup (`verificationDelivery`) and verification resend (`delivery`) report `sent | failed | skipped`; the password-reset request stays a constant 202 with no delivery field. Failures are logged by template and reason code only (`test_mode_recipient`, `quota_daily`, `quota_monthly`, `rate_limited`, `auth`, `timeout`, `network`, ...); `GET /health/ready` shows `mail.status` (`degraded` after 3 failures in a row, readiness stays 200). The Resend facts in this section were checked against Resend's documentation on 2026-10-11 (the 403 test-mode refusal, the 429 quota errors, 10 requests a second, 100 a day and 3,000 a month on the free plan). **Not verified:** real delivery (needs your key; checklist in the README). **Follow-ups:** emailing the billing reminders (templates exist), bounce/complaint webhooks, native review of the Urdu email texts.
 Status: ☐
 
 ### H4. Email verification: BE
@@ -442,6 +442,7 @@ At a limit the **end customer is never dropped**: the widget shows the tenant's 
 
 **Built (Phase 2B):** `EntitlementsService.check(tenantId, key, amount?, options?)` returns `{ allowed, planCode, limit, used }` or `{ allowed: false, code, reason, ... }`; `assert` throws a 403 with the same code. Keys: `seats`, `conversations`, `knowledgeMb`, `voice`, `channel:<name>`. Codes: `PLAN_LIMIT_REACHED`, `PLAN_FEATURE_UNAVAILABLE`, `SUBSCRIPTION_PAST_DUE`, `TENANT_SUSPENDED`, `TENANT_CLOSED`, `NO_ACTIVE_SUBSCRIPTION`. `past_due` keeps answering customers (`conversations` still allowed) but cannot grow (seats, uploads, channels). Wired into invite creation, invite acceptance and re-enabling a user (seats = active users + pending invites, counted under the subscription row lock so parallel invites cannot overshoot). 30 s cache, dropped on every change by this instance and never kept past the next time-based transition.
 **Built (Phase 3), gateway:** `conversations` is enforced from real usage (`usage_daily`) when a conversation starts; a returning visitor of an open conversation is never stopped. At the limit the conversation is still created and counted, marked `limited`, the customer's messages are stored with `aiReply:false`, the conversation escalates with `limit_reached` and the model is not called. `past_due` keeps answering customers (`allowPastDue` on the chat check) but cannot create new widget keys. A suspended or closed tenant, or a plan without chat, answers `status: "blocked"`. `knowledgeMb` still reports 0 usage until knowledge upload exists (Phase 5).
+**Built (Phase 4B):** on a plan with an overage price and the owner's setting on, `check('conversations')` answers `allowed: true, overage: true` past the included amount (J6); every other key and every other plan is unchanged.
 Status: ☐
 
 ### I6. Manual billing API for platform admins (all audited): BE
@@ -461,6 +462,7 @@ In-app notifications (H5) and a dashboard banner: Starter ends in 7, 3 and 1 day
 
 **Built (Phase 2B), reminders NOT built:** the job and the request-time checks are done (the job sweeps on boot and hourly in every instance, one holding an advisory lock). The notifications need H5 (Phase 4). Until then `GET /v1/me` carries `subscription` (plan, status, `currentPeriodEnd`, `daysLeft`, `graceEndsAt`, `graceDaysLeft`, `cancelAtPeriodEnd`, limits) so the frontend can show the banner.
 **Built (Phase 4):** the reminders are in-app notifications for owners and admins, created idempotently by the hourly billing job: the Starter trial or a paid period ends in 7, 3 and 1 days, the grace period started, the tenant was moved to a lower plan, and 80% and 100% of the conversation allowance (one reminder per tenant, kind, threshold and period). The data-deletion notices of I10 wait for Phase 8.
+**Phase 4B:** at 100% the notification is `usage.overage_started` when the plan has an overage price and overage is on, else `usage.limit_reached` (J6).
 Status: ☐
 
 ### I9. Abuse and cost guards: BE
@@ -512,34 +514,31 @@ A frontend prototype (`D:\multiTennant_frontend`, report `GAP-REPORT.md` there) 
 **Built (Phase 3B, branch `phase-4-human-agent`):** items 1 to 9. Notes: the password limit counts BYTES (72, what bcrypt really hashes) and also applies to invite acceptance and password reset; `Retry-After` was already sent, the real gaps were that CORS did not expose it and the body had no remaining seconds (now `retryAfterSeconds`); the five DELETE routes already agreed (200 with the removed object), the convention is now tested and documented, so the frontend needs no change; reactivation (item 8) was already correct (a Starter trial returns as the trial, a past-due tenant as past due), now also covered by a database test.
 Status: ☐
 
-### J1. Logout and token revocation (G3, security): BE
-Logging out only clears the cookie; the token stays valid until it expires (default 1 day).
-**Proposal:** `POST /v1/auth/logout` sets a per-user `tokens_valid_after`, which `JwtStrategy` already could check next to `password_changed_at`; refresh tokens and shorter access tokens stay in Phase 8.
-Status: ☐
+### J1. Logout and token revocation (G3, security): BE (**decided 2026-10-11**)
+Logging out only cleared the cookie; the token stayed valid until it expired (default 1 day).
+**Decision (Abdul): yes.** `POST /v1/auth/logout` sets a per-user `tokens_valid_after` timestamp; `JwtStrategy` rejects any token issued before it (next to the existing `password_changed_at` check). The same for platform admins (`POST /v1/admin/auth/logout`). Because it is one timestamp per user, **a logout ends every session of that user ("log out everywhere")**; single-device logout would need a per-token id and is not planned. Refresh tokens and shorter access tokens stay in Phase 8. Audit entry `auth.logout`; the frontend calls it from "Log out" and clears its cookie.
+Status: decided, not built (Phase 3C)
 
-### J2. Finding your workspace (G4): BE
-Login needs a slug people forget, and signup cannot check availability while typing.
-**Proposal:** keep the slug; add `GET /v1/auth/slug-available?slug=` (rate limited) and an emailed "find my workspace" (never returns the list in the response); subdomain login and slug rename later.
-Status: ☐
+### J2. Finding your workspace (G4): BE (**explained to Abdul 2026-10-11, awaiting his answer**)
+Login needs three things: workspace slug, email, password. The slug is chosen at signup (derived from the business name, for example `acme-support`; existing tenants got names like `name-1a2b3c4d`). Two problems: (1) someone who forgot the slug cannot log in, and cannot even request a password reset (that asks for the slug too); (2) at signup the user types a slug blindly and only learns it is taken after submitting (409 `SLUG_TAKEN`).
+**Proposal:** (a) `GET /v1/auth/slug-available?slug=` (public, rate limited) returning `available` plus suggestions, used while typing and by the owner's rename in J3; (b) "find my workspace": the user enters an email and the backend EMAILS the list of workspaces (name and slug) for that address, and the screen always shows the same "if this address has an account we sent an email" message, so nobody can probe which companies use which address. Option (c), email-first login (log in with email and password, pick a workspace if several), is possible later or with subdomains.
+Status: open
 
-### J3. Owner self-service for the tenant (G5): BE
-Owners cannot edit their business name or default language and cannot close their account.
-**Proposal:** `GET/PATCH /v1/tenants/:tenantId` (name, defaultLocale, timezone; owner), `POST …/close` later with the 60-day rules (I10, Phase 8).
-Status: ☐
+### J3. Owner self-service for the tenant (G5): BE (**decided 2026-10-11, incl. slug rename**)
+**Decision (Abdul): yes, and the owner should be able to rename the slug, with an availability check or a suggestion.** `GET` and `PATCH /v1/tenants/:tenantId` (owner edits; `GET` for all roles): `name`, `defaultLocale`, `timezone` (J7) and `slug`. Slug rename rules (my proposal for the details, confirm if you disagree): the new slug must be available (same check as J2; when taken the error carries suggestions such as `acme-support-2`); a rename is audited (`tenant.slug_changed`) and limited to once per 30 days; the old slug keeps working at login for 30 days and is **reserved for 90 days** so nobody else can take over a name your users and emails still point at; widget keys are unaffected (they do not use the slug). Closing the account stays in Phase 8 with the 60-day rules.
+Status: decided, not built (Phase 3C)
 
-### J4. Role matrix rows B2 does not decide (G22): BE
-**Proposal:** billing and usage readable by owner and admin (built); approvals list for owner and admin; integration endpoints and API-key details hidden from agents; data-use consent owner only (built); an owner or admin cannot reply into a conversation claimed by someone else until transfer exists (H8); nobody disables, demotes or deletes themselves (the last-owner rule stays).
-**Built (Phase 4), partly:** an owner or admin cannot reply, release or resolve a conversation someone else holds (409 `CONVERSATION_NOT_ASSIGNED_TO_YOU`); there is no transfer and no idle timeout yet (H8); a disabled or deleted holder's conversations go back to the queue. The other rows of the proposal are as before.
-Status: ☐
+### J4. Role matrix rows B2 does not decide (G22): BE (**approved 2026-10-11, consent row awaiting confirmation**)
+**Decision (Abdul): all rows approved; he asked what "consent" means** (explained: the data-use consent, I11, is the switch where the business agrees or refuses that its customers' conversations may later be used to train our own model; default off; **owner only** because it is a legal decision on behalf of the business). Rows: billing and usage readable by owner and admin (built); approvals list for owner and admin; **integration settings and API-key details hidden from agents**; data-use consent owner only (built); an owner or admin cannot reply into a conversation claimed by someone else until transfer exists (H8, built); **nobody disables, demotes or deletes themselves** (the last-owner rule stays).
+Status: decided except the consent row (Phase 3C)
 
-### J5. Upgrading while payments are manual (G17): BE
-An owner cannot request a plan today.
-**Proposal:** `POST /v1/tenants/:tenantId/billing/upgrade-request {planCode, note}` (owner) that notifies platform admins (in-app once H5 exists, audit entry now), and a platform-admin view of pending requests. `PATCH /v1/admin/tenants/:id` stops accepting `plan` and `status` (the subscription routes are the only way).
-Status: ☐
+### J5. Upgrading while payments are manual (G17): BE (**decided 2026-10-11**)
+**Decision (Abdul): yes.** `POST /v1/tenants/:tenantId/billing/upgrade-request {planCode, note}` (owner) creates a row in `upgrade_requests` (tenant, requested plan, note, requested by, status `pending|handled|declined`, handled by and time); platform admins list and handle requests under `/v1/admin/upgrade-requests`; a mail goes to the address in the setting `PLATFORM_ADMIN_NOTIFY_EMAIL` (set in `.env`, never written into the docs or git; in the Resend test stage mail goes to the redirect address anyway). `PATCH /v1/admin/tenants/:id` stops accepting `plan` and `status`: the subscription routes are the only way to change a plan.
+Status: decided, not built (Phase 3C)
 
 ### J6. Conversation limit and overage (G18): BE (**decided 2026-10-10**)
 **Decision (Abdul):** on plans that have an overage price (Pro: PKR 15 per extra conversation, I1) it is the tenant's choice, **on by default**. With overage **on**, the AI keeps answering after the included conversations are used up and every extra conversation is billed at the plan's price. With overage **switched off** in the settings, the limit is a **hard stop** like running out of credit: the customer gets the fallback and the conversation escalates with `limit_reached` (this is what is built today for every plan). Free and Starter have no overage price, so they always stop hard and show no setting.
-**How it is built (Phase 4B):**
+**How it is built (Phase 4B, built):**
 - A per-tenant billing setting `overageEnabled` (default true) on the subscription, changed by the **owner only** (audited as `billing.overage_changed`), read by everyone through `GET /v1/me` and `GET …/billing`.
 - `EntitlementsService.check('conversations')` returns allowed with `overage: true` past the included amount when the setting is on and the plan has `overageConversationMinor`; otherwise it denies with `PLAN_LIMIT_REACHED` as today.
 - The overage count of a period is `max(0, conversations used − included)`, derived from `usage_daily` (a conversation counts once, as before); the billing summary shows included, used, overage count and the amount in minor units.
@@ -547,12 +546,14 @@ Status: ☐
 - Notifications (H5, I8): 80% and 100% of the included amount, and "overage started" when it is on, "limit reached, AI stopped" when it is off.
 - **Recommended, not yet decided:** an optional monthly **spending cap** for overage (owner sets a maximum extra amount; at the cap the tenant falls back to the hard stop), so a traffic spike cannot create a surprise invoice. Tokens stay internal and are not shown to tenants (cost leakage).
 - The frontend needs one switch on the billing screen (owner only) with a clear warning about the extra charges.
+
+**Built (Phase 4B):** `subscriptions.overage_enabled` (default true); `PATCH /v1/tenants/:tenantId/billing/settings` `{ "overageEnabled": boolean }` (owner only; 409 `OVERAGE_NOT_AVAILABLE` on a plan without an overage price; audited as `billing.overage_changed`). The summary in `GET /v1/me`, `GET …/billing` and the admin `GET` has `overage: { available, enabled, priceMinor, currency }` (show the switch only when `available`); `GET …/billing` and the admin `GET` also have `usage.conversations` (period, included, used, overageCount, overageAmountMinor, overagePriceMinor) and invoices carry `overageCount` / `overageAmountMinor`. `record-payment` and `activate` accept the same two optional fields (both or neither). `check('conversations')` allows past the included amount with `overage: true`; `past_due` never starts overage. The count is `max(0, used − included − conversations held for a human)`, so conversations the AI never answered (started at the limit while overage was off) are not billed. Notifications: `usage.overage_started` at 100% when overage applies, `usage.limit_reached` when the AI stops; switching the setting does not re-send anything. A change reaches other instances within 30 s.
+**Still open (for Abdul):** the optional monthly spending cap (recommended above, not built); whether the first extra conversation or the 100% mark should trigger "overage started" (built: the 100% mark).
 Status: ☐
 
-### J7. Tenant time zone (G13, G19): BE
-Working hours, the audit display and billing periods need one; none exists.
-**Proposal:** `tenants.timezone`, default `Asia/Karachi`, editable by the owner (J3).
-Status: ☐
+### J7. Tenant time zone (G13, G19): BE (**decided 2026-10-11**)
+**Decision (Abdul): yes.** `tenants.timezone` (IANA name), default `Asia/Karachi`, set by the owner through J3. Working hours (agent config, Phase 5), the audit display and reminder wording use it; stored timestamps stay UTC.
+Status: decided, not built (Phase 3C)
 
 ### J8. Frontend translation keys (G21): BE + FE
 The frontend needed 624 keys the backend files do not have (41% have Urdu, written by an AI).
@@ -568,7 +569,7 @@ Everything the backend knows about the engine is *our proposal* in [contracts/en
 5. Event names and payloads the engine sends back (`conversation.escalated`, `usage.recorded`, `ingestion.*`, `action.proposed`, …), signed as in D5 (G6).
 6. `end_customer_id` on conversations (B5) and the other column requests in C1, C2, C5.
 7. Agent-config schema (G13) and knowledge-base limits, status values and failure codes (G14).
-**Phase 4 questions** are numbered 6 to 11 under "Open questions for the AI engine owner (Phase 4)" in [contracts/README.md](contracts/README.md): the staff calls and their 409 codes, the extra conversation fields and `X-Acting-*` headers, the system lines, the event receiver with its HMAC signing, and silence while `human_active`. Items 4 and 5 above are now concrete proposals in `contracts/engine-internal.openapi.yaml` and `contracts/backend-events.openapi.yaml`.
+**All of J9, the contract questions and the columns and later-phase items are now collected, de-duplicated and renumbered Q1 to Q27 in [for-abdullah.md](for-abdullah.md): send him that file (plus the three files in `contracts/`), not this one.** The Phase 4 questions are numbered 6 to 11 under "Open questions for the AI engine owner (Phase 4)" in [contracts/README.md](contracts/README.md): the staff calls and their 409 codes, the extra conversation fields and `X-Acting-*` headers, the system lines, the event receiver with its HMAC signing, and silence while `human_active`. Items 4 and 5 above are now concrete proposals in `contracts/engine-internal.openapi.yaml` and `contracts/backend-events.openapi.yaml`.
 Status: ☐
 
 ---

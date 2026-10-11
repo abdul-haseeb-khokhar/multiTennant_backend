@@ -7,6 +7,7 @@ import {
   DefaultUsageProvider,
   UsageProvider,
 } from './entitlements/usage.provider';
+import { OverageService } from './overage.service';
 import { PlansService } from './plans/plans.service';
 import { BillingRemindersService } from './reminders/billing-reminders.service';
 import { BillingProviders } from './providers/billing-providers';
@@ -31,6 +32,7 @@ import { TenantBillingService } from './tenant/tenant-billing.service';
     InvoiceNumberService,
     SubscriptionService,
     EntitlementsService,
+    OverageService,
     PlansService,
     ManualProvider,
     BillingProviders,

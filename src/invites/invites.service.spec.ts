@@ -37,7 +37,7 @@ describe('InvitesService', () => {
   beforeEach(async () => {
     prisma = createPrismaMock();
     mockTransaction(prisma);
-    mail = { sendNow: jest.fn().mockResolvedValue({}) };
+    mail = { sendNow: jest.fn().mockResolvedValue({ delivery: 'sent' }) };
     audit = { record: jest.fn().mockResolvedValue(undefined) };
     sessions = { sign: jest.fn().mockReturnValue('signed.jwt') };
     entitlements = {
@@ -149,6 +149,7 @@ describe('InvitesService', () => {
       ).resolves.not.toHaveProperty('link', expect.anything());
 
       mail.sendNow.mockResolvedValue({
+        delivery: 'sent',
         link: 'http://x/accept-invite?token=t',
       });
       await expect(
@@ -233,17 +234,17 @@ describe('InvitesService', () => {
       ).rejects.toMatchObject({ status: 404 });
     });
 
-    it('surfaces a mail failure as 503 MAIL_DELIVERY_FAILED', async () => {
-      mail.sendNow.mockRejectedValue(
-        Object.assign(new Error('x'), {
-          status: 503,
-          response: { code: 'MAIL_DELIVERY_FAILED' },
-        }),
-      );
-      await expect(
-        service.create('tenant-a', { email: 'a@acme.com' }, admin),
-      ).rejects.toMatchObject({ status: 503 });
-    });
+    it.each(['sent', 'failed', 'skipped'] as const)(
+      'reports delivery "%s" next to the invite; the invite and its audit entry exist either way',
+      async (delivery) => {
+        mail.sendNow.mockResolvedValue({ delivery });
+        await expect(
+          service.create('tenant-a', { email: 'a@acme.com' }, admin),
+        ).resolves.toMatchObject({ delivery });
+        expect(prisma.staffInvite.create).toHaveBeenCalledTimes(1);
+        expect(audit.record).toHaveBeenCalledTimes(1);
+      },
+    );
   });
 
   describe('findAll', () => {

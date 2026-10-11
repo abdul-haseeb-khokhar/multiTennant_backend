@@ -56,6 +56,32 @@ export class EntitlementsView {
   voicePerMinuteMinor?: number;
 }
 
+export class OverageSettingsView {
+  @ApiProperty({
+    description:
+      'The plan has a price for extra conversations (Pro). Free and Starter do not: they always stop hard at the limit and the dashboard shows no switch.',
+  })
+  available: boolean;
+
+  @ApiProperty({
+    description:
+      'Past the included conversations the AI keeps answering and each extra one is billed. Always false when `available` is false. Default true on plans that have a price; the owner switches it with PATCH /v1/tenants/:tenantId/billing/settings.',
+  })
+  enabled: boolean;
+
+  @ApiProperty({
+    type: Number,
+    nullable: true,
+    example: 1500,
+    description:
+      'One extra conversation, minor units of `currency` (PKR 15 = 1500). null when not available.',
+  })
+  priceMinor: number | null;
+
+  @ApiProperty({ example: 'PKR' })
+  currency: string;
+}
+
 export class SubscriptionSummary {
   @ApiProperty({ example: 'starter' })
   planCode: string;
@@ -118,6 +144,12 @@ export class SubscriptionSummary {
     description: 'What the plan (plus any per-tenant override) allows.',
   })
   limits: EntitlementsView;
+
+  @ApiProperty({
+    type: OverageSettingsView,
+    description: 'The overage setting of this plan and tenant (J6).',
+  })
+  overage: OverageSettingsView;
 }
 
 export class AdminSubscriptionSummary extends SubscriptionSummary {
@@ -177,6 +209,22 @@ export class InvoiceView {
   @ApiProperty({ type: String, format: 'date-time', nullable: true })
   paidAt: Date | null;
 
+  @ApiProperty({
+    type: Number,
+    nullable: true,
+    description:
+      'Extra conversations this payment covers, as recorded by the platform admin (J6). The invoice has no tax lines.',
+  })
+  overageCount: number | null;
+
+  @ApiProperty({
+    type: Number,
+    nullable: true,
+    description:
+      'The part of `amountMinor` that is overage, minor units. null = none recorded.',
+  })
+  overageAmountMinor: number | null;
+
   @ApiProperty({ type: String, format: 'date-time' })
   createdAt: Date;
 }
@@ -200,7 +248,7 @@ export class BillingEventView {
   @ApiProperty({
     example: 'payment.succeeded',
     description:
-      'payment.succeeded, payment.failed, subscription.canceled, plan.changed, period.ended, period.extended, account.closed, tenant.suspended, tenant.unsuspended, subscription.created',
+      'payment.succeeded, payment.failed, subscription.canceled, plan.changed, period.ended, period.extended, account.closed, tenant.suspended, tenant.unsuspended, subscription.created, overage.changed',
   })
   type: string;
 
@@ -241,9 +289,76 @@ export class BillingEventPage extends Page {
   data: BillingEventView[];
 }
 
+export class ConversationUsageView {
+  @ApiProperty({
+    enum: ['month', 'total'],
+    description:
+      '`month` = the UTC calendar month, `total` = since the subscription period began (Starter).',
+  })
+  period: 'month' | 'total';
+
+  @ApiProperty({
+    type: String,
+    format: 'date-time',
+    description: 'Start of the counting window (a UTC day).',
+  })
+  periodStart: Date;
+
+  @ApiProperty({
+    type: Number,
+    nullable: true,
+    example: 1500,
+    description: 'Conversations included in the plan. null = unlimited.',
+  })
+  included: number | null;
+
+  @ApiProperty({
+    example: 1620,
+    description:
+      'Conversations started in the period (a conversation counts once).',
+  })
+  used: number;
+
+  @ApiProperty({
+    example: 120,
+    description:
+      'Extra conversations the AI answered past the included amount, billed at `overagePriceMinor`. 0 on plans without an overage price. Conversations that were handed to a human at the limit while overage was off are not counted.',
+  })
+  overageCount: number;
+
+  @ApiProperty({
+    example: 180000,
+    description:
+      '`overageCount` times `overagePriceMinor`, integer minor units.',
+  })
+  overageAmountMinor: number;
+
+  @ApiProperty({ type: Number, nullable: true, example: 1500 })
+  overagePriceMinor: number | null;
+
+  @ApiProperty({ example: 'PKR' })
+  currency: string;
+}
+
+export class BillingUsageView {
+  @ApiProperty({ type: ConversationUsageView })
+  conversations: ConversationUsageView;
+}
+
+export class TenantBillingSettings {
+  @ApiProperty({ type: SubscriptionSummary })
+  subscription: SubscriptionSummary;
+
+  @ApiProperty({ type: BillingUsageView })
+  usage: BillingUsageView;
+}
+
 export class TenantBilling {
   @ApiProperty({ type: SubscriptionSummary })
   subscription: SubscriptionSummary;
+
+  @ApiProperty({ type: BillingUsageView })
+  usage: BillingUsageView;
 
   @ApiProperty({
     type: InvoicePage,
@@ -255,6 +370,9 @@ export class TenantBilling {
 export class AdminTenantBilling {
   @ApiProperty({ type: AdminSubscriptionSummary })
   subscription: AdminSubscriptionSummary;
+
+  @ApiProperty({ type: BillingUsageView })
+  usage: BillingUsageView;
 
   @ApiProperty({
     type: AdminInvoicePage,

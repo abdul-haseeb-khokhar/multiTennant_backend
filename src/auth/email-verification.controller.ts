@@ -4,6 +4,7 @@ import {
   ApiBearerAuth,
   ApiNoContentResponse,
   ApiOperation,
+  ApiProperty,
   ApiPropertyOptional,
   ApiTags,
 } from '@nestjs/swagger';
@@ -15,8 +16,15 @@ import { Roles } from './roles';
 import type { AuthUser } from './roles';
 import { RolesGuard } from './roles.guard';
 import { DEV_ONLY } from '../common/openapi/dev-only';
+import { DELIVERY_DESCRIPTION, DELIVERY_STATUSES } from '../mail/delivery';
 
 class VerificationSent {
+  @ApiProperty({
+    enum: DELIVERY_STATUSES,
+    description: `Of the verification email. ${DELIVERY_DESCRIPTION} Already-verified users get "skipped".`,
+  })
+  delivery: 'sent' | 'failed' | 'skipped';
+
   @ApiPropertyOptional({
     ...DEV_ONLY,
     description:

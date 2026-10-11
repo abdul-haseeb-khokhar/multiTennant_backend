@@ -84,6 +84,30 @@ class PaymentDto extends IdempotentCommandDto {
   @IsString()
   @MaxLength(200)
   reference?: string;
+
+  @ApiPropertyOptional({
+    minimum: 0,
+    example: 120,
+    description:
+      'J6: extra conversations (overage) this payment covers, for the record. Send together with `overageAmountMinor`. Read the figures from `GET /v1/admin/tenants/:id/subscription` (`usage.conversations`).',
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(MAX_AMOUNT_MINOR)
+  overageCount?: number;
+
+  @ApiPropertyOptional({
+    minimum: 0,
+    example: 180000,
+    description:
+      'J6: the part of `amountMinor` that is overage, integer minor units (at most `amountMinor`). Stored on the invoice; no tax lines.',
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(MAX_AMOUNT_MINOR)
+  overageAmountMinor?: number;
 }
 
 export class ActivateSubscriptionDto extends PaymentDto {

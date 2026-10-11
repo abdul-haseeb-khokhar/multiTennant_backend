@@ -278,6 +278,10 @@ export class WidgetSessionsService {
       };
     }
     const previous = latest?.conversationId ?? 'first';
+    // J6: past the included conversations a plan with an overage price (and overage switched on)
+    // still answers: `allowed` comes back with `overage: true` and the conversation is billed as an
+    // extra. The overage count is derived from `usage_daily` (OverageService), so nothing more is
+    // stored here. Without overage the conversation is held for a human (`aiBlocked`).
     const limit = await this.entitlements.check(tenantId, 'conversations', 1);
     const aiBlocked = !limit.allowed;
 

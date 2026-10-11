@@ -1,11 +1,13 @@
 import 'reflect-metadata';
 import { plainToInstance, Type } from 'class-transformer';
 import {
+  IsEmail,
   IsIn,
   IsInt,
   IsOptional,
   IsString,
   IsUrl,
+  Matches,
   Max,
   Min,
   MinLength,
@@ -64,6 +66,54 @@ export class EnvironmentVariables {
   @IsOptional()
   @IsIn(['console', 'link'])
   MAIL_MODE: string = 'console';
+
+  /**
+   * Who delivers the emails (H3). `console` (default) only logs them; `resend` sends them
+   * through Resend and needs RESEND_API_KEY. Production refuses `console`.
+   */
+  @IsOptional()
+  @IsIn(['console', 'resend'])
+  MAIL_PROVIDER: string = 'console';
+
+  /** A send-only Resend API key (MAIL_PROVIDER=resend). A secret: never logged or printed. */
+  @IsOptional()
+  @IsString()
+  @MinLength(8, { message: 'RESEND_API_KEY looks too short' })
+  RESEND_API_KEY?: string;
+
+  /** Sender address. Default `onboarding@resend.dev` (Resend's test sender); later an address on a verified domain. */
+  @IsOptional()
+  @IsEmail()
+  MAIL_FROM?: string;
+
+  /** Sender name shown to recipients (the product name, not chosen yet; a neutral default is used). */
+  @IsOptional()
+  @Matches(/^[^<>"\u0000-\u001f]{1,80}$/, {
+    message:
+      'MAIL_FROM_NAME must be 1 to 80 characters without < > " or line breaks',
+  })
+  MAIL_FROM_NAME?: string;
+
+  /**
+   * Test stage only: every email goes to this one address (the Resend account's own) with the
+   * intended recipient named in the subject and body. Production refuses it.
+   */
+  @IsOptional()
+  @IsEmail()
+  MAIL_REDIRECT_TO?: string;
+
+  /** Time allowed per attempt when calling the mail provider (default 5000 ms; one retry follows a network error or a 5xx). */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(500)
+  @Max(30_000)
+  MAIL_TIMEOUT_MS: number = 5000;
+
+  /** Base URL of the Resend API; only for tests against a fake server. Production refuses it. */
+  @IsOptional()
+  @IsUrl({ require_tld: false, protocols: ['http', 'https'] })
+  RESEND_API_URL?: string;
 
   /**
    * The billing job that applies due plan transitions (Starter to Free, grace expiry). `off`
@@ -152,8 +202,21 @@ export class EnvironmentVariables {
   MOCK_ENGINE_TOKEN_DELAY_MS: number = 25;
 }
 
+const MAIL_OPTIONAL_TEXT = [
+  'RESEND_API_KEY',
+  'MAIL_FROM',
+  'MAIL_FROM_NAME',
+  'MAIL_REDIRECT_TO',
+  'RESEND_API_URL',
+];
+
 /** Used by `ConfigModule.forRoot({ validate })`: the app refuses to start on a bad environment. */
-export function validateEnv(config: Record<string, unknown>) {
+export function validateEnv(rawConfig: Record<string, unknown>) {
+  // `MAIL_REDIRECT_TO=` left empty in .env means "not set", not "an invalid address".
+  const config = { ...rawConfig };
+  for (const name of MAIL_OPTIONAL_TEXT) {
+    if (config[name] === '') delete config[name];
+  }
   const validated = plainToInstance(EnvironmentVariables, config, {
     enableImplicitConversion: false,
   });
@@ -185,7 +248,30 @@ export function validateEnv(config: Record<string, unknown>) {
       problems.push('INTERNAL_API_TOKEN is required when ENGINE_MODE=http');
     }
   }
+  if (validated.MAIL_PROVIDER === 'resend' && !validated.RESEND_API_KEY) {
+    problems.push('RESEND_API_KEY is required when MAIL_PROVIDER=resend');
+  }
   if (validated.NODE_ENV === 'production') {
+    if (validated.MAIL_PROVIDER !== 'resend') {
+      problems.push(
+        'MAIL_PROVIDER=resend is required when NODE_ENV=production (the console mailer only logs emails)',
+      );
+    }
+    if (validated.MAIL_REDIRECT_TO) {
+      problems.push(
+        'MAIL_REDIRECT_TO is not allowed when NODE_ENV=production (it sends every email to one address)',
+      );
+    }
+    if (validated.MAIL_FROM?.toLowerCase().endsWith('@resend.dev')) {
+      problems.push(
+        'MAIL_FROM must be an address on your verified domain when NODE_ENV=production (the resend.dev test sender only delivers to the Resend account owner)',
+      );
+    }
+    if (validated.RESEND_API_URL) {
+      problems.push(
+        'RESEND_API_URL is not allowed when NODE_ENV=production (it is for tests)',
+      );
+    }
     if (validated.ENGINE_MODE !== 'http') {
       problems.push(
         'ENGINE_MODE=http is required when NODE_ENV=production (the mock engine is for development)',
