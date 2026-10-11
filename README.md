@@ -24,6 +24,7 @@ Backend core of a multi-tenant **AI customer-support platform**. Businesses and 
 | [docs/architecture.md](docs/architecture.md) | System design, data model, key flows, what is built |
 | [docs/team-alignment.md](docs/team-alignment.md) | Open decisions and contracts with the AI engine and frontend colleagues (ids such as B2, H1, I5, J1) |
 | [docs/backend-roadmap.md](docs/backend-roadmap.md) | Phase plan with checklists; tick boxes as work completes |
+| [docs/for-abdullah.md](docs/for-abdullah.md) | The one document to send the AI engine owner: what we need from the engine (27 numbered questions, blocking ones first) and a reply table |
 | [docs/contracts/README.md](docs/contracts/README.md) | How to run the chat against the mock engine; the engine API contract |
 | [docs/openapi.json](docs/openapi.json) | The API contract for the frontend (live copy at `/docs` when the server runs) |
 | [test/README.md](test/README.md) | How the test suites work |

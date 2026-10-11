@@ -17,6 +17,7 @@ Size: **S** ≈ days · **M** ≈ 1–2 weeks · **L** ≈ 2+ weeks (rough, solo
 | 4 | Human-agent flow and notifications | L | AI: C1–C4, D5, D6 | FE dashboard conversations |
 | 4C | Mail provider: Resend, test mode (H3, decided) | S | Resend account and API key from Abdul | invites, resets and verification reach a real inbox |
 | 4B | Pro overage setting and optional spending cap (J6, decided) | S | nothing; follows Phase 4 | FE billing switch |
+| 3C | Account decisions: logout and revocation, owner self-service and slug rename, upgrade request, time zone (J1, J3, J4, J5, J7; J2 and J8 after Abdul answers) | M | nothing | FE (logout, settings, upgrade request) |
 | 5 | Tenant configuration, knowledge, actions, usage | L | AI: E1–E4 | AI personalisation, plan limits |
 | 6 | Channels: WhatsApp and voice | L | AI: D4, E5; provider accounts | phone/WhatsApp customers |
 | 7 | Human-agent productivity (deferred) | M | product decision | team efficiency |
@@ -221,6 +222,19 @@ How it works (rule 13 of `CLAUDE.md`):
 Decisions the docs did not settle (change them in code if you disagree): signup and the verification resend now wait for the provider (up to about 10 s in the worst case) instead of sending in the background, because they must report `delivery`; a `@resend.dev` sender is refused in production; `MAIL_FROM_NAME` defaults to `SupportDesk AI`, `MAIL_FROM` to `onboarding@resend.dev`; the invite has no separate "resend" route (inviting the same address again replaces the pending invite and sends a new email); the test suites force the console provider because `.env` may hold real settings.
 
 Follow-ups: send the billing reminders by email (templates exist; needs the recipients' addresses and locales, the 100-a-day cap in mind and a dedupe on the notification rows); bounce and complaint webhooks (suppression list); Urdu email texts need a native-speaker check.
+
+## Phase 3C: Account decisions (J1, J3, J4, J5, J7)
+**Goal:** build the account-level decisions Abdul took on 2026-10-11 (team-alignment section J).
+
+Scope:
+- [ ] J1: `tokens_valid_after` on `tenant_user` and `platform_admins`; `POST /v1/auth/logout` and `POST /v1/admin/auth/logout`; `JwtStrategy` and `PlatformJwtStrategy` reject older tokens; audit `auth.logout`
+- [ ] J3 + J7: `GET`/`PATCH /v1/tenants/:tenantId` (owner edits name, defaultLocale, timezone, slug); `tenants.timezone` default `Asia/Karachi`; slug rename rules (availability with suggestions, once per 30 days, old slug accepted for 30 days and reserved for 90, audit `tenant.slug_changed`)
+- [ ] J4 rows: approvals list for owner and admin, integration and API-key details hidden from agents, nobody disables, demotes or deletes themselves (consent row stays owner only)
+- [ ] J5: `upgrade_requests` table, owner request route, platform-admin list and handle routes, mail to `PLATFORM_ADMIN_NOTIFY_EMAIL`, `PATCH /v1/admin/tenants/:id` no longer accepts `plan` or `status`
+- [ ] J2 (workspace discovery) and J8 (translation keys) once Abdul has answered
+- [ ] Tests (unit, e2e, DB flows), OpenAPI, translations en and ur for every new code and text, docs
+
+Depends on: nothing. **Done when:** the boxes above are ticked and the frontend can call logout, tenant settings and the upgrade request.
 
 ## Phase 5: Tenant configuration, knowledge, actions and usage
 **Goal:** tenants configure their AI, load knowledge, approve risky actions, and are held to plan limits.
