@@ -4,6 +4,7 @@ import { AuditAction, AuditService } from '../audit/audit.service';
 import { EmailVerificationService } from '../auth/email-verification.service';
 import { AuthUser } from '../auth/roles';
 import { EntitlementsService } from '../billing/entitlements/entitlements.service';
+import { ConversationsService } from '../conversations/conversations.service';
 import { ApiException } from '../common/errors/api.exception';
 import { ErrorCode } from '../common/errors/error-codes';
 import { isPrismaError } from '../common/errors/prisma-errors';
@@ -34,9 +35,10 @@ export class TenantUsersService {
     private readonly audit: AuditService,
     private readonly emailVerification: EmailVerificationService,
     private readonly entitlements: EntitlementsService,
+    private readonly conversations: ConversationsService,
   ) {}
 
-  async findAll(tenantId: string, query: QueryTenantUserDto) {
+  async findAll(tenantId: string, query: QueryTenantUserDto, actor: AuthUser) {
     const page = resolvePage(query);
     const [data, total] = await Promise.all([
       this.prisma.tenantUser.findMany({
@@ -44,17 +46,17 @@ export class TenantUsersService {
         skip: page.skip,
         take: page.take,
         orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-        omit: { passwordHash: true },
+        omit: this.hiddenFields(actor),
       }),
       this.prisma.tenantUser.count({ where: { tenantId } }),
     ]);
     return toPage(data, total, page);
   }
 
-  async findOne(tenantId: string, id: string) {
+  async findOne(tenantId: string, id: string, actor: AuthUser) {
     const user = await this.prisma.tenantUser.findFirst({
       where: { id, tenantId },
-      omit: { passwordHash: true },
+      omit: this.hiddenFields(actor),
     });
     if (!user) {
       throw this.notFound(id);
@@ -70,6 +72,7 @@ export class TenantUsersService {
   ) {
     const email = dto.email ? normalizeEmail(dto.email) : undefined;
     let emailChanged: { id: string; email: string; locale: string } | undefined;
+    let becameDisabled = false;
 
     try {
       const updated = await this.serializable(async (tx) => {
@@ -116,6 +119,8 @@ export class TenantUsersService {
           data,
           omit: { passwordHash: true },
         });
+        becameDisabled =
+          existing.status !== 'disabled' && user.status === 'disabled';
 
         const base = {
           tenantId,
@@ -174,6 +179,10 @@ export class TenantUsersService {
       if (emailChanged) {
         await this.emailVerification.issue(emailChanged);
       }
+      if (becameDisabled) {
+        // The conversations they held would wait for nobody: back to the queue (best effort).
+        await this.conversations.releaseHeldBy(actor, id, 'assignee_disabled');
+      }
       return updated;
     } catch (error) {
       if (isPrismaError(error, 'P2002')) {
@@ -192,7 +201,7 @@ export class TenantUsersService {
 
   async remove(tenantId: string, id: string, actor: AuthUser) {
     try {
-      return await this.serializable(async (tx) => {
+      const removed = await this.serializable(async (tx) => {
         const existing = await tx.tenantUser.findFirst({
           where: { id, tenantId },
           omit: { passwordHash: true },
@@ -223,12 +232,26 @@ export class TenantUsersService {
         );
         return removed;
       });
+      // Their conversations go back to the queue (best effort, after the delete committed).
+      await this.conversations.releaseHeldBy(actor, id, 'assignee_deleted');
+      return removed;
     } catch (error) {
       if (isPrismaError(error, 'P2025')) {
         throw this.notFound(id);
       }
       throw error;
     }
+  }
+
+  /**
+   * Columns left out of a read. The password hash never leaves; when the password last changed
+   * and whether the email was confirmed are account-security details for owners and admins only
+   * (G23.3), not for an agent browsing the team.
+   */
+  private hiddenFields(actor: AuthUser) {
+    return actor.role === 'agent'
+      ? { passwordHash: true, passwordChangedAt: true, emailVerifiedAt: true }
+      : { passwordHash: true };
   }
 
   /** Runs `fn` in a serializable transaction, retrying when Postgres aborts it for a conflict. */

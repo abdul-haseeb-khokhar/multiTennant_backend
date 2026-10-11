@@ -93,7 +93,10 @@ describe('Billing flows (real database)', () => {
       .overrideProvider(Clock)
       .useValue(clock)
       .compile();
-    app = moduleRef.createNestApplication({ logger: false });
+    app = moduleRef.createNestApplication({
+      logger: false,
+      rawBody: true,
+    });
     configureApp(app);
     await app.init();
     // Listen once: with parallel requests supertest would otherwise close the shared server

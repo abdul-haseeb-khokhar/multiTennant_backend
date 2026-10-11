@@ -10,7 +10,7 @@ import {
 import type { Response } from 'express';
 import { I18nService } from './i18n.service';
 import type { Translations } from './translation-files';
-import { LOCALE_CODES, NAMESPACES } from './locales';
+import { NAMESPACES } from './locales';
 
 class LocaleEntry {
   @ApiProperty({ example: 'ur', description: 'BCP-47 code' })
@@ -46,7 +46,11 @@ export class I18nController {
     description:
       'A flat map of stable dot-notation keys to ICU message strings. Keys missing in the requested language are filled in from `en`. Supports `If-None-Match` (304). For API errors use namespace `errors` with the error `code` as key.',
   })
-  @ApiParam({ name: 'locale', enum: LOCALE_CODES })
+  @ApiParam({
+    name: 'locale',
+    type: String,
+    description: 'A locale code from GET /v1/i18n/locales.',
+  })
   @ApiParam({ name: 'namespace', enum: [...NAMESPACES] })
   @ApiOkResponse({
     schema: { type: 'object', additionalProperties: { type: 'string' } },

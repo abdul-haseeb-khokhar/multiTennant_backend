@@ -66,7 +66,11 @@ describe('WidgetCorsService (D8)', () => {
     expect(options.origin).not.toBe('*');
     expect(options.origin).not.toBe(true);
     expect(options.allowedHeaders).toEqual(
-      expect.arrayContaining(['Authorization', 'Idempotency-Key']),
+      expect.arrayContaining([
+        'Authorization',
+        'Idempotency-Key',
+        'Last-Event-ID',
+      ]),
     );
     expect(prisma.apiKey.findFirst).toHaveBeenCalledWith({
       where: {

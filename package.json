@@ -24,7 +24,8 @@
     "platform-admin:create": "ts-node scripts/create-platform-admin.ts",
     "i18n:check": "ts-node scripts/check-i18n.ts",
     "postinstall": "prisma skills sync || exit 0",
-    "widget:walkthrough": "ts-node scripts/widget-walkthrough.ts"
+    "widget:walkthrough": "ts-node scripts/widget-walkthrough.ts",
+    "handoff:walkthrough": "ts-node scripts/handoff-walkthrough.ts"
   },
   "dependencies": {
     "@nestjs/common": "^12.0.1",

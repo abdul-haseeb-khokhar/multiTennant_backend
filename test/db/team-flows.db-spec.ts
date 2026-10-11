@@ -84,7 +84,10 @@ describe('Team management flows (real database)', () => {
     const moduleRef = await Test.createTestingModule({
       imports: [AppModule],
     }).compile();
-    app = moduleRef.createNestApplication({ logger: false });
+    app = moduleRef.createNestApplication({
+      logger: false,
+      rawBody: true,
+    });
     configureApp(app);
     await app.init();
     prisma = app.get(PrismaService);

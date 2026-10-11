@@ -22,5 +22,6 @@ process.env.JWT_SECRET = 'db-test-secret-at-least-16-chars';
 process.env.JWT_EXPIRES_IN = '1h';
 process.env.FRONTEND_URL = 'http://localhost:5173';
 process.env.MAIL_MODE = 'link';
+process.env.INTERNAL_API_TOKEN = 'db-internal-token-0123456789abcdef-xyz';
 process.env.ENGINE_FIRST_TOKEN_TIMEOUT_MS = '400';
 process.env.MOCK_ENGINE_TOKEN_DELAY_MS = '0';

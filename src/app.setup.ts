@@ -6,6 +6,7 @@ import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AllExceptionsFilter } from './common/errors/all-exceptions.filter';
 import { NoNullBytesPipe } from './common/validation/no-null-bytes.pipe';
 import { requestContextMiddleware } from './common/request-context/request-context.middleware';
+import { parseTrustProxy } from './config/trust-proxy';
 import { WidgetCorsService, isWidgetPath } from './widget/widget-cors.service';
 
 export const API_PREFIX = 'v1';
@@ -15,8 +16,23 @@ export const API_PREFIX = 'v1';
  * the tests exercise the same prefix, pipes, filter and CORS rules as production.
  */
 export function configureApp(app: INestApplication) {
+  // Behind a reverse proxy `req.ip` must be the real client (audit log, rate limits): see TRUST_PROXY.
+  const trustProxy = parseTrustProxy(
+    app.get(ConfigService).get<string>('TRUST_PROXY'),
+  );
+  if (trustProxy !== false) {
+    (
+      app.getHttpAdapter().getInstance() as {
+        set(name: string, value: unknown): void;
+      }
+    ).set('trust proxy', trustProxy);
+  }
   app.use(requestContextMiddleware);
-  app.setGlobalPrefix(API_PREFIX, { exclude: ['health', 'health/ready'] });
+  // The only routes outside /v1: the unversioned health checks, and the service-to-service event
+  // receiver the AI engine calls on the private network (not part of the public API).
+  app.setGlobalPrefix(API_PREFIX, {
+    exclude: ['health', 'health/ready', 'internal/events'],
+  });
   app.useGlobalPipes(
     new NoNullBytesPipe(),
     new ValidationPipe({ whitelist: true, transform: true }),
@@ -38,7 +54,7 @@ export function configureApp(app: INestApplication) {
     }
     callback(null, {
       origin: dashboardOrigin,
-      exposedHeaders: ['X-Request-Id'],
+      exposedHeaders: ['X-Request-Id', 'Retry-After'],
     });
   };
   app.enableCors(cors);

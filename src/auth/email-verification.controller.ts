@@ -14,11 +14,13 @@ import { JwtAuthGuard } from './jwt-auth.guard';
 import { Roles } from './roles';
 import type { AuthUser } from './roles';
 import { RolesGuard } from './roles.guard';
+import { DEV_ONLY } from '../common/openapi/dev-only';
 
 class VerificationSent {
   @ApiPropertyOptional({
+    ...DEV_ONLY,
     description:
-      'Only with MAIL_MODE=link (development): the verification link.',
+      'DEVELOPMENT ONLY: present only when the server runs with MAIL_MODE=link (refused in production); the verification link.',
   })
   link?: string;
 }

@@ -5,6 +5,9 @@ import {
   OnModuleDestroy,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { HousekeepingService } from '../notifications/housekeeping.service';
+import { Clock } from './clock';
+import { BillingRemindersService } from './reminders/billing-reminders.service';
 import { SubscriptionService } from './subscriptions/subscription.service';
 
 const FIRST_RUN_DELAY_MS = 30_000;
@@ -16,6 +19,10 @@ const DEFAULT_INTERVAL_MINUTES = 60;
  * `BILLING_JOB_INTERVAL_MINUTES` (default 60, so at least daily even when instances restart
  * often). Every instance runs the timer; `processDueTransitions` takes a Postgres advisory lock so
  * only one sweeps at a time, and each transition is idempotent anyway.
+ *
+ * After the transitions it creates the in-app reminders of I8 (idempotent: one per tenant, kind and
+ * threshold) and purges what outlived its purpose (notifications after 90 days, delivered engine
+ * events, expired stream tickets). Each step fails alone and is retried at the next tick.
  *
  * It is a convenience, not the source of correctness: `SubscriptionService.getEffective` applies
  * due transitions on read, so a late or dead job never grants a plan that has ended.
@@ -34,6 +41,9 @@ export class BillingScheduler
   constructor(
     private readonly config: ConfigService,
     private readonly subscriptions: SubscriptionService,
+    private readonly reminders: BillingRemindersService,
+    private readonly housekeeping: HousekeepingService,
+    private readonly clock: Clock,
   ) {}
 
   onApplicationBootstrap() {
@@ -72,6 +82,20 @@ export class BillingScheduler
     } catch (error) {
       this.logger.error(
         `Transition job failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    try {
+      await this.reminders.generate();
+    } catch (error) {
+      this.logger.error(
+        `Reminder job failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    try {
+      await this.housekeeping.purge(this.clock.now());
+    } catch (error) {
+      this.logger.error(
+        `Housekeeping failed: ${error instanceof Error ? error.message : String(error)}`,
       );
     } finally {
       this.running = false;

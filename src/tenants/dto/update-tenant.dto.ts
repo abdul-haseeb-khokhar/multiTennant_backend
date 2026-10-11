@@ -6,7 +6,7 @@ import {
   MaxLength,
   MinLength,
 } from 'class-validator';
-import { LOCALE_CODES } from '../../i18n/locales';
+import { OptionalLocaleProperty } from '../../common/validation/locale';
 
 /**
  * Platform-admin only (`/v1/admin/tenants`). Tenants are created through signup, never through
@@ -42,11 +42,8 @@ export class UpdateTenantDto {
   @IsIn(['trial', 'active', 'suspended'])
   status?: string;
 
-  @ApiPropertyOptional({
-    enum: LOCALE_CODES,
+  @OptionalLocaleProperty({
     description: "The tenant's default language (H7).",
   })
-  @IsOptional()
-  @IsIn(LOCALE_CODES)
   defaultLocale?: string;
 }

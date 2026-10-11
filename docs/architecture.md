@@ -69,14 +69,16 @@ Principles:
 |---|---|
 | `tenants.deleted_at`, `updated_at` | Soft delete (`tenants.slug`, `platform_admins`, the staff-lifecycle tables and the locale columns are built, see 4.1) |
 | `api_keys` (tenant_id, type `widget`/`server`, name, key_prefix, key_hash, allowed_origins[], last_used_at, revoked_at, created_by) | Resolve a public widget key to a tenant, with per-tenant origin allow-list. **Built (Phase 3)** |
-| `gateway_conversations` (tenant_id, conversation_id, end_customer_id, channel, ai_blocked, escalation_reason, escalation_pending, closed_at) | What the gateway knows about a conversation it started: resume for a returning visitor, "AI may not answer" (plan limit), an escalation not yet delivered. **Built (Phase 3)** |
+| `gateway_conversations` (tenant_id, conversation_id, end_customer_id, channel, ai_blocked, escalation_reason, escalation_pending, escalation_attempts, escalation_last_attempt_at, closed_at) | What the gateway knows about a conversation it started: resume for a returning visitor, "AI may not answer" (plan limit), an escalation not yet delivered. **Built (Phase 3)** |
 | `usage_events` (tenant_id, kind, ref_id, day) | Dedupe ledger so `usage_daily` counts a conversation or message once. **Built (Phase 3)** |
 | `channel_connections` (tenant_id, channel, provider, external_account_id, credentials_ref, status) | Map a WhatsApp number or phone number to a tenant for inbound webhooks |
 | `agent_configs` (tenant_id, version, config jsonb) | Persona, tone, language, greeting, escalation rules, working hours, allowed actions |
 | `tenant_integrations` (tenant_id, kind, credentials_encrypted) | Credentials for the tenant's own systems that agent actions call |
 | `knowledge_sources` (tenant_id, name, type, storage_key, status, error, created_at) | Uploaded docs/URLs and their ingestion state (chunks live in `ai_engine`) |
 | `usage_daily` (tenant_id, day, conversations, messages, tokens_in, tokens_out, call_minutes) | Plan limits and billing. **Built (Phase 3)**, written only by `UsageService` |
-| `notifications` (tenant_id, user_id, type, title_key, body_key, params, link, read_at) | In-app notifications, stored as translation keys (H5) |
+| `notifications` (id, tenant_id, user_id, type, params jsonb, link, dedupe_key, read_at, created_at) | In-app notifications (H5). **Built (Phase 4)**: one row per recipient; no text is stored, the frontend renders `<type>.title` / `<type>.body` of the `notifications` namespace with `params` (5.7); unique (tenant, user, dedupe_key) makes reminders idempotent; removed with the user; purged after 90 days |
+| `engine_events` (id, tenant_id, event_id, type, occurred_at, received_at) | Inbox of the events the engine pushed (D5). **Built (Phase 4)**: unique (tenant, event id) makes delivery idempotent; ids and types only, never message text; purged after 30 days |
+| `stream_tickets` (id, tenant_id, user_id, token_hash, expires_at, used_at, created_at) | Single-use 30 second tickets that open the dashboard event stream from a browser `EventSource`. **Built (Phase 4)**; only the hash is stored |
 
 Billing (section I, **built in Phase 2B**): `plans`, `subscriptions`, `invoices`, `invoice_sequences`, `billing_events` (append-only) and `data_use_consents`; `tenants.plan` / `tenants.status` stay as denormalised mirrors of the subscription (only `SubscriptionService` writes them). Starter (hidden, 15 days) falls back to Free; Pro and Enterprise are paid; payments are recorded manually at launch behind a `BillingProvider` interface so a payment provider can be added later without rework. Amounts are integer minor units plus currency (PKR).
 
@@ -104,14 +106,17 @@ Details and reasoning are in [team-alignment.md](team-alignment.md) (C and E sec
 ### 5.2 Customer chat from the widget (**Built in Phase 3 against the mock engine; the real engine is not connected yet**)
 1. The widget loads with the tenant's public `widgetKey` and a locally stored `visitorId`.
 2. `POST /v1/widget/sessions` → backend validates key and `Origin`, checks tenant status and plan, upserts the `EndCustomer` (`externalId = web_<visitorId>`), asks the engine to create a conversation (or resumes the visitor's open one), and returns a short-lived **widget token** (`scope: widget`, `tenantId`, `endCustomerId`, `conversationId`, plus the `keyId`, re-checked on every call). A blocked tenant, a plan without chat or an engine that is down answers `status: "blocked"` with a fallback text instead of a token.
-3. `POST /v1/widget/messages` with the widget token → backend forwards to the engine with the service token. The engine stores the message; if the conversation is `active` it retrieves context, calls the LLM and **streams** the reply back (SSE). The backend relays it to the widget as `text/event-stream` (the dashboard fan-out is Phase 4). Over the plan limit the message is stored without an AI reply and escalated; if the engine is down or slow the customer gets a fallback and the conversation is escalated (`ai_unavailable`). Details: `docs/contracts/README.md`.
-4. If the engine decides to escalate it sets status `escalated`, stores `escalation_reason` and `summary`, and emits `conversation.escalated`. The backend pushes it to the dashboard queue.
+3. `POST /v1/widget/messages` with the widget token → backend forwards to the engine with the service token. The engine stores the message; if the conversation is `active` it retrieves context, calls the LLM and **streams** the reply back (SSE). The backend relays it to the widget as `text/event-stream` (what happens later in the conversation, a staff reply for example, reaches the widget through `GET /v1/widget/events`, 5.3). Over the plan limit the message is stored without an AI reply and escalated; if the engine is down or slow the customer gets a fallback and the conversation is escalated (`ai_unavailable`). Details: `docs/contracts/README.md`.
+4. If the engine decides to escalate it sets status `escalated`, stores `escalation_reason` and `summary`, and emits `conversation.escalated`. The backend turns that event into notifications for the team and a live event for the dashboard queue (5.3). An escalation the gateway itself could not hand to the engine is retried by `EscalationRetryService` (10 attempts with a growing wait, then the flag stays).
 
-### 5.3 Human takeover (**Proposed**)
-1. Agent opens the escalated conversation and clicks **Claim** → backend calls the engine `claim`.
-2. The engine performs an **atomic** update (`status IN ('active','escalated') AND assigned_user_id IS NULL`) → `human_active`; a second claimant gets 409.
-3. While `human_active` the engine **does not generate AI replies**; it only stores messages. Human replies go backend → engine (`author_type=human`) → relayed to the customer's channel.
-4. **Release** returns the conversation to `active` (AI resumes) or marks it `resolved`.
+### 5.3 Human takeover (**Built in Phase 4 against the mock engine; the engine calls and events are proposals the engine owner has not confirmed**)
+The conversations live in the engine; the backend reaches them only through `EngineClient` and adds the customer, the staff names, the role rules and the audit trail.
+1. The engine escalates (`conversation.escalated` event, or the backend tells it to: plan limit, engine failure). `POST /internal/events` (HMAC-signed, outside `/v1`) hands the event to `EngineEventsService`, which in ONE transaction records the event id (idempotent), creates a notification for every active staff member, and after the commit sends `conversation.escalated` + `notification.created` to the dashboard stream and `status: escalated` to the customer's widget stream.
+2. The agent sees the queue (`GET …/conversations?status=escalated&sort=escalatedAt`, counts for the badge) and clicks **Claim** (`POST …/:id/claim`). The engine does an **atomic** update (`status IN ('active','escalated') AND assigned_user_id IS NULL`) → `human_active`; the loser of a race gets 409 `CONVERSATION_ALREADY_CLAIMED`. The engine writes the system line `agent.joined` and emits `conversation.assigned`.
+3. While `human_active` the engine **does not generate AI replies** (C4); it only stores messages. **Only the assignee may reply, release or resolve**, whatever their role (J4: no transfer yet, so an owner or admin cannot reply into a colleague's conversation): 409 `CONVERSATION_NOT_ASSIGNED_TO_YOU`. A reply (`POST …/:id/messages`, 2,000 characters) goes backend → engine (`author_type=human`) → `message.created` event → the customer's widget stream (`message` event with the text and no staff identity). `GET /v1/widget/conversation` keeps working as the polling fallback.
+4. **Release** (`to: active`, the AI answers again; `to: escalated`, back in the queue) or **resolve** (closes it; the customer's next message starts a new conversation) writes `agent.left` / `resolved.notice`, emits `conversation.released` / `conversation.resolved` and tells the widget the new status. Claim, release and resolve are audited; message text never is.
+5. A user who is disabled or deleted can no longer release their chats: `ConversationsService.releaseHeldBy` sends them back to the queue (`force` release, audited, best effort).
+Live delivery is in the memory of one process (`RealtimeHub`): several instances need Redis (Phase 8). Dashboard stream: `GET /v1/tenants/:tenantId/events` with a Bearer header (a server-side proxy) or a single-use `?ticket=` for direct browser use; events carry ids only, the UI refetches. Customer stream: `GET /v1/widget/events` with the widget token (read it with `fetch`, not `EventSource`).
 
 ### 5.4 Inbound WhatsApp / voice (**Proposed**)
 Provider webhook → backend verifies the provider signature → resolves tenant via `channel_connections.external_account_id` → upserts the `EndCustomer` (`externalId` = E.164 phone number) → forwards to the engine like a widget message. Real-time voice audio may bypass the backend (see D4 in team-alignment).
@@ -122,11 +127,28 @@ Dashboard uploads a file → backend stores it in object storage, creates `knowl
 ### 5.6 Tenant offboarding / data deletion (**Proposed**)
 Default is **soft delete** (`status=suspended`, `deleted_at`). Hard delete is a backend-run procedure: engine `DELETE /internal/tenants/:id/data` first (conversations, messages, chunks, logs, actions), then `tenant_core` rows (customers, users, config, tenant). The FKs are `RESTRICT`, so the order matters. The same pattern serves end-customer erasure requests.
 
+### 5.7 Notifications (**Built in Phase 4**)
+Rows in `notifications` hold no text. The frontend renders `<type>.title` and `<type>.body` of the `notifications` namespace (`GET /v1/i18n/:locale/notifications`, ICU messages) with the row's `params`, in the reader's language, and opens `link` (an app-relative path). Reading, marking read and counting are always scoped to the tenant AND the caller (`GET/POST /v1/tenants/:tenantId/notifications…`, `unreadNotifications` in `GET /v1/me`); `notification.created` arrives live on the dashboard stream of that user only. Types, recipients and params (the source is `src/notifications/notification-types.ts`; a unit test checks that every type has en and ur texts using only the params below):
+
+| Type | Who | Params |
+|---|---|---|
+| `conversation.escalated` | every active staff member | `conversationId`, `customer` (name, or a short label such as `web_ab12cd…`), `channel`, `reason` |
+| `conversation.assigned` | the assignee, when somebody else assigned it (a plain claim sends nothing) | `conversationId`, `customer`, `channel` |
+| `action.proposed` | active owners and admins | `actionId`, `action`, `conversationId?`, `customer?` |
+| `billing.trial_ending` | owners and admins, at 7, 3 and 1 days left | `daysLeft`, `endsAt`, `threshold` |
+| `billing.period_ending` | owners and admins, at 7, 3 and 1 days left | `daysLeft`, `endsAt`, `plan`, `cancelAtPeriodEnd`, `threshold` |
+| `billing.grace_started` | owners and admins, once per overdue period | `plan`, `graceEndsAt`, `graceDaysLeft` |
+| `billing.downgraded` | owners and admins, once per downgrade | `fromPlan`, `toPlan`, `reason` |
+| `usage.threshold` | owners and admins, 80% of the conversations once per period | `metric`, `percent`, `used`, `limit`, `period` |
+| `usage.limit_reached` | owners and admins, 100% once per period | `metric`, `percent`, `used`, `limit`, `period` |
+
+Event-driven rows are created in the event's transaction. Billing reminders are created by the hourly billing job (`BillingRemindersService`), idempotent through the `dedupe_key` (kind, threshold and period), so any number of sweeps or instances create each reminder once. Retention: 90 days (housekeeping in the same job). Data-deletion notices (I10) are Phase 8.
+
 ## 6. Backend as built today
 
 | Module | Routes | Auth |
 |---|---|---|
-| `auth` | `POST /v1/auth/signup`, `POST /v1/auth/login`, `POST /v1/admin/auth/login`, `POST /v1/auth/password-reset/request` and `/confirm`, `POST /v1/auth/verify-email`, `POST /v1/auth/invites/accept` | public |
+| `auth` | `POST /v1/auth/signup`, `POST /v1/auth/login`, `POST /v1/admin/auth/login`, `POST /v1/auth/password-reset/request` and `/confirm`, `POST /v1/auth/verify-email`, `GET /v1/auth/invites/preview?token=` (rate limited), `POST /v1/auth/invites/accept` | public |
 | `auth` (signed in) | `POST /v1/auth/verify-email/resend` | staff JWT |
 | `me` | `GET/PATCH /v1/me` | staff JWT (any role) |
 | `invites` | `POST/GET /v1/tenants/:tenantId/invites`, `DELETE …/:id` | JWT + tenant match + owner/admin (create also needs a verified email) |
@@ -138,10 +160,14 @@ Default is **soft delete** (`status=suspended`, `deleted_at`). Hard delete is a 
 | `billing` | `GET /v1/plans` (public), `GET /v1/tenants/:tenantId/billing`, `/v1/admin/tenants/:id/subscription` (+ `activate`, `record-payment`, `extend`, `change-plan`, `cancel`) | public / JWT owner+admin / platform-admin token |
 | `data-use` | `GET/PUT /v1/tenants/:tenantId/data-use` (model-training consent, default off) | JWT + tenant match + owner |
 | `api-keys` | `POST/GET /v1/tenants/:tenantId/api-keys`, `GET/PATCH/DELETE …/:id` (Phase 3) | JWT + tenant match + owner/admin |
-| `widget` | `POST /v1/widget/sessions` (public: widget key + Origin), `POST /v1/widget/messages` (SSE), `GET /v1/widget/conversation` (Phase 3) | widget token (a staff or platform token is refused) + key + Origin |
+| `widget` | `POST /v1/widget/sessions` (public: widget key + Origin), `POST /v1/widget/messages` (SSE), `GET /v1/widget/conversation`, `GET /v1/widget/events` (SSE, Phase 4) | widget token (a staff or platform token is refused) + key + Origin |
+| `conversations` | `GET /v1/tenants/:tenantId/conversations` (+ `/counts`, `/:id`), `POST …/:id/claim`, `/release`, `/resolve`, `/messages`; `GET …/customers/:id/conversations` (Phase 4) | JWT + tenant match; every role reads and works; reply/release/resolve only for the assignee |
+| `notifications` | `GET /v1/tenants/:tenantId/notifications` (`?unread=true`), `POST …/:id/read`, `POST …/read-all` (Phase 4) | JWT + tenant match; every role, own rows only |
+| `realtime` | `GET /v1/tenants/:tenantId/events` (SSE), `POST …/events/ticket` (Phase 4) | JWT (Bearer header) or a single-use ticket; every role |
+| `events` | `POST /internal/events` (**outside `/v1`**, not in the public OpenAPI; Phase 4) | HMAC signature with `INTERNAL_API_TOKEN`, private network only |
 | `health` | `GET /health`, `GET /health/ready` (unversioned) | public |
 
-Global `ValidationPipe` (whitelist + transform), `/v1` prefix, error body `{statusCode, code, message}` (plus `details` for validation and `requestId`), list envelope `{data,total,skip,take}`, request-id middleware and JSON logs, CORS limited to `FRONTEND_URL` for dashboard routes and to the origins of the widget key for `/v1/widget/*`, OpenAPI at `/docs`, `PrismaModule` is global. On every staff request `JwtStrategy` also loads the user (role, status, verification, `password_changed_at`), so disabling, demoting, deleting or resetting a password takes effect immediately. Emailed links (invite, reset, verification) go through `MailService` and the injectable `Mailer` (console implementation until a provider is chosen, H3). Known defects are listed in `CLAUDE.md`.
+Global `ValidationPipe` (whitelist + transform), `/v1` prefix, error body `{statusCode, code, message}` (plus `details` for validation and `requestId`), list envelope `{data,total,skip,take}`, request-id middleware and JSON logs, CORS limited to `FRONTEND_URL` for dashboard routes (it exposes `X-Request-Id` and `Retry-After`; 429 bodies also carry `retryAfterSeconds`) and to the origins of the widget key for `/v1/widget/*`, OpenAPI at `/docs`, `PrismaModule` is global. On every staff request `JwtStrategy` also loads the user (role, status, verification, `password_changed_at`), so disabling, demoting, deleting or resetting a password takes effect immediately. Emailed links (invite, reset, verification) go through `MailService` and the injectable `Mailer` (console implementation until a provider is chosen, H3). Known defects are listed in `CLAUDE.md`.
 
 ## 7. Roadmap (backend)
 

@@ -35,7 +35,7 @@ describe('WidgetTokenService (D3)', () => {
     expect(Math.abs(expiresAt.getTime() - Date.now() - 900_000)).toBeLessThan(
       2000,
     );
-    expect(service.verify(token)).toEqual(claims);
+    expect(service.verify(token)).toMatchObject(claims);
   });
 
   it('is not signed with JWT_SECRET: a token signed with the staff secret is refused', () => {

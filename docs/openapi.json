@@ -514,6 +514,7 @@
     },
     "/v1/tenants/{tenantId}/users": {
       "get": {
+        "description": "`passwordChangedAt` and `emailVerifiedAt` are left out of the answer for the `agent` role: only owners and admins see them.",
         "operationId": "TenantUsersController_findAll",
         "parameters": [
           {
@@ -586,6 +587,7 @@
             "bearer": []
           }
         ],
+        "summary": "List the team (every role)",
         "tags": [
           "users"
         ]
@@ -593,6 +595,7 @@
     },
     "/v1/tenants/{tenantId}/users/{id}": {
       "get": {
+        "description": "Same fields as the list: `passwordChangedAt` and `emailVerifiedAt` only for owners and admins.",
         "operationId": "TenantUsersController_findOne",
         "parameters": [
           {
@@ -629,6 +632,7 @@
             "bearer": []
           }
         ],
+        "summary": "One team member (every role)",
         "tags": [
           "users"
         ]
@@ -724,6 +728,431 @@
         ],
         "tags": [
           "users"
+        ]
+      }
+    },
+    "/v1/tenants/{tenantId}/conversations": {
+      "get": {
+        "description": "The queue is `?status=escalated&sort=escalatedAt`; my work is `?assignedTo=me`; one customer is `?customerId=`. Newest activity first by default.",
+        "operationId": "ConversationsController_list",
+        "parameters": [
+          {
+            "name": "skip",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 0,
+              "default": 0,
+              "type": "number"
+            }
+          },
+          {
+            "name": "take",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "description": "One or more statuses, comma-separated: `active` (the AI answers), `escalated` (waiting for a human, the queue), `human_active` (a human handles it), `resolved`.",
+            "schema": {
+              "example": "escalated,human_active",
+              "type": "string"
+            }
+          },
+          {
+            "name": "assignedTo",
+            "required": false,
+            "in": "query",
+            "description": "`me` = the conversations I handle, or the id of a team member.",
+            "schema": {
+              "example": "me",
+              "type": "string"
+            }
+          },
+          {
+            "name": "customerId",
+            "required": false,
+            "in": "query",
+            "description": "Only the conversations of this end customer.",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "name": "sort",
+            "required": false,
+            "in": "query",
+            "description": "`lastMessageAt`: newest activity first. `escalatedAt`: the queue order, the one that has waited longest first.",
+            "schema": {
+              "default": "lastMessageAt",
+              "type": "string",
+              "enum": [
+                "lastMessageAt",
+                "escalatedAt"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data",
+                    "total",
+                    "skip",
+                    "take"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Conversation"
+                      }
+                    },
+                    "total": {
+                      "type": "integer"
+                    },
+                    "skip": {
+                      "type": "integer"
+                    },
+                    "take": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "List conversations (every role)",
+        "tags": [
+          "conversations"
+        ]
+      }
+    },
+    "/v1/tenants/{tenantId}/conversations/counts": {
+      "get": {
+        "description": "`counts.escalated` is the queue; `assignedToMe` how many I am handling.",
+        "operationId": "ConversationsController_counts",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationCounts"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "How many conversations per status (for the sidebar badge)",
+        "tags": [
+          "conversations"
+        ]
+      }
+    },
+    "/v1/tenants/{tenantId}/conversations/{id}": {
+      "get": {
+        "description": "The messages are oldest first and paginated (default 50). System lines (\"an agent joined\") have an empty `content` and a `contentKey` of the `widget` namespace. Another tenant's conversation is a 404.",
+        "operationId": "ConversationsController_get",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "skip",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 0,
+              "default": 0,
+              "type": "number"
+            }
+          },
+          {
+            "name": "take",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "CONVERSATION_NOT_FOUND"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "One conversation with its messages (every role)",
+        "tags": [
+          "conversations"
+        ]
+      }
+    },
+    "/v1/tenants/{tenantId}/conversations/{id}/claim": {
+      "post": {
+        "description": "Only an `active` or `escalated` conversation nobody holds: it becomes `human_active` and the AI stops answering. Two people claiming at once: one wins, the other gets 409 CONVERSATION_ALREADY_CLAIMED. Claiming what you already hold answers 200 again.",
+        "operationId": "ConversationsController_claim",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "Optional (8-100 characters of A-Z a-z 0-9 _ -). Sending the same key again repeats the result instead of doing it twice.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Conversation"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "CONVERSATION_ALREADY_CLAIMED or CONVERSATION_RESOLVED"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Take a conversation (every role)",
+        "tags": [
+          "conversations"
+        ]
+      }
+    },
+    "/v1/tenants/{tenantId}/conversations/{id}/release": {
+      "post": {
+        "description": "`to: active` (default): the AI answers again. `to: escalated`: back in the queue. Only the assignee, whatever their role (owner and admin cannot release a colleague's conversation until transfer exists): otherwise 409 CONVERSATION_NOT_ASSIGNED_TO_YOU.",
+        "operationId": "ConversationsController_release",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "Optional (8-100 characters of A-Z a-z 0-9 _ -). Sending the same key again repeats the result instead of doing it twice.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReleaseConversationDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Conversation"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "CONVERSATION_NOT_ASSIGNED_TO_YOU or CONVERSATION_RESOLVED"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Give a conversation back (the person handling it)",
+        "tags": [
+          "conversations"
+        ]
+      }
+    },
+    "/v1/tenants/{tenantId}/conversations/{id}/resolve": {
+      "post": {
+        "description": "Only the assignee: otherwise 409 CONVERSATION_NOT_ASSIGNED_TO_YOU. A resolved conversation accepts no more messages; the customer's next message starts a new one.",
+        "operationId": "ConversationsController_resolve",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "Optional (8-100 characters of A-Z a-z 0-9 _ -). Sending the same key again repeats the result instead of doing it twice.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Conversation"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "CONVERSATION_NOT_ASSIGNED_TO_YOU or CONVERSATION_RESOLVED"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Close a conversation (the person handling it)",
+        "tags": [
+          "conversations"
+        ]
+      }
+    },
+    "/v1/tenants/{tenantId}/conversations/{id}/messages": {
+      "post": {
+        "description": "At most 2,000 characters (400 MESSAGE_TOO_LONG). Only the assignee of a `human_active` conversation: otherwise 409 CONVERSATION_NOT_ASSIGNED_TO_YOU. The customer sees it in the widget at once.",
+        "operationId": "ConversationsController_reply",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "Optional (8-100 characters of A-Z a-z 0-9 _ -). Sending the same key again repeats the result instead of doing it twice.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendConversationMessageDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationMessage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "MESSAGE_TOO_LONG or VALIDATION_ERROR"
+          },
+          "409": {
+            "description": "CONVERSATION_NOT_ASSIGNED_TO_YOU or CONVERSATION_RESOLVED"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Reply to the customer (the person handling it)",
+        "tags": [
+          "conversations"
         ]
       }
     },
@@ -893,6 +1322,45 @@
         "summary": "Revoke a pending invite (owner/admin; only an owner for an owner invite)",
         "tags": [
           "invites"
+        ]
+      }
+    },
+    "/v1/auth/invites/preview": {
+      "get": {
+        "description": "For the accept page: the workspace name, the role, the invited address and the expiry. An unknown, expired, used or revoked token (or a suspended workspace) all answer 400 INVITE_INVALID, so nothing leaks about which tokens exist. Limited to 30 requests per minute per IP address (429 with Retry-After).",
+        "operationId": "InviteAcceptController_preview",
+        "parameters": [
+          {
+            "name": "token",
+            "required": true,
+            "in": "query",
+            "description": "The token from the emailed invite link",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvitePreview"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "INVITE_INVALID"
+          },
+          "429": {
+            "description": "TOO_MANY_REQUESTS"
+          }
+        },
+        "summary": "What an invitation is for (public, rate limited)",
+        "tags": [
+          "auth"
         ]
       }
     },
@@ -1181,6 +1649,134 @@
             "bearer": []
           }
         ],
+        "tags": [
+          "customers"
+        ]
+      }
+    },
+    "/v1/tenants/{tenantId}/customers/{id}/conversations": {
+      "get": {
+        "description": "The customer view: the same list as `GET …/conversations?customerId=`, newest activity first. A customer of another tenant is a 404 CUSTOMER_NOT_FOUND.",
+        "operationId": "EndCustomersController_conversationsOf",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "skip",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 0,
+              "default": 0,
+              "type": "number"
+            }
+          },
+          {
+            "name": "take",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "description": "One or more statuses, comma-separated: `active` (the AI answers), `escalated` (waiting for a human, the queue), `human_active` (a human handles it), `resolved`.",
+            "schema": {
+              "example": "escalated,human_active",
+              "type": "string"
+            }
+          },
+          {
+            "name": "assignedTo",
+            "required": false,
+            "in": "query",
+            "description": "`me` = the conversations I handle, or the id of a team member.",
+            "schema": {
+              "example": "me",
+              "type": "string"
+            }
+          },
+          {
+            "name": "customerId",
+            "required": false,
+            "in": "query",
+            "description": "Only the conversations of this end customer.",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "name": "sort",
+            "required": false,
+            "in": "query",
+            "description": "`lastMessageAt`: newest activity first. `escalatedAt`: the queue order, the one that has waited longest first.",
+            "schema": {
+              "default": "lastMessageAt",
+              "type": "string",
+              "enum": [
+                "lastMessageAt",
+                "escalatedAt"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data",
+                    "total",
+                    "skip",
+                    "take"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Conversation"
+                      }
+                    },
+                    "total": {
+                      "type": "integer"
+                    },
+                    "skip": {
+                      "type": "integer"
+                    },
+                    "take": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "CUSTOMER_NOT_FOUND"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Conversations of one customer (every role)",
         "tags": [
           "customers"
         ]
@@ -1917,6 +2513,269 @@
         ]
       }
     },
+    "/v1/tenants/{tenantId}/events/ticket": {
+      "post": {
+        "description": "A browser `EventSource` cannot send an `Authorization` header, and the access token must never be put in a URL. Call this with the normal `Authorization` header, then open `GET …/events?ticket=<ticket>` within 30 seconds. The ticket works once; open a new one (this call again) for every reconnect. A server-side proxy that can set the header does not need tickets.",
+        "operationId": "StaffEventsController_ticket",
+        "parameters": [
+          {
+            "name": "tenantId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StreamTicketResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "A single-use ticket to open the event stream from a browser",
+        "tags": [
+          "events"
+        ]
+      }
+    },
+    "/v1/tenants/{tenantId}/events": {
+      "get": {
+        "description": "A `text/event-stream` for every staff role. Authentication: `Authorization: Bearer <token>` (from a server-side proxy) or `?ticket=` (direct browser use).\n\nEvents (the payload only has ids, so the UI refetches): `conversation.escalated`, `conversation.assigned`, `conversation.released`, `conversation.resolved` `{conversationId}`; `message.created` `{conversationId, messageId, authorType}`; `action.proposed` `{actionId, conversationId?}`; `notification.created` `{notificationId, type}` (only on the stream of the user it is for).\n\nControl events: `ready` (the stream is open), `resync` (your `Last-Event-ID` is too old or from before a restart: reload your lists), `closed` `{reason}` (`expired`, `revoked` when the user was disabled, `limit` when a sixth stream replaced this one). A `: ping` comment arrives every 25 seconds. Every data event has an `id`; send it back as `Last-Event-ID` to receive what you missed (the last 100 events are kept).\n\nAt most 5 streams per user; opening another closes the oldest. The fan-out lives in the memory of one backend instance: several instances need a shared bus (Redis, Phase 8). A stream ends after one hour; reconnect.",
+        "operationId": "StaffEventsController_stream",
+        "parameters": [
+          {
+            "name": "tenantId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "lastEventId",
+            "required": false,
+            "in": "query",
+            "description": "Resume point for clients that cannot send the `Last-Event-ID` header (a new `EventSource` after a reconnect).",
+            "schema": {}
+          },
+          {
+            "name": "ticket",
+            "required": false,
+            "in": "query",
+            "description": "A single-use ticket from `POST …/events/ticket`, instead of the `Authorization` header. The access token itself is never accepted in the query string.",
+            "schema": {}
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "text/event-stream",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string",
+                  "example": "retry: 3000\n\nevent: ready\ndata: {\"heartbeatSeconds\":25}\n\nid: 9f2a-1\nevent: conversation.escalated\ndata: {\"conversationId\":\"…\"}\n\n"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Live events for the dashboard (server-sent events)",
+        "tags": [
+          "events"
+        ]
+      }
+    },
+    "/v1/tenants/{tenantId}/notifications": {
+      "get": {
+        "description": "Only the caller's own notifications (no role sees another person's). `?unread=true` returns the unread ones; `total` is then the unread count. The unread count is also in `GET /v1/me` (`unreadNotifications`). New ones arrive live as `notification.created` on the event stream.",
+        "operationId": "NotificationsController_findAll",
+        "parameters": [
+          {
+            "name": "tenantId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "skip",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 0,
+              "default": 0,
+              "type": "number"
+            }
+          },
+          {
+            "name": "take",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "unread",
+            "required": false,
+            "in": "query",
+            "description": "true = only unread notifications (`total` is then the unread count).",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data",
+                    "total",
+                    "skip",
+                    "take"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Notification"
+                      }
+                    },
+                    "total": {
+                      "type": "integer"
+                    },
+                    "skip": {
+                      "type": "integer"
+                    },
+                    "take": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "My notifications, newest first (every role)",
+        "tags": [
+          "notifications"
+        ]
+      }
+    },
+    "/v1/tenants/{tenantId}/notifications/read-all": {
+      "post": {
+        "operationId": "NotificationsController_readAll",
+        "parameters": [
+          {
+            "name": "tenantId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MarkAllReadResult"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Mark all my notifications read (idempotent)",
+        "tags": [
+          "notifications"
+        ]
+      }
+    },
+    "/v1/tenants/{tenantId}/notifications/{id}/read": {
+      "post": {
+        "description": "Reading one that is already read changes nothing. Someone else's notification answers 404 NOTIFICATION_NOT_FOUND.",
+        "operationId": "NotificationsController_read",
+        "parameters": [
+          {
+            "name": "tenantId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Notification"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOTIFICATION_NOT_FOUND"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Mark one of my notifications read (idempotent)",
+        "tags": [
+          "notifications"
+        ]
+      }
+    },
     "/v1/widget/sessions": {
       "post": {
         "description": "Validates the widget key together with the request `Origin` (the key must list that origin; a call without an Origin header is refused), checks that the tenant may chat, creates or finds the visitor (`web_<visitorId>`), creates the conversation (or resumes the open one of this visitor: call again with the same `visitorId` to get a fresh token before the 15 minutes end) and returns the widget token. A suspended or closed tenant, a plan without chat, or an engine that is down answers **200 with `status: \"blocked\"`** and a `fallback` text instead of an error; a tenant at its conversation limit gets `status: \"limited\"`. Errors: 401 WIDGET_KEY_INVALID, 403 ORIGIN_NOT_ALLOWED, 429 TOO_MANY_REQUESTS (with `Retry-After`).",
@@ -1994,6 +2853,35 @@
           }
         ],
         "summary": "Send a customer message and stream the reply (widget token)",
+        "tags": [
+          "widget"
+        ]
+      }
+    },
+    "/v1/widget/events": {
+      "get": {
+        "description": "A `text/event-stream` for what happens while the customer is not sending: a staff reply, the system lines (\"an agent joined\") and status changes. Like the message route it needs the `Authorization` header, so read it with `fetch` and a stream reader, not `EventSource`; the key and the Origin are checked as on every widget call.\n\nEvents: `message` `{id, authorType: \"human\" | \"system\", content, contentKey, createdAt}` (a staff reply has text and no identity; a system line has an empty `content` and a `contentKey` of the widget namespace such as `agent.joined`), `status` `{status: \"active\" | \"escalated\" | \"human_active\" | \"resolved\"}`. The AI's own replies and the customer's messages are NOT sent here (they come through the message stream). Show a `message` once, by its `id` (it is also in the history).\n\nControl events: `ready`, `resync` (your `Last-Event-ID` is too old: re-read `GET /v1/widget/conversation`), `closed` `{reason}` (`expired` when the 15-minute token ends: refresh the session and reconnect with the new token and the last event id; `revoked`; `limit` when a fourth stream of the same conversation replaced this one). A `: ping` comment arrives every 25 seconds. Every data event has an `id` for `Last-Event-ID` (the last 100 are kept; the history route is the fallback).\n\nErrors before the stream starts are ordinary JSON: 401, 403 ORIGIN_NOT_ALLOWED, 403 TENANT_SUSPENDED, 404 CONVERSATION_NOT_FOUND, 429.",
+        "operationId": "WidgetController_events",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "text/event-stream",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string",
+                  "example": "retry: 3000\n\nevent: ready\ndata: {\"heartbeatSeconds\":25}\n\nid: 9f2a-1\nevent: message\ndata: {\"id\":\"…\",\"authorType\":\"human\",\"content\":\"Hello, I can help\",\"contentKey\":null,\"createdAt\":\"…\"}\n\n"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Live events of the visitor's conversation (widget token)",
         "tags": [
           "widget"
         ]
@@ -2083,11 +2971,8 @@
             "name": "locale",
             "required": true,
             "in": "path",
+            "description": "A locale code from GET /v1/i18n/locales.",
             "schema": {
-              "enum": [
-                "en",
-                "ur"
-              ],
               "type": "string"
             }
           },
@@ -2365,16 +3250,15 @@
           },
           "ownerPassword": {
             "type": "string",
-            "minLength": 8
+            "minLength": 8,
+            "maxLength": 72,
+            "description": "8 to 72 characters, at most 72 bytes in UTF-8."
           },
           "locale": {
             "type": "string",
-            "enum": [
-              "en",
-              "ur"
-            ],
+            "example": "en",
             "default": "en",
-            "description": "The tenant's default language (H7)."
+            "description": "The tenant's default language (H7). A locale code from GET /v1/i18n/locales (BCP-47, for example `en`, `ur`)."
           }
         },
         "required": [
@@ -2476,13 +3360,14 @@
           "emailVerifiedAt": {
             "type": "string",
             "format": "date-time",
-            "nullable": true
+            "nullable": true,
+            "description": "Absent for the `agent` role: owners and admins only."
           },
           "passwordChangedAt": {
             "type": "string",
             "format": "date-time",
             "nullable": true,
-            "description": "Tokens issued before this instant are rejected."
+            "description": "Tokens issued before this instant are rejected. Absent for the `agent` role: owners and admins only."
           },
           "locale": {
             "type": "string",
@@ -2519,7 +3404,8 @@
           },
           "verificationLink": {
             "type": "string",
-            "description": "Only with MAIL_MODE=link (development): the email-verification link."
+            "x-dev-only": true,
+            "description": "DEVELOPMENT ONLY: present only when the server runs with MAIL_MODE=link (refused in production); the email-verification link."
           }
         },
         "required": [
@@ -2567,7 +3453,8 @@
         "properties": {
           "link": {
             "type": "string",
-            "description": "Only with MAIL_MODE=link (development): the reset link, so it can be passed on by hand."
+            "x-dev-only": true,
+            "description": "DEVELOPMENT ONLY: present only when the server runs with MAIL_MODE=link (refused in production) and the account exists; the reset link, so it can be passed on by hand."
           }
         }
       },
@@ -2581,7 +3468,8 @@
           "password": {
             "type": "string",
             "minLength": 8,
-            "maxLength": 72
+            "maxLength": 72,
+            "description": "8 to 72 characters, at most 72 bytes in UTF-8."
           }
         },
         "required": [
@@ -2606,7 +3494,8 @@
         "properties": {
           "link": {
             "type": "string",
-            "description": "Only with MAIL_MODE=link (development): the verification link."
+            "x-dev-only": true,
+            "description": "DEVELOPMENT ONLY: present only when the server runs with MAIL_MODE=link (refused in production); the verification link."
           }
         }
       },
@@ -2639,11 +3528,8 @@
           },
           "defaultLocale": {
             "type": "string",
-            "enum": [
-              "en",
-              "ur"
-            ],
-            "description": "The tenant's default language (H7)."
+            "example": "en",
+            "description": "The tenant's default language (H7). A locale code from GET /v1/i18n/locales (BCP-47, for example `en`, `ur`)."
           }
         }
       },
@@ -2673,6 +3559,295 @@
             "description": "`disabled` takes effect on the very next request. The last active owner cannot be disabled."
           }
         }
+      },
+      "ConversationCustomer": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "nullable": true
+          },
+          "externalId": {
+            "type": "string",
+            "nullable": true,
+            "example": "web_a1b2c3…",
+            "description": "The customer's id in their channel: a phone number, the tenant's own id, or for an anonymous website visitor a SHORTENED `web_` id (the full one is that visitor's secret). Null when the customer record no longer exists."
+          },
+          "channel": {
+            "type": "string",
+            "enum": [
+              "widget",
+              "whatsapp",
+              "voice"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "externalId",
+          "channel"
+        ]
+      },
+      "Conversation": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "endCustomerId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "customer": {
+            "$ref": "#/components/schemas/ConversationCustomer"
+          },
+          "channel": {
+            "type": "string",
+            "enum": [
+              "widget",
+              "whatsapp",
+              "voice"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "escalated",
+              "human_active",
+              "resolved"
+            ],
+            "description": "`active` the AI answers; `escalated` waits for a human; `human_active` a human handles it (the AI is silent); `resolved` is over."
+          },
+          "assignedUserId": {
+            "type": "string",
+            "nullable": true,
+            "description": "The staff member handling it (while `human_active`)."
+          },
+          "assignedUserName": {
+            "type": "string",
+            "nullable": true,
+            "description": "Their name (or email when they have no name). Null when nobody holds it or the user was deleted."
+          },
+          "escalatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "escalationReason": {
+            "type": "string",
+            "enum": [
+              "customer_requested",
+              "low_confidence",
+              "failed_action",
+              "sentiment",
+              "topic",
+              "outside_hours",
+              "ai_unavailable",
+              "limit_reached",
+              "other"
+            ],
+            "nullable": true,
+            "description": "Stable code; translate it in the dashboard."
+          },
+          "summary": {
+            "type": "string",
+            "nullable": true,
+            "description": "Hand-off note written when it escalated."
+          },
+          "lastMessageAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "resolvedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "resolvedBy": {
+            "type": "string",
+            "enum": [
+              "ai",
+              "human",
+              "customer",
+              "system"
+            ],
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "endCustomerId",
+          "customer",
+          "channel",
+          "status",
+          "assignedUserId",
+          "assignedUserName",
+          "escalatedAt",
+          "escalationReason",
+          "summary",
+          "lastMessageAt",
+          "resolvedAt",
+          "resolvedBy",
+          "createdAt"
+        ]
+      },
+      "ConversationCounts": {
+        "type": "object",
+        "properties": {
+          "counts": {
+            "type": "object",
+            "required": [
+              "active",
+              "escalated",
+              "human_active",
+              "resolved"
+            ],
+            "properties": {
+              "active": {
+                "type": "integer"
+              },
+              "escalated": {
+                "type": "integer",
+                "description": "The queue."
+              },
+              "human_active": {
+                "type": "integer"
+              },
+              "resolved": {
+                "type": "integer"
+              }
+            }
+          },
+          "assignedToMe": {
+            "type": "number",
+            "description": "How many conversations I am handling right now."
+          }
+        },
+        "required": [
+          "assignedToMe"
+        ]
+      },
+      "ConversationDetail": {
+        "type": "object",
+        "properties": {
+          "conversation": {
+            "$ref": "#/components/schemas/Conversation"
+          },
+          "messages": {
+            "type": "object",
+            "required": [
+              "data",
+              "total",
+              "skip",
+              "take"
+            ],
+            "properties": {
+              "data": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ConversationMessage"
+                }
+              },
+              "total": {
+                "type": "integer"
+              },
+              "skip": {
+                "type": "integer"
+              },
+              "take": {
+                "type": "integer"
+              }
+            },
+            "description": "The messages, oldest first, paginated."
+          }
+        },
+        "required": [
+          "conversation"
+        ]
+      },
+      "ReleaseConversationDto": {
+        "type": "object",
+        "properties": {
+          "to": {
+            "type": "string",
+            "enum": [
+              "active",
+              "escalated"
+            ],
+            "default": "active",
+            "description": "`active`: the AI answers again. `escalated`: back in the queue for a colleague. (To close it, use resolve.)"
+          }
+        }
+      },
+      "SendConversationMessageDto": {
+        "type": "object",
+        "properties": {
+          "content": {
+            "type": "string",
+            "maxLength": 2000,
+            "description": "The reply the customer will see (at most 2,000 characters)."
+          }
+        },
+        "required": [
+          "content"
+        ]
+      },
+      "ConversationMessage": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "authorType": {
+            "type": "string",
+            "enum": [
+              "customer",
+              "ai",
+              "human",
+              "system"
+            ]
+          },
+          "authorUserId": {
+            "type": "string",
+            "nullable": true,
+            "description": "The staff member who wrote a `human` message."
+          },
+          "authorName": {
+            "type": "string",
+            "nullable": true,
+            "description": "Their name (or email); the customer's name for a `customer` message; null for the AI, system lines and deleted users."
+          },
+          "content": {
+            "type": "string",
+            "description": "Message text. Empty for a system line: use `contentKey` instead."
+          },
+          "contentKey": {
+            "type": "string",
+            "nullable": true,
+            "example": "agent.joined",
+            "description": "For system lines: a key of the `widget` translation namespace (`GET /v1/i18n/:locale/widget`), for example `agent.joined`, `agent.left`, `resolved.notice`."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "authorType",
+          "authorUserId",
+          "authorName",
+          "content",
+          "contentKey",
+          "createdAt"
+        ]
       },
       "CreateInviteDto": {
         "type": "object",
@@ -2732,9 +3907,22 @@
             "type": "string",
             "format": "date-time"
           },
+          "acceptedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "When the invitation was accepted. Always null in the pending list; set on an invite that was used."
+          },
+          "revokedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "When the invitation was revoked. Null in the pending list; set on the answer to a revoke."
+          },
           "link": {
             "type": "string",
-            "description": "Only on creation and only with MAIL_MODE=link (development): the invite link, so it can be passed on by hand."
+            "x-dev-only": true,
+            "description": "DEVELOPMENT ONLY. Present only on the answer to creating an invite, and only when the server runs with MAIL_MODE=link (refused in production): the invite link, so it can be passed on by hand. Never in lists, never in production."
           }
         },
         "required": [
@@ -2744,6 +3932,37 @@
           "role",
           "expiresAt",
           "createdAt"
+        ]
+      },
+      "InvitePreview": {
+        "type": "object",
+        "properties": {
+          "tenantName": {
+            "type": "string",
+            "example": "Acme Support"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "owner",
+              "admin",
+              "agent"
+            ]
+          },
+          "email": {
+            "type": "string",
+            "example": "agent@acme.com"
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "tenantName",
+          "role",
+          "email",
+          "expiresAt"
         ]
       },
       "AcceptInviteDto": {
@@ -2756,7 +3975,8 @@
           "password": {
             "type": "string",
             "minLength": 8,
-            "maxLength": 72
+            "maxLength": 72,
+            "description": "8 to 72 characters, at most 72 bytes in UTF-8."
           },
           "name": {
             "type": "string",
@@ -2797,11 +4017,8 @@
           },
           "locale": {
             "type": "string",
-            "enum": [
-              "en",
-              "ur"
-            ],
-            "description": "The customer's language (H7); unset means unknown."
+            "example": "en",
+            "description": "The customer's language (H7); unset means unknown. A locale code from GET /v1/i18n/locales (BCP-47, for example `en`, `ur`)."
           },
           "metadata": {
             "type": "object",
@@ -2865,11 +4082,8 @@
           },
           "locale": {
             "type": "string",
-            "enum": [
-              "en",
-              "ur"
-            ],
-            "description": "The customer's language (H7); unset means unknown."
+            "example": "en",
+            "description": "The customer's language (H7); unset means unknown. A locale code from GET /v1/i18n/locales (BCP-47, for example `en`, `ur`)."
           },
           "metadata": {
             "type": "object",
@@ -4024,6 +5238,87 @@
           }
         }
       },
+      "StreamTicketResponse": {
+        "type": "object",
+        "properties": {
+          "ticket": {
+            "type": "string",
+            "description": "Single use, valid for 30 seconds: open the stream with `?ticket=<this>` right away."
+          },
+          "expiresInSeconds": {
+            "type": "number",
+            "example": 30
+          }
+        },
+        "required": [
+          "ticket",
+          "expiresInSeconds"
+        ]
+      },
+      "Notification": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "conversation.escalated",
+              "conversation.assigned",
+              "action.proposed",
+              "billing.trial_ending",
+              "billing.period_ending",
+              "billing.grace_started",
+              "billing.downgraded",
+              "usage.threshold",
+              "usage.limit_reached"
+            ],
+            "description": "Translation key prefix: the title is `<type>.title`, the body `<type>.body`."
+          },
+          "params": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Values for the ICU placeholders of the translations, for example `{ customer, conversationId, reason }` or `{ percent, limit }`."
+          },
+          "link": {
+            "type": "string",
+            "nullable": true,
+            "example": "/conversations/6c1f…",
+            "description": "App-relative path to open when the notification is clicked."
+          },
+          "readAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "params",
+          "link",
+          "readAt",
+          "createdAt"
+        ]
+      },
+      "MarkAllReadResult": {
+        "type": "object",
+        "properties": {
+          "updated": {
+            "type": "number",
+            "description": "How many notifications were unread before."
+          }
+        },
+        "required": [
+          "updated"
+        ]
+      },
       "SseAcceptedEvent": {
         "type": "object",
         "properties": {
@@ -4451,13 +5746,18 @@
           },
           "subscription": {
             "nullable": true,
-            "description": "Plan, status, period end, days left and limits, for the dashboard banner (reminders until in-app notifications exist, H5).",
+            "description": "Plan, status, period end, days left and limits, for the dashboard banner.",
             "type": "object",
             "allOf": [
               {
                 "$ref": "#/components/schemas/SubscriptionSummary"
               }
             ]
+          },
+          "unreadNotifications": {
+            "type": "number",
+            "example": 3,
+            "description": "How many of my in-app notifications are unread (the bell badge). The list is GET /v1/tenants/:tenantId/notifications."
           },
           "locale": {
             "type": "string",
@@ -4469,6 +5769,7 @@
           "user",
           "tenant",
           "subscription",
+          "unreadNotifications",
           "locale"
         ]
       },
@@ -4477,16 +5778,15 @@
         "properties": {
           "name": {
             "type": "string",
-            "example": "Sana Malik"
+            "example": "Sana Malik",
+            "nullable": true,
+            "description": "Display name. `null` clears it (an empty string is refused)."
           },
           "locale": {
             "type": "string",
-            "enum": [
-              "en",
-              "ur"
-            ],
+            "example": "en",
             "nullable": true,
-            "description": "Dashboard language. `null` clears it, so the tenant default applies."
+            "description": "Dashboard language. `null` clears it, so the tenant default applies. A locale code from GET /v1/i18n/locales (BCP-47, for example `en`, `ur`)."
           }
         }
       }

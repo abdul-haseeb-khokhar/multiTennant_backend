@@ -35,13 +35,20 @@ describe('AllExceptionsFilter', () => {
   it('a rate-limited error answers 429 TOO_MANY_REQUESTS and tells the client when to retry', () => {
     const { status, body } = run(new RateLimitedException(42));
     expect(status).toBe(429);
-    expect(body).toMatchObject({ statusCode: 429, code: 'TOO_MANY_REQUESTS' });
+    expect(body).toMatchObject({
+      statusCode: 429,
+      code: 'TOO_MANY_REQUESTS',
+      retryAfterSeconds: 42,
+    });
     expect(headers).toHaveBeenCalledWith('Retry-After', '42');
   });
 
-  it('other errors set no Retry-After header', () => {
-    run(new ApiException(HttpStatus.CONFLICT, ErrorCode.SLUG_TAKEN, 'taken'));
+  it('other errors set no Retry-After header and carry no retryAfterSeconds', () => {
+    const { body } = run(
+      new ApiException(HttpStatus.CONFLICT, ErrorCode.SLUG_TAKEN, 'taken'),
+    );
     expect(headers).not.toHaveBeenCalled();
+    expect(body).not.toHaveProperty('retryAfterSeconds');
   });
 
   it('keeps the code of an ApiException', () => {

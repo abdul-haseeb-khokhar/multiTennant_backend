@@ -139,7 +139,10 @@ describe('Gateway flows (real database, mock engine)', () => {
         preflightPerIp: big,
       })
       .compile();
-    app = moduleRef.createNestApplication({ logger: false });
+    app = moduleRef.createNestApplication({
+      logger: false,
+      rawBody: true,
+    });
     configureApp(app);
     await app.init();
     await app.listen(0);

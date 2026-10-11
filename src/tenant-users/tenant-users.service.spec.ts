@@ -9,6 +9,7 @@ import { AuditService } from '../audit/audit.service';
 import { EmailVerificationService } from '../auth/email-verification.service';
 import type { AuthUser } from '../auth/roles';
 import { EntitlementsService } from '../billing/entitlements/entitlements.service';
+import { ConversationsService } from '../conversations/conversations.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { TenantUsersService } from './tenant-users.service';
 
@@ -41,6 +42,7 @@ describe('TenantUsersService', () => {
   let audit: { record: jest.Mock };
   let verification: { issue: jest.Mock };
   let entitlements: { assertSeatAvailable: jest.Mock };
+  let conversations: { releaseHeldBy: jest.Mock };
 
   beforeEach(async () => {
     prisma = createPrismaMock();
@@ -50,6 +52,9 @@ describe('TenantUsersService', () => {
     entitlements = {
       assertSeatAvailable: jest.fn().mockResolvedValue(undefined),
     };
+    conversations = {
+      releaseHeldBy: jest.fn().mockResolvedValue({ released: 0, failed: 0 }),
+    };
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         TenantUsersService,
@@ -57,6 +62,7 @@ describe('TenantUsersService', () => {
         { provide: AuditService, useValue: audit },
         { provide: EmailVerificationService, useValue: verification },
         { provide: EntitlementsService, useValue: entitlements },
+        { provide: ConversationsService, useValue: conversations },
       ],
     }).compile();
     service = module.get(TenantUsersService);
@@ -71,7 +77,7 @@ describe('TenantUsersService', () => {
       prisma.tenantUser.findMany.mockResolvedValue([row()]);
       prisma.tenantUser.count.mockResolvedValue(1);
 
-      await expect(service.findAll('tenant-a', {})).resolves.toEqual({
+      await expect(service.findAll('tenant-a', {}, admin)).resolves.toEqual({
         data: [row()],
         total: 1,
         skip: 0,
@@ -93,7 +99,11 @@ describe('TenantUsersService', () => {
     it('caps take at 100', async () => {
       prisma.tenantUser.findMany.mockResolvedValue([]);
       prisma.tenantUser.count.mockResolvedValue(0);
-      const res = await service.findAll('tenant-a', { skip: 5, take: 5000 });
+      const res = await service.findAll(
+        'tenant-a',
+        { skip: 5, take: 5000 },
+        admin,
+      );
       expect(res).toMatchObject({ skip: 5, take: 100 });
       expect(prisma.tenantUser.findMany).toHaveBeenCalledWith(
         expect.objectContaining({ take: 100 }),
@@ -101,11 +111,60 @@ describe('TenantUsersService', () => {
     });
   });
 
+  describe('what an agent may see (G23.3)', () => {
+    const agent: AuthUser = {
+      userId: 'g1',
+      tenantId: 'tenant-a',
+      role: 'agent',
+      emailVerified: true,
+    };
+
+    it.each([
+      ['owner', owner],
+      ['admin', admin],
+    ])('a list for the %s keeps the security columns', async (_name, actor) => {
+      prisma.tenantUser.findMany.mockResolvedValue([]);
+      prisma.tenantUser.count.mockResolvedValue(0);
+      await service.findAll('tenant-a', {}, actor);
+      expect(prisma.tenantUser.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ omit: { passwordHash: true } }),
+      );
+    });
+
+    it('a list for an agent leaves out passwordChangedAt and emailVerifiedAt', async () => {
+      prisma.tenantUser.findMany.mockResolvedValue([]);
+      prisma.tenantUser.count.mockResolvedValue(0);
+      await service.findAll('tenant-a', {}, agent);
+      expect(prisma.tenantUser.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          omit: {
+            passwordHash: true,
+            passwordChangedAt: true,
+            emailVerifiedAt: true,
+          },
+        }),
+      );
+    });
+
+    it('a single user for an agent leaves them out too', async () => {
+      prisma.tenantUser.findFirst.mockResolvedValue(row());
+      await service.findOne('tenant-a', 'u1', agent);
+      expect(prisma.tenantUser.findFirst).toHaveBeenCalledWith({
+        where: { id: 'u1', tenantId: 'tenant-a' },
+        omit: {
+          passwordHash: true,
+          passwordChangedAt: true,
+          emailVerifiedAt: true,
+        },
+      });
+    });
+  });
+
   describe('findOne', () => {
     it("looks up by id AND tenantId, so another tenant's user is a 404", async () => {
       prisma.tenantUser.findFirst.mockResolvedValue(null);
       await expect(
-        service.findOne('tenant-a', 'user-of-b'),
+        service.findOne('tenant-a', 'user-of-b', admin),
       ).rejects.toMatchObject({
         status: 404,
         response: { code: 'USER_NOT_FOUND' },
@@ -414,6 +473,70 @@ describe('TenantUsersService', () => {
         status: 404,
         response: { code: 'USER_NOT_FOUND' },
       });
+    });
+  });
+
+  describe('conversations of a user who is disabled or deleted (Phase 4)', () => {
+    it('disabling a user gives their conversations back to the queue, after the change committed', async () => {
+      prisma.tenantUser.findFirst.mockResolvedValue(row({ status: 'active' }));
+      prisma.tenantUser.update.mockResolvedValue(row({ status: 'disabled' }));
+      await service.update('tenant-a', 'u1', { status: 'disabled' }, admin);
+      expect(conversations.releaseHeldBy).toHaveBeenCalledWith(
+        admin,
+        'u1',
+        'assignee_disabled',
+      );
+    });
+
+    it.each([
+      ['a role change', { role: 'admin' }, { role: 'admin' }],
+      ['enabling', { status: 'active' }, { status: 'active' }],
+    ])('%s releases nothing', async (_name, dto, patch) => {
+      prisma.tenantUser.findFirst.mockResolvedValue(
+        row({ status: 'disabled' }),
+      );
+      prisma.tenantUser.update.mockResolvedValue(row(patch));
+      await service.update('tenant-a', 'u1', dto, admin);
+      expect(conversations.releaseHeldBy).not.toHaveBeenCalled();
+    });
+
+    it('disabling someone who is already disabled releases nothing', async () => {
+      prisma.tenantUser.findFirst.mockResolvedValue(
+        row({ status: 'disabled' }),
+      );
+      prisma.tenantUser.update.mockResolvedValue(row({ status: 'disabled' }));
+      await service.update('tenant-a', 'u1', { status: 'disabled' }, admin);
+      expect(conversations.releaseHeldBy).not.toHaveBeenCalled();
+    });
+
+    it('a refused change (last owner) releases nothing', async () => {
+      prisma.tenantUser.findFirst.mockResolvedValue(
+        row({ role: 'owner', status: 'active' }),
+      );
+      prisma.tenantUser.count.mockResolvedValue(0);
+      await expect(
+        service.update('tenant-a', 'u1', { status: 'disabled' }, owner),
+      ).rejects.toMatchObject({ status: 409 });
+      expect(conversations.releaseHeldBy).not.toHaveBeenCalled();
+    });
+
+    it('deleting a user gives their conversations back to the queue', async () => {
+      prisma.tenantUser.findFirst.mockResolvedValue(row());
+      prisma.tenantUser.delete.mockResolvedValue(row());
+      await service.remove('tenant-a', 'u1', admin);
+      expect(conversations.releaseHeldBy).toHaveBeenCalledWith(
+        admin,
+        'u1',
+        'assignee_deleted',
+      );
+    });
+
+    it('a delete that finds nobody releases nothing', async () => {
+      prisma.tenantUser.findFirst.mockResolvedValue(null);
+      await expect(
+        service.remove('tenant-a', 'nobody', admin),
+      ).rejects.toMatchObject({ status: 404 });
+      expect(conversations.releaseHeldBy).not.toHaveBeenCalled();
     });
   });
 

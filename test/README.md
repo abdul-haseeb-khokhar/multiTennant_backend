@@ -46,6 +46,16 @@ Time: `createTestApp()` returns a `clock` (`FakeClock`) that replaces the `Clock
 
 `createTestApp({ widgetLimits })` lets a test use small rate limits and returns the mock `engine` (use `engine.setDown(true)`, `engine.resolve(...)`, `engine.inspect(tenant, id)`). The shared limiter keeps counting across tests, so the big suites build their app with very high limits.
 
+## Human hand-off tests (Phase 3B and 4)
+
+- `phase3b.e2e-spec.ts`: the frontend gap-report fixes over HTTP (password byte limit, agents' user list, `name: null`, invite preview and its limits, `Retry-After` through CORS, OpenAPI conventions) and `TRUST_PROXY` with the real `configureApp`.
+- `handoff.e2e-spec.ts`: the staff conversation API on the mock engine with an in-memory database (`utils/handoff-fixtures.ts`): roles, the assignee rule, claim races, two-tenant isolation, audit, a disabled holder, the dashboard stream (header, tickets, resume, caps) and the widget stream over a real socket (`utils/sse-client.ts`), and the whole demo (ask, escalate, notify, claim, reply reaches the widget, release, AI resumes, resolve).
+- `events-notifications.e2e-spec.ts`: `POST /internal/events` (signature, envelope, idempotency, tenant from the envelope, each event type), the notification API and `GET /v1/me`, the OpenAPI document.
+- `db/handoff-flows.db-spec.ts`: the same on real Postgres: the migration, ten parallel deliveries of one event, rollback of a half-applied event, parallel claims, single-use tickets, billing reminders and their idempotency (three sweeps at once), the purge, the escalation retry job, reactivating a suspended tenant, and the whole hand-off.
+- Unit specs: `src/realtime/*` (hub, SSE, registry, tickets, guard), `src/events/*` (signature, guard, service), `src/notifications/*`, `src/conversations/*`, `src/billing/reminders/*`, `src/widget/escalation-retry` and `widget-stream`, and the new mock-engine behaviour in `src/engine/*` (the contract suite runs the staff calls against both the mock and the HTTP client).
+
+`createTestApp()` now creates the app with `rawBody: true` (the event receiver verifies the exact bytes) and `setup-env.ts` sets an `INTERNAL_API_TOKEN`. Wait for the mock engine's events with `await engine.flushEvents()` before asserting on notifications or streams.
+
 ## Helpers
 
 - `utils/prisma-mock.ts`: `createPrismaMock()`, `mockTransaction(prisma)` (runs `$transaction` callbacks against the same mock) and `prismaError('P2002')` (a real `PrismaClientKnownRequestError`). The mocks do not apply `omit`: a mock that echoes `create` data must strip hashes itself.

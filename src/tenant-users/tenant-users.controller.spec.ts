@@ -47,8 +47,8 @@ describe('TenantUsersController', () => {
       actor,
     );
 
-    void controller.findOne('tenant-a', 'user-1');
-    expect(service.findOne).toHaveBeenCalledWith('tenant-a', 'user-1');
+    void controller.findOne('tenant-a', 'user-1', actor);
+    expect(service.findOne).toHaveBeenCalledWith('tenant-a', 'user-1', actor);
   });
 
   it('has no create route: people join by invite', () => {
@@ -56,10 +56,11 @@ describe('TenantUsersController', () => {
   });
 
   it('forwards list with the tenant first', () => {
-    void controller.findAll('tenant-a', { skip: 1, take: 2 });
-    expect(service.findAll).toHaveBeenCalledWith('tenant-a', {
-      skip: 1,
-      take: 2,
-    });
+    void controller.findAll('tenant-a', { skip: 1, take: 2 }, actor);
+    expect(service.findAll).toHaveBeenCalledWith(
+      'tenant-a',
+      { skip: 1, take: 2 },
+      actor,
+    );
   });
 });

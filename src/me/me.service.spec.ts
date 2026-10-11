@@ -41,6 +41,7 @@ describe('MeService', () => {
 
   beforeEach(async () => {
     prisma = createPrismaMock();
+    prisma.notification.count.mockResolvedValue(0);
     subscriptions = { getEffective: jest.fn().mockResolvedValue(null) };
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -73,11 +74,22 @@ describe('MeService', () => {
           defaultLocale: 'ur',
         },
         subscription: null,
+        unreadNotifications: 0,
         locale: 'ur',
       });
       expect(prisma.tenantUser.findFirst).toHaveBeenCalledWith(
         expect.objectContaining({ where: { id: 'u1', tenantId: 'tenant-a' } }),
       );
+    });
+
+    it('counts MY unread notifications, scoped to the tenant and the user (the bell badge)', async () => {
+      prisma.tenantUser.findFirst.mockResolvedValue(dbUser());
+      prisma.notification.count.mockResolvedValue(4);
+      const me = await service.get(actor);
+      expect(me.unreadNotifications).toBe(4);
+      expect(prisma.notification.count).toHaveBeenCalledWith({
+        where: { tenantId: 'tenant-a', userId: 'u1', readAt: null },
+      });
     });
 
     it('adds the subscription summary for the dashboard banner, read for the token tenant only', async () => {

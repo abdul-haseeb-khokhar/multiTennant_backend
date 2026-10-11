@@ -322,4 +322,585 @@ describe.each([
       expect(page.messages.data.map((m) => m.content)).toEqual(['two']);
     });
   });
+
+  describe('the staff side (Phase 4)', () => {
+    const staff = (tenantId: string, userId: string, key?: string) => ({
+      ...ctxFor(tenantId, key),
+      actingUserId: userId,
+      actingRole: 'agent',
+    });
+    const escalate = async (tenantId = 'tenant-a', key = 'k-open') => {
+      const { id } = await open(tenantId, key);
+      await client.escalate(ctxFor(tenantId, `esc-${key}`), id, {
+        reason: 'customer_requested',
+        summary: 'wants a human',
+      });
+      return id;
+    };
+    const eventTypes = (tenantId = 'tenant-a') =>
+      engine()
+        .emitted.filter((e) => e.tenantId === tenantId)
+        .map((e) => e.type);
+
+    describe('listConversations and countConversations', () => {
+      it('filters by status, assignee and customer, and never shows another tenant', async () => {
+        const a1 = await escalate('tenant-a', 'one');
+        const a2 = (await open('tenant-a', 'two')).id;
+        const other = await client.createConversation(
+          ctxFor('tenant-a', 'three'),
+          {
+            channel: 'widget',
+            endCustomerId: 'ec-2',
+          },
+        );
+        await client.claimConversation(staff('tenant-a', 'u1'), a1, {
+          userId: 'u1',
+        });
+        await open('tenant-b', 'b1');
+
+        const all = await client.listConversations(ctxFor('tenant-a'), {});
+        expect(all.total).toBe(3);
+        expect(all.data.map((c) => c.id).sort()).toEqual(
+          [a1, a2, other.id].sort(),
+        );
+        const mine = await client.listConversations(ctxFor('tenant-a'), {
+          assignedUserId: 'u1',
+        });
+        expect(mine.data.map((c) => c.id)).toEqual([a1]);
+        expect(mine.data[0]).toMatchObject({
+          status: 'human_active',
+          assignedUserId: 'u1',
+          escalationReason: 'customer_requested',
+          summary: 'wants a human',
+        });
+        const queue = await client.listConversations(ctxFor('tenant-a'), {
+          status: ['escalated', 'active'],
+        });
+        expect(queue.data.map((c) => c.id).sort()).toEqual(
+          [a2, other.id].sort(),
+        );
+        const ofCustomer = await client.listConversations(ctxFor('tenant-a'), {
+          endCustomerId: 'ec-2',
+        });
+        expect(ofCustomer.data.map((c) => c.id)).toEqual([other.id]);
+        const theirs = await client.listConversations(ctxFor('tenant-b'), {});
+        expect(theirs.total).toBe(1);
+      });
+
+      it('sorts the queue by escalation time, oldest first, and pages', async () => {
+        const first = await escalate('tenant-a', 'q1');
+        await new Promise((r) => setTimeout(r, 5));
+        const second = await escalate('tenant-a', 'q2');
+        await new Promise((r) => setTimeout(r, 5));
+        const third = await escalate('tenant-a', 'q3');
+        const queue = await client.listConversations(ctxFor('tenant-a'), {
+          status: ['escalated'],
+          sort: 'escalatedAt',
+        });
+        expect(queue.data.map((c) => c.id)).toEqual([first, second, third]);
+        const page = await client.listConversations(ctxFor('tenant-a'), {
+          status: ['escalated'],
+          sort: 'escalatedAt',
+          skip: 1,
+          take: 1,
+        });
+        expect(page).toMatchObject({ total: 3, skip: 1, take: 1 });
+        expect(page.data.map((c) => c.id)).toEqual([second]);
+      });
+
+      it('counts conversations per status (all four keys) and per holder', async () => {
+        const a = await escalate('tenant-a', 'c1');
+        await escalate('tenant-a', 'c2');
+        await open('tenant-a', 'c3');
+        await client.claimConversation(staff('tenant-a', 'u1'), a, {
+          userId: 'u1',
+        });
+        await expect(
+          client.countConversations(ctxFor('tenant-a')),
+        ).resolves.toEqual({
+          active: 1,
+          escalated: 1,
+          human_active: 1,
+          resolved: 0,
+        });
+        await expect(
+          client.countConversations(ctxFor('tenant-a'), {
+            assignedUserId: 'u1',
+          }),
+        ).resolves.toEqual({
+          active: 0,
+          escalated: 0,
+          human_active: 1,
+          resolved: 0,
+        });
+        await expect(
+          client.countConversations(ctxFor('tenant-b')),
+        ).resolves.toEqual({
+          active: 0,
+          escalated: 0,
+          human_active: 0,
+          resolved: 0,
+        });
+      });
+    });
+
+    describe('claimConversation', () => {
+      it('moves an escalated or active conversation to human_active for the claimant', async () => {
+        const escalated = await escalate('tenant-a', 'cl1');
+        const active = (await open('tenant-a', 'cl2')).id;
+        for (const id of [escalated, active]) {
+          const claimed = await client.claimConversation(
+            staff('tenant-a', 'u1', `claim-${id}`),
+            id,
+            { userId: 'u1' },
+          );
+          expect(claimed).toMatchObject({
+            status: 'human_active',
+            assignedUserId: 'u1',
+          });
+        }
+      });
+
+      it('answers a second claim with a conflict and the engine code', async () => {
+        const id = await escalate();
+        await client.claimConversation(staff('tenant-a', 'u1'), id, {
+          userId: 'u1',
+        });
+        const error = await failure(
+          client.claimConversation(staff('tenant-a', 'u2'), id, {
+            userId: 'u2',
+          }),
+        );
+        expect(error).toMatchObject({
+          kind: 'conflict',
+          status: 409,
+          engineCode: 'CONVERSATION_ALREADY_CLAIMED',
+        });
+        const detail = await client.getConversation(ctxFor('tenant-a'), id);
+        expect(detail.conversation.assignedUserId).toBe('u1');
+      });
+
+      it('lets exactly one of several simultaneous claimants win', async () => {
+        const id = await escalate();
+        const results = await Promise.allSettled(
+          ['u1', 'u2', 'u3', 'u4', 'u5'].map((userId) =>
+            client.claimConversation(staff('tenant-a', userId), id, { userId }),
+          ),
+        );
+        expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+        const rejected = results.filter(
+          (r): r is PromiseRejectedResult => r.status === 'rejected',
+        );
+        expect(rejected).toHaveLength(4);
+        for (const r of rejected) {
+          expect(r.reason).toMatchObject({ kind: 'conflict' });
+        }
+        const winner = results.find(
+          (r): r is PromiseFulfilledResult<any> => r.status === 'fulfilled',
+        )!.value;
+        const detail = await client.getConversation(ctxFor('tenant-a'), id);
+        expect(detail.conversation.assignedUserId).toBe(winner.assignedUserId);
+        expect(
+          eventTypes().filter((t) => t === 'conversation.assigned'),
+        ).toHaveLength(1);
+      });
+
+      it('is idempotent by key: a retry of the successful claim is not a conflict', async () => {
+        const id = await escalate();
+        const first = await client.claimConversation(
+          staff('tenant-a', 'u1', 'same-claim'),
+          id,
+          { userId: 'u1' },
+        );
+        const again = await client.claimConversation(
+          staff('tenant-a', 'u1', 'same-claim'),
+          id,
+          { userId: 'u1' },
+        );
+        expect(again).toEqual(first);
+      });
+
+      it('refuses a resolved conversation and another tenant’s conversation', async () => {
+        const id = await escalate();
+        const foreign = await failure(
+          client.claimConversation(staff('tenant-b', 'u1'), id, {
+            userId: 'u1',
+          }),
+        );
+        expect(foreign.kind).toBe('not_found');
+        engine().resolve('tenant-a', id);
+        const resolved = await failure(
+          client.claimConversation(staff('tenant-a', 'u1'), id, {
+            userId: 'u1',
+          }),
+        );
+        expect(resolved).toMatchObject({
+          kind: 'conflict',
+          engineCode: 'CONVERSATION_RESOLVED',
+        });
+      });
+
+      it('writes the agent-joined line and keeps the AI silent (C4)', async () => {
+        const id = await escalate();
+        await client.claimConversation(staff('tenant-a', 'u1'), id, {
+          userId: 'u1',
+        });
+        const events = await collect(
+          client.sendMessage(ctxFor('tenant-a'), id, { content: 'hello?' }),
+        );
+        expect(events[events.length - 1]).toMatchObject({
+          aiReply: false,
+          conversationStatus: 'human_active',
+        });
+        const detail = await client.getConversation(ctxFor('tenant-a'), id);
+        expect(
+          detail.messages.data.map((m) => [m.authorType, m.contentKey]),
+        ).toEqual([
+          ['system', 'agent.joined'],
+          ['customer', null],
+        ]);
+      });
+    });
+
+    describe('sendHumanMessage', () => {
+      it('stores the reply as a human message of the assignee, and only the assignee may', async () => {
+        const id = await escalate();
+        const early = await failure(
+          client.sendHumanMessage(staff('tenant-a', 'u1'), id, {
+            userId: 'u1',
+            content: 'too early',
+          }),
+        );
+        expect(early).toMatchObject({
+          kind: 'conflict',
+          engineCode: 'CONVERSATION_NOT_ASSIGNED_TO_YOU',
+        });
+        await client.claimConversation(staff('tenant-a', 'u1'), id, {
+          userId: 'u1',
+        });
+        const intruder = await failure(
+          client.sendHumanMessage(staff('tenant-a', 'u2'), id, {
+            userId: 'u2',
+            content: 'not mine',
+          }),
+        );
+        expect(intruder).toMatchObject({
+          kind: 'conflict',
+          engineCode: 'CONVERSATION_NOT_ASSIGNED_TO_YOU',
+        });
+        const message = await client.sendHumanMessage(
+          staff('tenant-a', 'u1', 'h1'),
+          id,
+          { userId: 'u1', content: 'Hello, I can help' },
+        );
+        expect(message).toMatchObject({
+          authorType: 'human',
+          authorUserId: 'u1',
+          content: 'Hello, I can help',
+        });
+        const detail = await client.getConversation(ctxFor('tenant-a'), id);
+        expect(detail.messages.data.map((m) => m.authorType)).toEqual([
+          'system',
+          'human',
+        ]);
+      });
+
+      it('is idempotent by key (a retry does not store the reply twice)', async () => {
+        const id = await escalate();
+        await client.claimConversation(staff('tenant-a', 'u1'), id, {
+          userId: 'u1',
+        });
+        const a = await client.sendHumanMessage(
+          staff('tenant-a', 'u1', 'dup'),
+          id,
+          {
+            userId: 'u1',
+            content: 'once',
+          },
+        );
+        const b = await client.sendHumanMessage(
+          staff('tenant-a', 'u1', 'dup'),
+          id,
+          {
+            userId: 'u1',
+            content: 'once',
+          },
+        );
+        expect(b.id).toBe(a.id);
+        const detail = await client.getConversation(ctxFor('tenant-a'), id);
+        expect(
+          detail.messages.data.filter((m) => m.authorType === 'human'),
+        ).toHaveLength(1);
+      });
+
+      it('refuses a resolved conversation and another tenant', async () => {
+        const id = await escalate();
+        await client.claimConversation(staff('tenant-a', 'u1'), id, {
+          userId: 'u1',
+        });
+        const foreign = await failure(
+          client.sendHumanMessage(staff('tenant-b', 'u1'), id, {
+            userId: 'u1',
+            content: 'x',
+          }),
+        );
+        expect(foreign.kind).toBe('not_found');
+        engine().resolve('tenant-a', id);
+        const resolved = await failure(
+          client.sendHumanMessage(staff('tenant-a', 'u1'), id, {
+            userId: 'u1',
+            content: 'x',
+          }),
+        );
+        expect(resolved).toMatchObject({
+          kind: 'conflict',
+          engineCode: 'CONVERSATION_RESOLVED',
+        });
+      });
+    });
+
+    describe('releaseConversation and resolveConversation', () => {
+      const claimed = async (userId = 'u1') => {
+        const id = await escalate();
+        await client.claimConversation(staff('tenant-a', userId), id, {
+          userId,
+        });
+        return id;
+      };
+
+      it('release to active hands the conversation back to the AI', async () => {
+        const id = await claimed();
+        const released = await client.releaseConversation(
+          staff('tenant-a', 'u1'),
+          id,
+          {
+            userId: 'u1',
+            to: 'active',
+          },
+        );
+        expect(released).toMatchObject({
+          status: 'active',
+          assignedUserId: null,
+        });
+        const events = await collect(
+          client.sendMessage(ctxFor('tenant-a'), id, {
+            content: 'What are your opening hours?',
+          }),
+        );
+        expect(events[events.length - 1]).toMatchObject({
+          aiReply: true,
+          conversationStatus: 'active',
+        });
+        const detail = await client.getConversation(ctxFor('tenant-a'), id);
+        expect(detail.messages.data[0]).toMatchObject({
+          contentKey: 'agent.joined',
+        });
+        expect(detail.messages.data[1]).toMatchObject({
+          contentKey: 'agent.left',
+        });
+      });
+
+      it('release to escalated puts it back in the queue and keeps its place', async () => {
+        const id = await claimed();
+        const before = (await client.getConversation(ctxFor('tenant-a'), id))
+          .conversation;
+        const released = await client.releaseConversation(
+          staff('tenant-a', 'u1'),
+          id,
+          {
+            userId: 'u1',
+            to: 'escalated',
+          },
+        );
+        expect(released).toMatchObject({
+          status: 'escalated',
+          assignedUserId: null,
+        });
+        expect(released.escalatedAt).toBe(before.escalatedAt);
+      });
+
+      it('release to resolved is the same as resolving', async () => {
+        const id = await claimed();
+        const released = await client.releaseConversation(
+          staff('tenant-a', 'u1'),
+          id,
+          {
+            userId: 'u1',
+            to: 'resolved',
+          },
+        );
+        expect(released).toMatchObject({
+          status: 'resolved',
+          resolvedBy: 'human',
+        });
+        expect(released.resolvedAt).toEqual(expect.any(String));
+      });
+
+      it('only the assignee may release or resolve, unless the backend forces a release (holder gone)', async () => {
+        const id = await claimed('u1');
+        for (const attempt of [
+          () =>
+            client.releaseConversation(staff('tenant-a', 'u2'), id, {
+              userId: 'u2',
+              to: 'active',
+            }),
+          () =>
+            client.resolveConversation(staff('tenant-a', 'u2'), id, {
+              userId: 'u2',
+            }),
+        ]) {
+          await expect(failure(attempt())).resolves.toMatchObject({
+            kind: 'conflict',
+            engineCode: 'CONVERSATION_NOT_ASSIGNED_TO_YOU',
+          });
+        }
+        const forced = await client.releaseConversation(
+          staff('tenant-a', 'admin-1'),
+          id,
+          {
+            userId: 'admin-1',
+            to: 'escalated',
+            force: true,
+            reason: 'assignee_disabled',
+          },
+        );
+        expect(forced).toMatchObject({
+          status: 'escalated',
+          assignedUserId: null,
+        });
+      });
+
+      it('resolve closes the conversation: later customer messages are refused', async () => {
+        const id = await claimed();
+        const resolved = await client.resolveConversation(
+          staff('tenant-a', 'u1'),
+          id,
+          {
+            userId: 'u1',
+          },
+        );
+        expect(resolved).toMatchObject({
+          status: 'resolved',
+          resolvedBy: 'human',
+        });
+        const error = await failure(
+          collect(
+            client.sendMessage(ctxFor('tenant-a'), id, { content: 'hi' }),
+          ),
+        );
+        expect(error.kind).toBe('conflict');
+        const again = await failure(
+          client.resolveConversation(staff('tenant-a', 'u1'), id, {
+            userId: 'u1',
+          }),
+        );
+        expect(again).toMatchObject({
+          kind: 'conflict',
+          engineCode: 'CONVERSATION_RESOLVED',
+        });
+      });
+
+      it('a conversation nobody holds cannot be released or resolved', async () => {
+        const id = await escalate();
+        await expect(
+          failure(
+            client.releaseConversation(staff('tenant-a', 'u1'), id, {
+              userId: 'u1',
+              to: 'active',
+            }),
+          ),
+        ).resolves.toMatchObject({
+          engineCode: 'CONVERSATION_NOT_ASSIGNED_TO_YOU',
+        });
+      });
+    });
+
+    describe('events (D5)', () => {
+      it('emits the events of the whole hand-off, in order, with the envelope tenant', async () => {
+        const id = await escalate();
+        await client.claimConversation(staff('tenant-a', 'u1'), id, {
+          userId: 'u1',
+        });
+        await client.sendHumanMessage(staff('tenant-a', 'u1'), id, {
+          userId: 'u1',
+          content: 'hello',
+        });
+        await client.releaseConversation(staff('tenant-a', 'u1'), id, {
+          userId: 'u1',
+          to: 'active',
+        });
+        expect(eventTypes()).toEqual([
+          'conversation.created',
+          'conversation.escalated',
+          'conversation.assigned',
+          'message.created', // agent joined
+          'message.created', // the reply
+          'conversation.released',
+          'message.created', // agent left
+        ]);
+        const reply = engine()
+          .emitted.filter((e) => e.type === 'message.created')
+          .at(1)!;
+        expect(reply).toMatchObject({
+          tenantId: 'tenant-a',
+          data: { authorType: 'human', content: 'hello', authorUserId: 'u1' },
+        });
+        expect(reply.id).toEqual(expect.any(String));
+        expect(Date.parse(reply.occurredAt)).not.toBeNaN();
+      });
+
+      it('sends no message text of customer or AI messages, and a usage event for the AI reply', async () => {
+        const { id } = await open();
+        await collect(
+          client.sendMessage(ctxFor('tenant-a'), id, {
+            content: 'What are your opening hours?',
+          }),
+        );
+        const created = engine().emitted.filter(
+          (e) => e.type === 'message.created',
+        );
+        expect(created.map((e) => e.data.authorType)).toEqual([
+          'customer',
+          'ai',
+        ]);
+        for (const event of created) {
+          expect(event.data).not.toHaveProperty('content');
+        }
+        const usage = engine().emitted.find(
+          (e) => e.type === 'usage.recorded',
+        )!;
+        expect(usage.data).toMatchObject({
+          conversationId: id,
+          tokensIn: expect.any(Number),
+          tokensOut: expect.any(Number),
+          model: 'mock-llm-1',
+        });
+        expect(created[1].data.messageId).toBe(usage.data.messageId);
+      });
+    });
+
+    if (kind === 'http') {
+      it('sends who is acting (X-Acting-User-Id and X-Acting-Role) with a staff call, and the tenant header', async () => {
+        const id = await escalate();
+        fake!.requests.length = 0;
+        await client.claimConversation(staff('tenant-a', 'u7', 'a-key'), id, {
+          userId: 'u7',
+        });
+        const request = fake!.requests.at(-1)!;
+        expect(request).toMatchObject({
+          method: 'POST',
+          path: `/internal/conversations/${id}/claim`,
+          body: { userId: 'u7' },
+        });
+        expect(request.headers).toMatchObject({
+          authorization: `Bearer ${TOKEN}`,
+          'x-tenant-id': 'tenant-a',
+          'x-acting-user-id': 'u7',
+          'x-acting-role': 'agent',
+          'idempotency-key': 'a-key',
+          'x-request-id': 'req-1',
+        });
+      });
+    }
+  });
 });

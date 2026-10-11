@@ -62,9 +62,16 @@ export class Me {
     type: SubscriptionSummary,
     nullable: true,
     description:
-      'Plan, status, period end, days left and limits, for the dashboard banner (reminders until in-app notifications exist, H5).',
+      'Plan, status, period end, days left and limits, for the dashboard banner.',
   })
   subscription: SubscriptionSummary | null;
+
+  @ApiProperty({
+    example: 3,
+    description:
+      'How many of my in-app notifications are unread (the bell badge). The list is GET /v1/tenants/:tenantId/notifications.',
+  })
+  unreadNotifications: number;
 
   @ApiProperty({
     example: 'ur',

@@ -11,11 +11,13 @@ import {
   PasswordResetRequestDto,
 } from './dto/password-reset.dto';
 import { PasswordResetService } from './password-reset.service';
+import { DEV_ONLY } from '../common/openapi/dev-only';
 
 class PasswordResetRequested {
   @ApiPropertyOptional({
+    ...DEV_ONLY,
     description:
-      'Only with MAIL_MODE=link (development): the reset link, so it can be passed on by hand.',
+      'DEVELOPMENT ONLY: present only when the server runs with MAIL_MODE=link (refused in production) and the account exists; the reset link, so it can be passed on by hand.',
   })
   link?: string;
 }

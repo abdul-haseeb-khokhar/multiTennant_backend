@@ -202,6 +202,11 @@ export class WidgetMessagesService {
 
   // -------------------------------------------------------------------------------------------
 
+  /** 404 unless the token's conversation is an open conversation of the token's tenant AND end customer. */
+  async assertOwnConversation(auth: WidgetAuth) {
+    await this.ownConversation(auth);
+  }
+
   /** The gateway's record of the token's conversation, scoped to the token's tenant AND end customer. */
   private async ownConversation(auth: WidgetAuth) {
     const row = await this.prisma.gatewayConversation.findFirst({

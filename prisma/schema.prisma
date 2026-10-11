@@ -40,6 +40,9 @@ model Tenant {
   gatewayConversations GatewayConversation[]
   usageDailies         UsageDaily[]
   usageEvents          UsageEvent[]
+  notifications        Notification[]
+  engineEvents         EngineEvent[]
+  streamTickets        StreamTicket[]
 
   @@map("tenants")
   @@schema("tenant_core")
@@ -65,6 +68,8 @@ model TenantUser {
   tenant             Tenant              @relation(fields: [tenantId], references: [id])
   passwordResets     PasswordReset[]
   emailVerifications EmailVerification[]
+  notifications      Notification[]
+  streamTickets      StreamTicket[]
 
   @@unique([tenantId, email])
   @@map("tenant_user")
@@ -364,29 +369,33 @@ model ApiKey {
 /// returning visitor resumes it), whether the AI may answer it, and an escalation the engine could
 /// not be told about yet. The conversation itself lives in ai_engine.
 model GatewayConversation {
-  id                String    @id @default(uuid())
-  tenantId          String    @map("tenant_id")
+  id                      String    @id @default(uuid())
+  tenantId                String    @map("tenant_id")
   // The engine's conversation id (a plain value; the engine owns that table).
-  conversationId    String    @map("conversation_id")
-  endCustomerId     String    @map("end_customer_id")
+  conversationId          String    @map("conversation_id")
+  endCustomerId           String    @map("end_customer_id")
   // 'widget' (whatsapp and voice follow in Phase 6)
-  channel           String
-  apiKeyId          String?   @map("api_key_id")
+  channel                 String
+  apiKeyId                String?   @map("api_key_id")
   // True when the plan limit was reached when this conversation started: the AI never answers it (I5).
-  aiBlocked         Boolean   @default(false) @map("ai_blocked")
+  aiBlocked               Boolean   @default(false) @map("ai_blocked")
   // Why the gateway escalated it (limit_reached, ai_unavailable), once decided.
-  escalationReason  String?   @map("escalation_reason")
+  escalationReason        String?   @map("escalation_reason")
   // True while the engine has not yet been told about that escalation (it was unreachable).
-  escalationPending Boolean   @default(false) @map("escalation_pending")
-  closedAt          DateTime? @map("closed_at")
-  createdAt         DateTime  @default(now()) @map("created_at")
-  lastActivityAt    DateTime  @default(now()) @map("last_activity_at")
+  escalationPending       Boolean   @default(false) @map("escalation_pending")
+  // Phase 4: delivery attempts of that escalation by the retry job (bounded; the flag stays when they run out).
+  escalationAttempts      Int       @default(0) @map("escalation_attempts")
+  escalationLastAttemptAt DateTime? @map("escalation_last_attempt_at")
+  closedAt                DateTime? @map("closed_at")
+  createdAt               DateTime  @default(now()) @map("created_at")
+  lastActivityAt          DateTime  @default(now()) @map("last_activity_at")
 
   tenant      Tenant      @relation(fields: [tenantId], references: [id])
   endCustomer EndCustomer @relation(fields: [endCustomerId], references: [id], onDelete: Cascade)
 
   @@unique([tenantId, conversationId])
   @@index([tenantId, endCustomerId, channel, createdAt(sort: Desc)])
+  @@index([escalationPending])
   @@map("gateway_conversations")
   @@schema("tenant_core")
 }
@@ -428,5 +437,70 @@ model UsageEvent {
   @@unique([tenantId, kind, refId])
   @@index([tenantId, day])
   @@map("usage_events")
+  @@schema("tenant_core")
+}
+
+// In-app notification (H5, Phase 4): one row per recipient. The text is not stored: the frontend
+// renders `notification.<type>.title` / `.body` of the `notifications` namespace with `params`.
+// Removed with the user (cascade) and purged after 90 days.
+model Notification {
+  id        String    @id @default(uuid())
+  tenantId  String    @map("tenant_id")
+  userId    String    @map("user_id")
+  // e.g. 'conversation.escalated', 'billing.trial_ending' (documented in docs/architecture.md)
+  type      String
+  params    Json      @default("{}")
+  // App-relative path the notification opens, e.g. '/conversations/<id>'.
+  link      String?
+  // Makes a reminder idempotent: one row per (recipient, dedupe_key). Null for event-driven rows.
+  dedupeKey String?   @map("dedupe_key")
+  readAt    DateTime? @map("read_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  tenant Tenant     @relation(fields: [tenantId], references: [id])
+  user   TenantUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, userId, dedupeKey])
+  @@index([tenantId, userId, readAt, createdAt(sort: Desc)])
+  @@index([createdAt])
+  @@map("notifications")
+  @@schema("tenant_core")
+}
+
+// Inbox of the events the AI engine pushed (POST /internal/events, D5): the unique (tenant, event id)
+// makes delivery idempotent. Only ids and types are kept, never message text. Purged after 30 days.
+model EngineEvent {
+  id         String   @id @default(uuid())
+  tenantId   String   @map("tenant_id")
+  // The engine's id of the event.
+  eventId    String   @map("event_id")
+  type       String
+  occurredAt DateTime @map("occurred_at")
+  receivedAt DateTime @default(now()) @map("received_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@unique([tenantId, eventId])
+  @@index([receivedAt])
+  @@map("engine_events")
+  @@schema("tenant_core")
+}
+
+// Single-use 30-second ticket that lets a browser open the dashboard event stream with EventSource
+// (which cannot send an Authorization header). Only the sha256 of the ticket is stored.
+model StreamTicket {
+  id        String    @id @default(uuid())
+  tenantId  String    @map("tenant_id")
+  userId    String    @map("user_id")
+  tokenHash String    @unique @map("token_hash")
+  expiresAt DateTime  @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  tenant Tenant     @relation(fields: [tenantId], references: [id])
+  user   TenantUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt])
+  @@map("stream_tickets")
   @@schema("tenant_core")
 }

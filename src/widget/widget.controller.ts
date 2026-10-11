@@ -42,6 +42,7 @@ import { WidgetAuthGuard } from './widget-auth.guard';
 import { applyWidgetCors } from './widget-cors.service';
 import { WidgetMessagesService } from './widget-messages.service';
 import { WidgetSessionsService } from './widget-sessions.service';
+import { WidgetStreamService } from './widget-stream.service';
 
 type RequestWithId = Request & { id?: string };
 
@@ -68,6 +69,7 @@ export class WidgetController {
   constructor(
     private readonly sessions: WidgetSessionsService,
     private readonly messages: WidgetMessagesService,
+    private readonly stream: WidgetStreamService,
   ) {}
 
   @Post('sessions')
@@ -176,6 +178,39 @@ export class WidgetController {
     } finally {
       response.end();
     }
+  }
+
+  @Get('events')
+  @UseGuards(WidgetAuthGuard)
+  @ApiBearerAuth()
+  @ApiProduces('text/event-stream')
+  @ApiOperation({
+    summary: "Live events of the visitor's conversation (widget token)",
+    description: [
+      'A `text/event-stream` for what happens while the customer is not sending: a staff reply, the system lines ("an agent joined") and status changes. Like the message route it needs the `Authorization` header, so read it with `fetch` and a stream reader, not `EventSource`; the key and the Origin are checked as on every widget call.',
+      'Events: `message` `{id, authorType: "human" | "system", content, contentKey, createdAt}` (a staff reply has text and no identity; a system line has an empty `content` and a `contentKey` of the widget namespace such as `agent.joined`), `status` `{status: "active" | "escalated" | "human_active" | "resolved"}`. The AI\'s own replies and the customer\'s messages are NOT sent here (they come through the message stream). Show a `message` once, by its `id` (it is also in the history).',
+      'Control events: `ready`, `resync` (your `Last-Event-ID` is too old: re-read `GET /v1/widget/conversation`), `closed` `{reason}` (`expired` when the 15-minute token ends: refresh the session and reconnect with the new token and the last event id; `revoked`; `limit` when a fourth stream of the same conversation replaced this one). A `: ping` comment arrives every 25 seconds. Every data event has an `id` for `Last-Event-ID` (the last 100 are kept; the history route is the fallback).',
+      'Errors before the stream starts are ordinary JSON: 401, 403 ORIGIN_NOT_ALLOWED, 403 TENANT_SUSPENDED, 404 CONVERSATION_NOT_FOUND, 429.',
+    ].join('\n\n'),
+  })
+  @ApiOkResponse({
+    description: 'text/event-stream',
+    content: {
+      'text/event-stream': {
+        schema: {
+          type: 'string',
+          example:
+            'retry: 3000\n\nevent: ready\ndata: {"heartbeatSeconds":25}\n\nid: 9f2a-1\nevent: message\ndata: {"id":"…","authorType":"human","content":"Hello, I can help","contentKey":null,"createdAt":"…"}\n\n',
+        },
+      },
+    },
+  })
+  async events(
+    @CurrentWidget() auth: WidgetAuth,
+    @Req() request: RequestWithId,
+    @Res() response: Response,
+  ) {
+    await this.stream.open(auth, request, response, request.ip ?? 'unknown');
   }
 
   @Get('conversation')
