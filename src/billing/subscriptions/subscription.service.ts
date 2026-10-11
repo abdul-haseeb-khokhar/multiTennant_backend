@@ -13,6 +13,7 @@ import {
   TRANSITION_JOB_LOCK_KEY,
 } from '../billing.constants';
 import { Clock } from '../clock';
+import { mergeEntitlements } from '../entitlements/entitlements';
 import { addDays } from '../periods';
 import {
   EffectiveSubscription,
@@ -275,6 +276,96 @@ export class SubscriptionService {
     );
   }
 
+  /**
+   * J6: the owner switches overage on or off. It is a setting, not a state transition, so it does
+   * not go through `applyEvent`, but it follows the same rules: the subscription row lock, one
+   * transaction with the append-only billing event and the audit entry, and the entitlements cache
+   * dropped afterwards (other instances see it within the cache TTL). Only plans with an overage
+   * price have the setting (409 `OVERAGE_NOT_AVAILABLE`); asking for the value it already has
+   * changes nothing and writes nothing.
+   */
+  async setOverageEnabled(
+    tenantId: string,
+    enabled: boolean,
+    actor: { userId: string; role: string },
+  ): Promise<{ changed: boolean }> {
+    // Apply anything that is due first, so the plan checked below is the plan the tenant has now.
+    await this.getEffective(tenantId);
+    const changed = await this.prisma.$transaction(async (tx) => {
+      if (!(await this.lock(tx, tenantId))) {
+        throw new ApiException(
+          HttpStatus.NOT_FOUND,
+          ErrorCode.SUBSCRIPTION_NOT_FOUND,
+          `Tenant ${tenantId} has no subscription`,
+        );
+      }
+      const row = await tx.subscription.findUnique({
+        where: { tenantId },
+        include: { plan: true },
+      });
+      if (!row) {
+        throw new ApiException(
+          HttpStatus.NOT_FOUND,
+          ErrorCode.SUBSCRIPTION_NOT_FOUND,
+          `Tenant ${tenantId} has no subscription`,
+        );
+      }
+      if (row.status === 'closed') {
+        throw new ApiException(
+          HttpStatus.CONFLICT,
+          ErrorCode.INVALID_SUBSCRIPTION_STATE,
+          'This account is closed',
+        );
+      }
+      const price = mergeEntitlements(
+        row.plan.entitlements,
+        row.entitlementsOverride,
+      ).overageConversationMinor;
+      if (typeof price !== 'number' || price <= 0) {
+        throw new ApiException(
+          HttpStatus.CONFLICT,
+          ErrorCode.OVERAGE_NOT_AVAILABLE,
+          `The ${row.plan.name} plan has no price for extra conversations`,
+        );
+      }
+      if (row.overageEnabled === enabled) return false;
+      await tx.subscription.update({
+        where: { id: row.id, tenantId },
+        data: { overageEnabled: enabled },
+      });
+      await tx.billingEvent.create({
+        data: {
+          tenantId,
+          type: BillingEventType.OVERAGE_CHANGED,
+          source: 'manual',
+          provider: null,
+          providerEventId: null,
+          payload: {
+            planCode: row.planCode,
+            overageEnabled: enabled,
+            previous: row.overageEnabled,
+            changedBy: actor.userId,
+          },
+        },
+      });
+      await this.audit.record(
+        {
+          tenantId,
+          actor,
+          action: AuditAction.BILLING_OVERAGE_CHANGED,
+          targetType: 'subscription',
+          targetId: row.id,
+          before: { overageEnabled: row.overageEnabled },
+          after: { overageEnabled: enabled },
+        },
+        tx,
+      );
+      return true;
+    });
+    if (changed) this.notify(tenantId);
+    return { changed };
+  }
+
   /** Takes the tenant's subscription row lock, serialising seat-consuming changes. False when the tenant has none. */
   async lock(tx: Tx, tenantId: string): Promise<boolean> {
     const rows = await tx.$queryRaw<{ id: string }[]>`
@@ -448,6 +539,8 @@ export class SubscriptionService {
             ? (event.actor.userId ?? null)
             : null,
         providerInvoiceId: draft.providerInvoiceId,
+        overageCount: draft.overageCount,
+        overageAmountMinor: draft.overageAmountMinor,
         paidAt: now,
       },
     });

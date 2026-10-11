@@ -11,3 +11,15 @@ process.env.INTERNAL_API_TOKEN = 'e2e-internal-token-0123456789abcdef-xyz';
 // the "model never answers" case takes a fraction of a second.
 process.env.ENGINE_FIRST_TOKEN_TIMEOUT_MS = '400';
 process.env.MOCK_ENGINE_TOKEN_DELAY_MS = '0';
+// Mail (H3): tests never send real email, whatever a developer keeps in `.env` (dotenv does not
+// override variables that are already set, even to an empty string).
+process.env.MAIL_PROVIDER = 'console';
+for (const name of [
+  'RESEND_API_KEY',
+  'MAIL_FROM',
+  'MAIL_FROM_NAME',
+  'MAIL_REDIRECT_TO',
+  'RESEND_API_URL',
+]) {
+  process.env[name] = '';
+}

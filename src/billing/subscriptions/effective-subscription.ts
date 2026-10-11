@@ -97,6 +97,10 @@ export interface EffectiveSubscription {
   /** While `past_due`: whole days until the grace period ends and the tenant falls back. */
   graceDaysLeft: number | null;
   provider: string;
+  /** Currency of the plan (and of its overage price). */
+  currency: string;
+  /** The tenant's stored overage choice (J6); `overageSettings` says whether it applies to this plan. */
+  overageEnabled: boolean;
   /** Plan entitlements with the tenant's override merged in. */
   entitlements: Entitlements;
   entitlementsOverride: Record<string, unknown> | null;
@@ -128,6 +132,8 @@ export function buildEffective(
         ? daysUntil(row.graceEndsAt, now)
         : null,
     provider: row.provider,
+    currency: plan.currency,
+    overageEnabled: row.overageEnabled,
     entitlements: mergeEntitlements(
       plan.entitlements,
       row.entitlementsOverride,

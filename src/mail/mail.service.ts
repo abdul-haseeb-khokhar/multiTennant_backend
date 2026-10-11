@@ -1,29 +1,55 @@
-import { HttpStatus, Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { ApiException } from '../common/errors/api.exception';
-import { ErrorCode } from '../common/errors/error-codes';
-import { MailTemplate, Mailer } from './mailer';
+import { MailHealth } from './mail-health';
+import {
+  MailDelivery,
+  MailDeliveryError,
+  MailFailureReason,
+  MailParams,
+  MailTemplate,
+  Mailer,
+} from './mailer';
 
 const DEV_FRONTEND_URL = 'http://localhost:5173';
 
-/** Frontend page that receives each kind of link (the page POSTs the token back to the API). */
-const LINK_PATH: Record<MailTemplate, string> = {
-  'staff-invite': '/accept-invite',
-  'password-reset': '/reset-password',
-  'email-verification': '/verify-email',
+/** Frontend page that receives each kind of link. The single-use ones carry a token the page POSTs back to the API. */
+const LINK_PATH: Record<MailTemplate, { path: string; token: boolean }> = {
+  'staff-invite': { path: '/accept-invite', token: true },
+  'password-reset': { path: '/reset-password', token: true },
+  'email-verification': { path: '/verify-email', token: true },
+  'billing-period-ending': { path: '/billing', token: false },
+  'billing-grace-started': { path: '/billing', token: false },
+  'billing-downgraded': { path: '/billing', token: false },
 };
 
 export interface MailRequest {
   to: string;
   template: MailTemplate;
-  token: string;
+  /** The single-use token of the three link emails; the billing emails link to a page and have none. */
+  token?: string;
   locale: string;
+  params?: MailParams;
 }
 
 /**
- * Builds the emailed links and hands them to the `Mailer`. With `MAIL_MODE=link` (development
- * only, refused in production at startup) the link is also returned to the caller so it can go
- * into the API response; otherwise `link` is undefined and the response never contains it.
+ * What happened to a message, as the API reports it to the caller (H3): `sent` = handed to the
+ * mail provider, `failed` = the provider could not take it (the invite, reset or verification still
+ * exists), `skipped` = nothing was sent because the development console mailer is active.
+ */
+export type DeliveryStatus = MailDelivery | 'failed';
+
+export interface MailResult {
+  delivery: DeliveryStatus;
+  /** Only with `MAIL_MODE=link` (development; refused in production). */
+  link?: string;
+}
+
+/**
+ * Builds the emailed links and hands them to the `Mailer`. A delivery failure NEVER throws: the
+ * flow that asked for the email already stored its invite, reset or verification record, so the
+ * caller gets `delivery: 'failed'` and can offer a retry. Failures are logged by template and
+ * reason only (no recipient, no link) and counted by `MailHealth`. With `MAIL_MODE=link`
+ * (development only, refused in production at startup) the link is also returned to the caller.
  */
 @Injectable()
 export class MailService {
@@ -32,70 +58,72 @@ export class MailService {
   constructor(
     private readonly mailer: Mailer,
     private readonly config: ConfigService,
+    private readonly health: MailHealth,
   ) {}
 
-  /** Sends and waits; a delivery failure becomes 503 `MAIL_DELIVERY_FAILED`. */
-  async sendNow(request: MailRequest): Promise<{ link?: string }> {
+  /** Sends and waits for the provider's answer. */
+  async sendNow(request: MailRequest): Promise<MailResult> {
     const link = this.buildLink(request);
-    try {
-      await this.mailer.send({
-        to: request.to,
-        template: request.template,
-        locale: request.locale,
-        link,
-      });
-    } catch (error) {
-      this.logFailure(request.template, error);
-      throw new ApiException(
-        HttpStatus.SERVICE_UNAVAILABLE,
-        ErrorCode.MAIL_DELIVERY_FAILED,
-        'The email could not be sent',
-      );
-    }
-    return this.exposed(link);
+    const delivery = await this.deliver(request, link);
+    return { delivery, ...this.exposed(link) };
   }
 
   /**
    * Sends in the background and returns at once, so the response time does not depend on the
-   * mail provider (the password-reset request must not reveal whether an account exists).
+   * mail provider and says nothing about it (the password-reset request must not reveal whether an
+   * account exists, so it cannot report a delivery either).
    */
   queue(request: MailRequest): { link?: string } {
     const link = this.buildLink(request);
-    // A provider that throws before returning a promise must not break the caller either.
-    let delivery: Promise<void>;
+    void this.deliver(request, link);
+    return this.exposed(link);
+  }
+
+  private async deliver(
+    request: MailRequest,
+    link: string,
+  ): Promise<DeliveryStatus> {
     try {
-      delivery = this.mailer.send({
+      const delivery = await this.mailer.send({
         to: request.to,
         template: request.template,
         locale: request.locale,
         link,
+        params: request.params,
       });
+      this.health.success();
+      return delivery === 'skipped' ? 'skipped' : 'sent';
     } catch (error) {
-      delivery = Promise.reject(error);
+      this.recordFailure(request.template, error);
+      return 'failed';
     }
-    delivery.catch((error: unknown) =>
-      this.logFailure(request.template, error),
-    );
-    return this.exposed(link);
   }
 
   private buildLink(request: MailRequest) {
     const base = (
       this.config.get<string>('FRONTEND_URL') ?? DEV_FRONTEND_URL
     ).replace(/\/+$/, '');
-    return `${base}${LINK_PATH[request.template]}?token=${encodeURIComponent(request.token)}`;
+    const target = LINK_PATH[request.template];
+    return target.token
+      ? `${base}${target.path}?token=${encodeURIComponent(request.token ?? '')}`
+      : `${base}${target.path}`;
   }
 
   private exposed(link: string) {
     return this.config.get('MAIL_MODE') === 'link' ? { link } : {};
   }
 
-  private logFailure(template: MailTemplate, error: unknown) {
-    // The template only: neither the recipient nor the link goes into the log.
+  private recordFailure(template: MailTemplate, error: unknown) {
+    const known = error instanceof MailDeliveryError;
+    const reason: MailFailureReason = known ? error.reason : 'unknown';
+    this.health.failure(reason);
+    // The template and the reason only: neither the recipient, the link nor the provider's own
+    // error text (which can quote an address) goes into the log.
     this.logger.error({
       message: 'email delivery failed',
       template,
-      error: error instanceof Error ? error.message : 'unknown error',
+      reason,
+      ...(known && error.status !== undefined && { status: error.status }),
     });
   }
 }

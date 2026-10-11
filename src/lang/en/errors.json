@@ -35,6 +35,7 @@
   "PLAN_FEATURE_UNAVAILABLE": "This feature is not included in your plan.",
   "PLAN_LIMIT_REACHED": "Your plan limit has been reached. Upgrade your plan to continue.",
   "PLAN_NOT_FOUND": "Plan not found.",
+  "OVERAGE_NOT_AVAILABLE": "Extra conversations are not available on your plan. Upgrade to a plan that offers them to use this setting.",
   "RESET_TOKEN_INVALID": "This password reset link is invalid or has expired.",
   "SERVICE_UNAVAILABLE": "The service is not available right now. Please try again shortly.",
   "SLUG_TAKEN": "This tenant identifier is already in use.",

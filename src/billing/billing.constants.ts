@@ -46,6 +46,8 @@ export const BillingEventType = {
   ACCOUNT_CLOSED: 'account.closed',
   TENANT_SUSPENDED: 'tenant.suspended',
   TENANT_UNSUSPENDED: 'tenant.unsuspended',
+  /** Written when the owner switches overage on or off (J6); a setting, not a state transition, so it does not go through `applyEvent`. */
+  OVERAGE_CHANGED: 'overage.changed',
   /** Written when a subscription is first created (signup, migration); not applied through `applyEvent`. */
   SUBSCRIPTION_CREATED: 'subscription.created',
 } as const;

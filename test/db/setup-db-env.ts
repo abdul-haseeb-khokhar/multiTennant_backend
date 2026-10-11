@@ -25,3 +25,14 @@ process.env.MAIL_MODE = 'link';
 process.env.INTERNAL_API_TOKEN = 'db-internal-token-0123456789abcdef-xyz';
 process.env.ENGINE_FIRST_TOKEN_TIMEOUT_MS = '400';
 process.env.MOCK_ENGINE_TOKEN_DELAY_MS = '0';
+// Mail (H3): the database suite never sends real email, whatever `.env` holds.
+process.env.MAIL_PROVIDER = 'console';
+for (const name of [
+  'RESEND_API_KEY',
+  'MAIL_FROM',
+  'MAIL_FROM_NAME',
+  'MAIL_REDIRECT_TO',
+  'RESEND_API_URL',
+]) {
+  process.env[name] = '';
+}

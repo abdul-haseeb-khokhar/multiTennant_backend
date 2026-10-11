@@ -6,6 +6,13 @@ const engine = {
   INTERNAL_API_TOKEN: 'x'.repeat(40),
 };
 
+/** What production needs for mail (H3): a real provider with a key and a sender on a verified domain. */
+const mailProd = {
+  MAIL_PROVIDER: 'resend',
+  RESEND_API_KEY: 're_test_0123456789',
+  MAIL_FROM: 'noreply@example.com',
+};
+
 const valid = {
   DATABASE_URL: 'postgresql://u:p@localhost:5432/db',
   JWT_SECRET: 'a-secret-with-at-least-16-chars',
@@ -98,13 +105,14 @@ describe('validateEnv', () => {
       ).toThrow(/MAIL_MODE=link is not allowed/);
     });
 
-    it('allows the console mode in production, with FRONTEND_URL set', () => {
+    it('allows MAIL_MODE=console in production with a real mail provider and FRONTEND_URL set', () => {
       expect(
         validateEnv({
           ...valid,
           NODE_ENV: 'production',
           FRONTEND_URL: 'https://app.example.com',
           ...engine,
+          ...mailProd,
         }),
       ).toMatchObject({ NODE_ENV: 'production', MAIL_MODE: 'console' });
     });
@@ -164,7 +172,7 @@ describe('validateEnv', () => {
       expect(() => validateEnv({ ...prod, ENGINE_MODE: 'mock' })).toThrow(
         /ENGINE_MODE=http is required/,
       );
-      expect(validateEnv({ ...prod, ...engine })).toMatchObject({
+      expect(validateEnv({ ...prod, ...engine, ...mailProd })).toMatchObject({
         ENGINE_MODE: 'http',
       });
     });
@@ -206,6 +214,132 @@ describe('validateEnv', () => {
       expect(() => validateEnv({ ...valid, ...bad })).toThrow(
         /Invalid environment configuration/,
       );
+    });
+  });
+});
+
+describe('validateEnv mail provider (H3, Phase 4C)', () => {
+  const prod = {
+    ...valid,
+    NODE_ENV: 'production',
+    FRONTEND_URL: 'https://app.example.com',
+    ...engine,
+  };
+
+  it('defaults to the console provider with a 5 second timeout', () => {
+    expect(validateEnv(valid)).toMatchObject({
+      MAIL_PROVIDER: 'console',
+      MAIL_TIMEOUT_MS: 5000,
+    });
+  });
+
+  it('accepts resend with a key, and the optional sender settings', () => {
+    expect(
+      validateEnv({
+        ...valid,
+        MAIL_PROVIDER: 'resend',
+        RESEND_API_KEY: 're_test_0123456789',
+        MAIL_FROM: 'onboarding@resend.dev',
+        MAIL_FROM_NAME: 'SupportDesk AI',
+        MAIL_REDIRECT_TO: 'me@example.com',
+      }),
+    ).toMatchObject({
+      MAIL_PROVIDER: 'resend',
+      MAIL_FROM: 'onboarding@resend.dev',
+      MAIL_REDIRECT_TO: 'me@example.com',
+    });
+  });
+
+  it('refuses an unknown provider', () => {
+    expect(() => validateEnv({ ...valid, MAIL_PROVIDER: 'smtp' })).toThrow(
+      /MAIL_PROVIDER/,
+    );
+  });
+
+  it('refuses resend without a key, naming the setting and never a value', () => {
+    expect(() => validateEnv({ ...valid, MAIL_PROVIDER: 'resend' })).toThrow(
+      /RESEND_API_KEY is required/,
+    );
+  });
+
+  it('treats an empty value in .env as "not set"', () => {
+    expect(
+      validateEnv({
+        ...valid,
+        MAIL_REDIRECT_TO: '',
+        MAIL_FROM_NAME: '',
+        RESEND_API_KEY: '',
+      }),
+    ).toMatchObject({ MAIL_PROVIDER: 'console' });
+  });
+
+  it.each([
+    ['an address that is not an email', { MAIL_FROM: 'nope' }],
+    ['a redirect that is not an email', { MAIL_REDIRECT_TO: 'nope' }],
+    ['a sender name with angle brackets', { MAIL_FROM_NAME: 'A <b>' }],
+    ['a sender name with a line break', { MAIL_FROM_NAME: 'A\nBcc: x@y.z' }],
+    ['a timeout that is too small', { MAIL_TIMEOUT_MS: '10' }],
+  ])('refuses %s', (_name, extra) => {
+    expect(() => validateEnv({ ...valid, ...extra })).toThrow(
+      /Invalid environment configuration/,
+    );
+  });
+
+  it('does not put a rejected secret in the error message', () => {
+    const secret = 'abc12';
+    try {
+      validateEnv({
+        ...valid,
+        MAIL_PROVIDER: 'resend',
+        RESEND_API_KEY: secret,
+      });
+      throw new Error('should have thrown');
+    } catch (error) {
+      expect((error as Error).message).toMatch(/RESEND_API_KEY/);
+      expect((error as Error).message).not.toContain(secret);
+    }
+  });
+
+  describe('production', () => {
+    it('refuses the console provider: mail would silently go nowhere', () => {
+      expect(() => validateEnv(prod)).toThrow(
+        /MAIL_PROVIDER=resend is required/,
+      );
+      expect(() => validateEnv({ ...prod, MAIL_PROVIDER: 'console' })).toThrow(
+        /MAIL_PROVIDER=resend is required/,
+      );
+    });
+
+    it('accepts resend with a key and a sender on a verified domain', () => {
+      expect(validateEnv({ ...prod, ...mailProd })).toMatchObject({
+        MAIL_PROVIDER: 'resend',
+      });
+    });
+
+    it('refuses MAIL_REDIRECT_TO: it would send every customer email to one address', () => {
+      expect(() =>
+        validateEnv({
+          ...prod,
+          ...mailProd,
+          MAIL_REDIRECT_TO: 'me@example.com',
+        }),
+      ).toThrow(/MAIL_REDIRECT_TO is not allowed/);
+    });
+
+    it('refuses the resend.dev test sender, which only delivers to the account owner', () => {
+      expect(() =>
+        validateEnv({
+          ...prod,
+          ...mailProd,
+          MAIL_FROM: 'onboarding@resend.dev',
+        }),
+      ).toThrow(/MAIL_FROM must be an address on your verified domain/);
+    });
+
+    it('refuses the API URL override', () => {
+      expect(() =>
+        validateEnv({ ...prod, ...mailProd, RESEND_API_URL: 'http://x.test' }),
+      ).toThrow(/RESEND_API_URL is not allowed/);
     });
   });
 });

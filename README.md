@@ -7,12 +7,14 @@ Backend core of a multi-tenant **AI customer-support platform**. Businesses and 
 | Phase | Scope | State |
 |---|---|---|
 | 0 | Foundation and hardening (roles, `/v1`, error codes, platform admin, tests, CI) | merged |
-| 1 | Account and team management (invites, password reset, email verification, audit log, i18n) | merged (mail provider: Resend chosen, built in Phase 4C) |
+| 1 | Account and team management (invites, password reset, email verification, audit log, i18n) | merged (the mail provider came in Phase 4C) |
 | 2B | Billing foundation (plans, Starter → Free, subscriptions, entitlements, manual payments) | merged (tax wording and training-data consent stay open) |
 | 3 | Gateway and widget entry (API keys, widget sessions, streamed chat, usage, fallbacks) | merged; runs against a **mock engine** only |
 | 3B | Frontend gap-report fixes (password limit, proxy-aware IPs, invite preview, locale validation, OpenAPI fixes) | done on branch `phase-4-human-agent`, not merged yet |
 | 4 | Human takeover (conversation API, claim/reply/release/resolve), engine event receiver, live streams, in-app notifications and billing reminders | done on branch `phase-4-human-agent` against the **mock engine** only, not merged yet |
-| 4B and later | Overage setting, mail provider, tenant configuration, WhatsApp and voice, hardening | planned, see [docs/backend-roadmap.md](docs/backend-roadmap.md) |
+| 4B | Pro overage setting (the owner chooses between PKR 15 per extra conversation and a hard stop), overage figures, overage reminder | done on branch `phase-4b-4c` (stacked on Phase 4, not merged yet); the optional spending cap is undecided |
+| 4C | Real email through Resend (test mode), HTML and plain-text templates in English and Urdu, `delivery` in API answers, mail health | done on branch `phase-4b-4c`; verified against a fake Resend server only, real delivery is for you to check (see Email below) |
+| 5 and later | Tenant configuration, WhatsApp and voice, hardening | planned, see [docs/backend-roadmap.md](docs/backend-roadmap.md) |
 
 ## Documentation
 
@@ -38,13 +40,37 @@ npx prisma generate
 npm run start:dev           # http://localhost:3000, API under /v1, docs at /docs
 ```
 
-For local development MAIL_MODE=link returns invite, reset and verification links in the API responses (the app refuses to start with it when NODE_ENV=production). The engine defaults to the in-process mock (`ENGINE_MODE=mock`); see [docs/contracts/README.md](docs/contracts/README.md) for a curl walkthrough, or run `npm run widget:walkthrough` / `npm run handoff:walkthrough` against the running server.
+For local development MAIL_MODE=link returns invite, reset and verification links in the API responses (the app refuses to start with it when NODE_ENV=production). Emails are only logged until you configure a mail provider (see Email below). The engine defaults to the in-process mock (`ENGINE_MODE=mock`); see [docs/contracts/README.md](docs/contracts/README.md) for a curl walkthrough, or run `npm run widget:walkthrough` / `npm run handoff:walkthrough` against the running server.
 
 Create a platform admin (needed for `/v1/admin/...`):
 
 ```bash
 PLATFORM_ADMIN_EMAIL=you@example.com PLATFORM_ADMIN_PASSWORD='a long password' npm run platform-admin:create
 ```
+
+## Email
+
+Invites, password resets and email verification are emailed through [Resend](https://resend.com). `MAIL_PROVIDER=console` (the default) only logs each message, link included, for development; `MAIL_PROVIDER=resend` sends it. Production refuses to start with `console`. Tests never send email, whatever your `.env` holds.
+
+**Set up (test mode, no domain needed)**
+1. Create a Resend account and, under *API Keys*, a key with the **Sending access** permission (not full access).
+2. Put it in `.env` yourself; never paste it into chat, a commit or an issue:
+   ```
+   MAIL_PROVIDER=resend
+   RESEND_API_KEY=<your key>
+   MAIL_FROM=onboarding@resend.dev
+   MAIL_FROM_NAME=SupportDesk AI
+   MAIL_REDIRECT_TO=<the email address you registered the Resend account with>
+   ```
+3. Restart the backend. `GET /health/ready` now reports `mail.provider: "resend"`.
+
+**Why `MAIL_REDIRECT_TO`.** Resend's shared test sender `onboarding@resend.dev` only delivers to the email address of the Resend account itself and refuses other recipients with a 403 (Resend's error reference lists it as "Testing emails can only be sent to your own email address"). With `MAIL_REDIRECT_TO` set, **every** message goes to that one address; the subject starts with `[TEST for <real recipient>]` and a marked line at the top of the body names the intended recipient, so invites and resets can still be tried end to end. In this stage the invited person does not receive anything: you forward the link or copy it from your inbox. Starting the backend with `NODE_ENV=production` refuses `MAIL_REDIRECT_TO`, the `resend.dev` sender and the console provider.
+
+**What the API tells the caller.** Creating an invite, signing up and resending verification answer with `delivery`: `sent` (handed to Resend), `failed` (Resend refused or could not be reached; the invite or verification record still exists, so re-invite the same address or resend) or `skipped` (console provider). The password-reset request always answers the same 202 and never reports a delivery, so it cannot reveal whether an account exists. A send waits at most 5 seconds per attempt (`MAIL_TIMEOUT_MS`) and is retried once after a network error, a timeout or a 5xx, never after a 4xx or 429. Failures are logged by template and reason code only (for example `test_mode_recipient`, `quota_daily`, `quota_monthly`, `rate_limited`, `auth`, `timeout`), never with an address, a link or the key. After 3 failed sends in a row `GET /health/ready` shows `mail.status: "degraded"` (a warning; readiness stays 200).
+
+**Limits of the free plan** (Resend's pricing pages; check resend.com/pricing): 3,000 emails a month and 100 a day, counted per recipient; at the cap sending stops with a 429 (reason `quota_daily` or `quota_monthly`, resets at midnight UTC for the day) until the next period or a paid plan.
+
+**Moving to a verified domain.** Add your domain in Resend (*Domains*), create the DNS records it shows (SPF, DKIM; add a DMARC record such as `v=DMARC1; p=none; rua=mailto:you@yourdomain` and tighten it once mail flows), wait until the domain shows *Verified*, then set `MAIL_FROM` to an address on it (for example `noreply@yourdomain`) and **remove `MAIL_REDIRECT_TO`**. No code change is needed. Bounce and complaint handling (a suppression list) is not built yet.
 
 ## Commands
 

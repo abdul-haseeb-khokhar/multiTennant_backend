@@ -12,12 +12,12 @@ import { EmailVerificationService } from './email-verification.service';
 describe('EmailVerificationService', () => {
   let service: EmailVerificationService;
   let prisma: PrismaMock;
-  let mail: { queue: jest.Mock };
+  let mail: { sendNow: jest.Mock };
 
   beforeEach(async () => {
     prisma = createPrismaMock();
     mockTransaction(prisma);
-    mail = { queue: jest.fn().mockReturnValue({}) };
+    mail = { sendNow: jest.fn().mockResolvedValue({ delivery: 'sent' }) };
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         EmailVerificationService,
@@ -36,7 +36,7 @@ describe('EmailVerificationService', () => {
       await service.issue(user);
 
       const stored = prisma.emailVerification.create.mock.calls[0][0].data;
-      const sent = mail.queue.mock.calls[0][0];
+      const sent = mail.sendNow.mock.calls[0][0];
       expect(sent).toMatchObject({
         to: 'owner@acme.com',
         template: 'email-verification',
@@ -62,10 +62,22 @@ describe('EmailVerificationService', () => {
     });
 
     it('returns what the mail service returns (the link only in MAIL_MODE=link)', async () => {
-      mail.queue.mockReturnValue({ link: 'http://x/verify-email?token=t' });
-      await expect(service.issue(user)).resolves.toEqual({
+      mail.sendNow.mockResolvedValue({
+        delivery: 'sent',
         link: 'http://x/verify-email?token=t',
       });
+      await expect(service.issue(user)).resolves.toEqual({
+        delivery: 'sent',
+        link: 'http://x/verify-email?token=t',
+      });
+    });
+
+    it('a failed send does not undo the link: the caller is told so (delivery: failed)', async () => {
+      mail.sendNow.mockResolvedValue({ delivery: 'failed' });
+      await expect(service.issue(user)).resolves.toEqual({
+        delivery: 'failed',
+      });
+      expect(prisma.emailVerification.create).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -89,7 +101,7 @@ describe('EmailVerificationService', () => {
       expect(prisma.tenantUser.findFirst).toHaveBeenCalledWith(
         expect.objectContaining({ where: { id: 'u1', tenantId: 'tenant-a' } }),
       );
-      expect(mail.queue).toHaveBeenCalledWith(
+      expect(mail.sendNow).toHaveBeenCalledWith(
         expect.objectContaining({ to: 'owner@acme.com', locale: 'ur' }),
       );
     });
@@ -102,10 +114,14 @@ describe('EmailVerificationService', () => {
         emailVerifiedAt: new Date(),
         tenant: { defaultLocale: 'en' },
       });
-      await expect(service.resend(actor)).resolves.toEqual({});
+      await expect(service.resend(actor)).resolves.toEqual({
+        delivery: 'skipped',
+      });
       prisma.tenantUser.findFirst.mockResolvedValue(null);
-      await expect(service.resend(actor)).resolves.toEqual({});
-      expect(mail.queue).not.toHaveBeenCalled();
+      await expect(service.resend(actor)).resolves.toEqual({
+        delivery: 'skipped',
+      });
+      expect(mail.sendNow).not.toHaveBeenCalled();
     });
   });
 

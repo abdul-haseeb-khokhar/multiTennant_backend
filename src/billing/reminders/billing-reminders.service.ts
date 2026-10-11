@@ -2,8 +2,10 @@ import { Injectable, Logger } from '@nestjs/common';
 import { NotificationType } from '../../notifications/notification-types';
 import { NotificationsService } from '../../notifications/notifications.service';
 import { PrismaService } from '../../prisma/prisma.service';
+import { SubscriptionStatus } from '../billing.constants';
 import { Clock } from '../clock';
 import { EntitlementsService } from '../entitlements/entitlements.service';
+import { overageSettings } from '../overage';
 import { daysUntil } from '../periods';
 
 /** Days before a period ends at which the owners and admins are reminded (I8). */
@@ -201,9 +203,19 @@ export class BillingRemindersService {
         period === 'month'
           ? now.toISOString().slice(0, 7)
           : `since-${subscription.currentPeriodStart.toISOString().slice(0, 10)}`;
+      // J6: at 100% the message depends on what happens next. With overage on (and applied: not
+      // while a payment is overdue) the AI keeps answering and the extras are billed ("overage
+      // started"); otherwise it stops ("limit reached"). The two types have their own dedupe
+      // keys, so switching the setting later neither repeats a reminder already sent nor hides
+      // the one that now applies.
+      const overage = overageSettings(subscription);
+      const overageApplies =
+        overage.enabled && subscription.status !== SubscriptionStatus.PAST_DUE;
       const type =
         threshold === 100
-          ? NotificationType.USAGE_LIMIT_REACHED
+          ? overageApplies
+            ? NotificationType.USAGE_OVERAGE_STARTED
+            : NotificationType.USAGE_LIMIT_REACHED
           : NotificationType.USAGE_THRESHOLD;
       created += await this.notify(tenantId, {
         type,
@@ -213,6 +225,11 @@ export class BillingRemindersService {
           used: decision.used,
           limit: decision.limit,
           period,
+          ...(type === NotificationType.USAGE_OVERAGE_STARTED && {
+            priceMinor: overage.priceMinor,
+            price: (overage.priceMinor ?? 0) / 100,
+            currency: overage.currency,
+          }),
         },
         link: '/billing',
         dedupeKey: `${type}:conversations:${periodKey}`,

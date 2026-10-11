@@ -328,6 +328,84 @@
         ]
       }
     },
+    "/v1/i18n/locales": {
+      "get": {
+        "operationId": "I18nController_locales",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/LocaleEntry"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "summary": "Available languages (public)",
+        "tags": [
+          "i18n"
+        ]
+      }
+    },
+    "/v1/i18n/{locale}/{namespace}": {
+      "get": {
+        "description": "A flat map of stable dot-notation keys to ICU message strings. Keys missing in the requested language are filled in from `en`. Supports `If-None-Match` (304). For API errors use namespace `errors` with the error `code` as key.",
+        "operationId": "I18nController_namespace",
+        "parameters": [
+          {
+            "name": "locale",
+            "required": true,
+            "in": "path",
+            "description": "A locale code from GET /v1/i18n/locales.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "namespace",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "enum": [
+                "common",
+                "errors",
+                "notifications",
+                "widget"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "LOCALE_NOT_FOUND / NAMESPACE_NOT_FOUND"
+          }
+        },
+        "summary": "Translations of one namespace (public, cacheable)",
+        "tags": [
+          "i18n"
+        ]
+      }
+    },
     "/v1/admin/tenants": {
       "get": {
         "operationId": "TenantsController_findAll",
@@ -1807,7 +1885,7 @@
     },
     "/v1/tenants/{tenantId}/billing": {
       "get": {
-        "description": "Agents cannot read billing (403 INSUFFICIENT_ROLE). `skip` / `take` page the invoice list, newest first. Usage against the limits is not reported yet (the counters arrive with the gateway, Phase 3).",
+        "description": "Agents cannot read billing (403 INSUFFICIENT_ROLE). `skip` / `take` page the invoice list, newest first. `usage.conversations` shows the included amount, the conversations used in the current period and, on plans with an overage price, the extra conversations and their amount in minor units (J6). `subscription.overage` carries the setting.",
         "operationId": "TenantBillingController_get",
         "parameters": [
           {
@@ -1857,7 +1935,57 @@
             "bearer": []
           }
         ],
-        "summary": "Current plan, status, period, limits and invoices (owner/admin)",
+        "summary": "Current plan, status, period, limits, conversation usage and invoices (owner/admin)",
+        "tags": [
+          "billing"
+        ]
+      }
+    },
+    "/v1/tenants/{tenantId}/billing/settings": {
+      "patch": {
+        "description": "On plans with an overage price (Pro) the owner chooses what happens after the included conversations: `overageEnabled: true` (default) keeps the AI answering and bills each extra conversation at the plan price, `false` is a hard stop (fallback message, the conversation goes to a human). Audited as `billing.overage_changed`. Admins and agents get 403 INSUFFICIENT_ROLE; a plan without an overage price answers 409 OVERAGE_NOT_AVAILABLE. Other instances apply the change within 30 seconds.",
+        "operationId": "TenantBillingController_updateSettings",
+        "parameters": [
+          {
+            "name": "tenantId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateBillingSettingsDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TenantBillingSettings"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "OVERAGE_NOT_AVAILABLE: the plan has no overage price"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Switch overage on or off (owner only)",
         "tags": [
           "billing"
         ]
@@ -2937,84 +3065,6 @@
         ]
       }
     },
-    "/v1/i18n/locales": {
-      "get": {
-        "operationId": "I18nController_locales",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/LocaleEntry"
-                  }
-                }
-              }
-            }
-          }
-        },
-        "summary": "Available languages (public)",
-        "tags": [
-          "i18n"
-        ]
-      }
-    },
-    "/v1/i18n/{locale}/{namespace}": {
-      "get": {
-        "description": "A flat map of stable dot-notation keys to ICU message strings. Keys missing in the requested language are filled in from `en`. Supports `If-None-Match` (304). For API errors use namespace `errors` with the error `code` as key.",
-        "operationId": "I18nController_namespace",
-        "parameters": [
-          {
-            "name": "locale",
-            "required": true,
-            "in": "path",
-            "description": "A locale code from GET /v1/i18n/locales.",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "namespace",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "enum": [
-                "common",
-                "errors",
-                "notifications",
-                "widget"
-              ],
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": {
-                    "type": "string"
-                  }
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "LOCALE_NOT_FOUND / NAMESPACE_NOT_FOUND"
-          }
-        },
-        "summary": "Translations of one namespace (public, cacheable)",
-        "tags": [
-          "i18n"
-        ]
-      }
-    },
     "/v1/me": {
       "get": {
         "operationId": "MeController_get",
@@ -3094,6 +3144,7 @@
     },
     "/health/ready": {
       "get": {
+        "description": "Also reports the mail provider: `mail.status` is `ok`, `degraded` after 3 failed deliveries in a row on this instance (a warning: readiness stays 200, because an email outage must not take the API out of the load balancer) or `not_configured` for the console mailer. Failure reasons are codes such as `quota_daily`, `test_mode_recipient`, `auth`, never an address.",
         "operationId": "HealthController_ready",
         "parameters": [],
         "responses": {
@@ -3406,12 +3457,22 @@
             "type": "string",
             "x-dev-only": true,
             "description": "DEVELOPMENT ONLY: present only when the server runs with MAIL_MODE=link (refused in production); the email-verification link."
+          },
+          "verificationDelivery": {
+            "type": "string",
+            "enum": [
+              "sent",
+              "failed",
+              "skipped"
+            ],
+            "description": "Of the verification email. `sent` = handed to the mail provider; `failed` = the provider could not take it (the record still exists, so offer a retry: revoke and re-invite, or resend); `skipped` = nothing was sent because the development console mailer is active. Delivery to the inbox is not confirmed by `sent`. Signup succeeds either way; resend with POST /v1/auth/verify-email/resend."
           }
         },
         "required": [
           "tenant",
           "owner",
-          "access_token"
+          "access_token",
+          "verificationDelivery"
         ]
       },
       "PlatformLoginDto": {
@@ -3492,12 +3553,51 @@
       "VerificationSent": {
         "type": "object",
         "properties": {
+          "delivery": {
+            "type": "string",
+            "enum": [
+              "sent",
+              "failed",
+              "skipped"
+            ],
+            "description": "Of the verification email. `sent` = handed to the mail provider; `failed` = the provider could not take it (the record still exists, so offer a retry: revoke and re-invite, or resend); `skipped` = nothing was sent because the development console mailer is active. Delivery to the inbox is not confirmed by `sent`. Already-verified users get \"skipped\"."
+          },
           "link": {
             "type": "string",
             "x-dev-only": true,
             "description": "DEVELOPMENT ONLY: present only when the server runs with MAIL_MODE=link (refused in production); the verification link."
           }
-        }
+        },
+        "required": [
+          "delivery"
+        ]
+      },
+      "LocaleEntry": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "example": "ur",
+            "description": "BCP-47 code"
+          },
+          "name": {
+            "type": "string",
+            "example": "اردو",
+            "description": "The language's own name"
+          },
+          "dir": {
+            "type": "string",
+            "enum": [
+              "ltr",
+              "rtl"
+            ]
+          }
+        },
+        "required": [
+          "code",
+          "name",
+          "dir"
+        ]
       },
       "UpdateTenantDto": {
         "type": "object",
@@ -3923,6 +4023,15 @@
             "type": "string",
             "x-dev-only": true,
             "description": "DEVELOPMENT ONLY. Present only on the answer to creating an invite, and only when the server runs with MAIL_MODE=link (refused in production): the invite link, so it can be passed on by hand. Never in lists, never in production."
+          },
+          "delivery": {
+            "type": "string",
+            "enum": [
+              "sent",
+              "failed",
+              "skipped"
+            ],
+            "description": "Only on the answer to creating an invite. `sent` = handed to the mail provider; `failed` = the provider could not take it (the record still exists, so offer a retry: revoke and re-invite, or resend); `skipped` = nothing was sent because the development console mailer is active. Delivery to the inbox is not confirmed by `sent`."
           }
         },
         "required": [
@@ -4232,6 +4341,35 @@
           "data"
         ]
       },
+      "OverageSettingsView": {
+        "type": "object",
+        "properties": {
+          "available": {
+            "type": "boolean",
+            "description": "The plan has a price for extra conversations (Pro). Free and Starter do not: they always stop hard at the limit and the dashboard shows no switch."
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Past the included conversations the AI keeps answering and each extra one is billed. Always false when `available` is false. Default true on plans that have a price; the owner switches it with PATCH /v1/tenants/:tenantId/billing/settings."
+          },
+          "priceMinor": {
+            "type": "number",
+            "nullable": true,
+            "example": 1500,
+            "description": "One extra conversation, minor units of `currency` (PKR 15 = 1500). null when not available."
+          },
+          "currency": {
+            "type": "string",
+            "example": "PKR"
+          }
+        },
+        "required": [
+          "available",
+          "enabled",
+          "priceMinor",
+          "currency"
+        ]
+      },
       "SubscriptionSummary": {
         "type": "object",
         "properties": {
@@ -4299,6 +4437,14 @@
                 "$ref": "#/components/schemas/EntitlementsView"
               }
             ]
+          },
+          "overage": {
+            "description": "The overage setting of this plan and tenant (J6).",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/OverageSettingsView"
+              }
+            ]
           }
         },
         "required": [
@@ -4312,7 +4458,77 @@
           "cancelAtPeriodEnd",
           "graceEndsAt",
           "graceDaysLeft",
-          "limits"
+          "limits",
+          "overage"
+        ]
+      },
+      "ConversationUsageView": {
+        "type": "object",
+        "properties": {
+          "period": {
+            "type": "string",
+            "enum": [
+              "month",
+              "total"
+            ],
+            "description": "`month` = the UTC calendar month, `total` = since the subscription period began (Starter)."
+          },
+          "periodStart": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Start of the counting window (a UTC day)."
+          },
+          "included": {
+            "type": "number",
+            "nullable": true,
+            "example": 1500,
+            "description": "Conversations included in the plan. null = unlimited."
+          },
+          "used": {
+            "type": "number",
+            "example": 1620,
+            "description": "Conversations started in the period (a conversation counts once)."
+          },
+          "overageCount": {
+            "type": "number",
+            "example": 120,
+            "description": "Extra conversations the AI answered past the included amount, billed at `overagePriceMinor`. 0 on plans without an overage price. Conversations that were handed to a human at the limit while overage was off are not counted."
+          },
+          "overageAmountMinor": {
+            "type": "number",
+            "example": 180000,
+            "description": "`overageCount` times `overagePriceMinor`, integer minor units."
+          },
+          "overagePriceMinor": {
+            "type": "number",
+            "nullable": true,
+            "example": 1500
+          },
+          "currency": {
+            "type": "string",
+            "example": "PKR"
+          }
+        },
+        "required": [
+          "period",
+          "periodStart",
+          "included",
+          "used",
+          "overageCount",
+          "overageAmountMinor",
+          "overagePriceMinor",
+          "currency"
+        ]
+      },
+      "BillingUsageView": {
+        "type": "object",
+        "properties": {
+          "conversations": {
+            "$ref": "#/components/schemas/ConversationUsageView"
+          }
+        },
+        "required": [
+          "conversations"
         ]
       },
       "InvoiceView": {
@@ -4373,6 +4589,16 @@
             "format": "date-time",
             "nullable": true
           },
+          "overageCount": {
+            "type": "number",
+            "nullable": true,
+            "description": "Extra conversations this payment covers, as recorded by the platform admin (J6). The invoice has no tax lines."
+          },
+          "overageAmountMinor": {
+            "type": "number",
+            "nullable": true,
+            "description": "The part of `amountMinor` that is overage, minor units. null = none recorded."
+          },
           "createdAt": {
             "type": "string",
             "format": "date-time"
@@ -4390,6 +4616,8 @@
           "method",
           "reference",
           "paidAt",
+          "overageCount",
+          "overageAmountMinor",
           "createdAt"
         ]
       },
@@ -4425,6 +4653,9 @@
           "subscription": {
             "$ref": "#/components/schemas/SubscriptionSummary"
           },
+          "usage": {
+            "$ref": "#/components/schemas/BillingUsageView"
+          },
           "invoices": {
             "description": "Newest first; `skip` / `take` apply to this list.",
             "allOf": [
@@ -4436,7 +4667,35 @@
         },
         "required": [
           "subscription",
+          "usage",
           "invoices"
+        ]
+      },
+      "UpdateBillingSettingsDto": {
+        "type": "object",
+        "properties": {
+          "overageEnabled": {
+            "type": "boolean",
+            "description": "true (the default): past the included conversations the AI keeps answering and each extra conversation is billed at the plan price. false: a hard stop, the customer gets the fallback and the conversation goes to a human. Only plans with an overage price (Pro) have this setting; others answer 409 OVERAGE_NOT_AVAILABLE."
+          }
+        },
+        "required": [
+          "overageEnabled"
+        ]
+      },
+      "TenantBillingSettings": {
+        "type": "object",
+        "properties": {
+          "subscription": {
+            "$ref": "#/components/schemas/SubscriptionSummary"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/BillingUsageView"
+          }
+        },
+        "required": [
+          "subscription",
+          "usage"
         ]
       },
       "AdminSubscriptionSummary": {
@@ -4507,6 +4766,14 @@
               }
             ]
           },
+          "overage": {
+            "description": "The overage setting of this plan and tenant (J6).",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/OverageSettingsView"
+              }
+            ]
+          },
           "id": {
             "type": "string",
             "format": "uuid"
@@ -4534,6 +4801,7 @@
           "graceEndsAt",
           "graceDaysLeft",
           "limits",
+          "overage",
           "id",
           "provider"
         ]
@@ -4596,6 +4864,16 @@
             "format": "date-time",
             "nullable": true
           },
+          "overageCount": {
+            "type": "number",
+            "nullable": true,
+            "description": "Extra conversations this payment covers, as recorded by the platform admin (J6). The invoice has no tax lines."
+          },
+          "overageAmountMinor": {
+            "type": "number",
+            "nullable": true,
+            "description": "The part of `amountMinor` that is overage, minor units. null = none recorded."
+          },
           "createdAt": {
             "type": "string",
             "format": "date-time"
@@ -4622,6 +4900,8 @@
           "method",
           "reference",
           "paidAt",
+          "overageCount",
+          "overageAmountMinor",
           "createdAt",
           "recordedBy",
           "providerInvoiceId"
@@ -4663,7 +4943,7 @@
           "type": {
             "type": "string",
             "example": "payment.succeeded",
-            "description": "payment.succeeded, payment.failed, subscription.canceled, plan.changed, period.ended, period.extended, account.closed, tenant.suspended, tenant.unsuspended, subscription.created"
+            "description": "payment.succeeded, payment.failed, subscription.canceled, plan.changed, period.ended, period.extended, account.closed, tenant.suspended, tenant.unsuspended, subscription.created, overage.changed"
           },
           "source": {
             "type": "string",
@@ -4732,6 +5012,9 @@
           "subscription": {
             "$ref": "#/components/schemas/AdminSubscriptionSummary"
           },
+          "usage": {
+            "$ref": "#/components/schemas/BillingUsageView"
+          },
           "invoices": {
             "description": "Newest first; `skip` / `take` apply to this list.",
             "allOf": [
@@ -4751,6 +5034,7 @@
         },
         "required": [
           "subscription",
+          "usage",
           "invoices",
           "events"
         ]
@@ -4804,6 +5088,18 @@
             "type": "string",
             "maxLength": 200,
             "description": "Bank transaction id, cheque number, receipt number..."
+          },
+          "overageCount": {
+            "type": "number",
+            "minimum": 0,
+            "example": 120,
+            "description": "J6: extra conversations (overage) this payment covers, for the record. Send together with `overageAmountMinor`. Read the figures from `GET /v1/admin/tenants/:id/subscription` (`usage.conversations`)."
+          },
+          "overageAmountMinor": {
+            "type": "number",
+            "minimum": 0,
+            "example": 180000,
+            "description": "J6: the part of `amountMinor` that is overage, integer minor units (at most `amountMinor`). Stored on the invoice; no tax lines."
           },
           "planCode": {
             "type": "string",
@@ -4910,6 +5206,18 @@
             "type": "string",
             "maxLength": 200,
             "description": "Bank transaction id, cheque number, receipt number..."
+          },
+          "overageCount": {
+            "type": "number",
+            "minimum": 0,
+            "example": 120,
+            "description": "J6: extra conversations (overage) this payment covers, for the record. Send together with `overageAmountMinor`. Read the figures from `GET /v1/admin/tenants/:id/subscription` (`usage.conversations`)."
+          },
+          "overageAmountMinor": {
+            "type": "number",
+            "minimum": 0,
+            "example": 180000,
+            "description": "J6: the part of `amountMinor` that is overage, integer minor units (at most `amountMinor`). Stored on the invoice; no tax lines."
           }
         },
         "required": [
@@ -5273,7 +5581,8 @@
               "billing.grace_started",
               "billing.downgraded",
               "usage.threshold",
-              "usage.limit_reached"
+              "usage.limit_reached",
+              "usage.overage_started"
             ],
             "description": "Translation key prefix: the title is `<type>.title`, the body `<type>.body`."
           },
@@ -5618,33 +5927,6 @@
           "total",
           "skip",
           "take"
-        ]
-      },
-      "LocaleEntry": {
-        "type": "object",
-        "properties": {
-          "code": {
-            "type": "string",
-            "example": "ur",
-            "description": "BCP-47 code"
-          },
-          "name": {
-            "type": "string",
-            "example": "اردو",
-            "description": "The language's own name"
-          },
-          "dir": {
-            "type": "string",
-            "enum": [
-              "ltr",
-              "rtl"
-            ]
-          }
-        },
-        "required": [
-          "code",
-          "name",
-          "dir"
         ]
       },
       "MeUser": {

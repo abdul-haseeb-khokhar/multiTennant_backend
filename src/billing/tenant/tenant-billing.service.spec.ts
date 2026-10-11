@@ -1,6 +1,7 @@
 import { Test } from '@nestjs/testing';
 import { createPrismaMock, PrismaMock } from '../../../test/utils/prisma-mock';
 import { PrismaService } from '../../prisma/prisma.service';
+import { OverageService } from '../overage.service';
 import { SubscriptionService } from '../subscriptions/subscription.service';
 import { TenantBillingService } from './tenant-billing.service';
 
@@ -20,7 +21,9 @@ const effective = {
   daysLeft: 31,
   graceDaysLeft: null,
   provider: 'manual',
-  entitlements: { seats: 10 },
+  currency: 'PKR',
+  overageEnabled: true,
+  entitlements: { seats: 10, overageConversationMinor: 1500 },
   entitlementsOverride: { seats: 25 },
   nextTransitionAt: new Date('2026-11-07T00:00:00.000Z'),
 };
@@ -49,11 +52,31 @@ const invoice = (over: Record<string, unknown> = {}) => ({
 describe('TenantBillingService', () => {
   let service: TenantBillingService;
   let prisma: PrismaMock;
-  let subscriptions: { getEffective: jest.Mock };
+  let subscriptions: { getEffective: jest.Mock; setOverageEnabled: jest.Mock };
+  let overage: { conversationSummary: jest.Mock };
 
   beforeEach(async () => {
     prisma = createPrismaMock();
-    subscriptions = { getEffective: jest.fn().mockResolvedValue(effective) };
+    subscriptions = {
+      getEffective: jest.fn().mockResolvedValue(effective),
+      setOverageEnabled: jest.fn().mockResolvedValue({ changed: true }),
+    };
+    overage = {
+      conversationSummary: jest.fn().mockResolvedValue({
+        period: 'month',
+        periodStart: new Date('2026-10-01T00:00:00.000Z'),
+        included: 1500,
+        used: 1620,
+        overage: {
+          available: true,
+          enabled: true,
+          priceMinor: 1500,
+          currency: 'PKR',
+          count: 120,
+          amountMinor: 180_000,
+        },
+      }),
+    };
     prisma.invoice.findMany.mockResolvedValue([invoice()]);
     prisma.invoice.count.mockResolvedValue(1);
     prisma.billingEvent.findMany.mockResolvedValue([
@@ -74,6 +97,7 @@ describe('TenantBillingService', () => {
         TenantBillingService,
         { provide: PrismaService, useValue: prisma },
         { provide: SubscriptionService, useValue: subscriptions },
+        { provide: OverageService, useValue: overage },
       ],
     }).compile();
     service = module.get(TenantBillingService);
@@ -128,6 +152,62 @@ describe('TenantBillingService', () => {
         status: 404,
         response: { code: 'SUBSCRIPTION_NOT_FOUND' },
       });
+    });
+  });
+
+  describe('overage (J6)', () => {
+    it('shows the setting and the period figures: included, used, overage count and amount', async () => {
+      const result = await service.getForTenant('tenant-a', {});
+      expect(result.subscription.overage).toEqual({
+        available: true,
+        enabled: true,
+        priceMinor: 1500,
+        currency: 'PKR',
+      });
+      expect(result.usage.conversations).toEqual({
+        period: 'month',
+        periodStart: new Date('2026-10-01T00:00:00.000Z'),
+        included: 1500,
+        used: 1620,
+        overageCount: 120,
+        overageAmountMinor: 180_000,
+        overagePriceMinor: 1500,
+        currency: 'PKR',
+      });
+      expect(overage.conversationSummary).toHaveBeenCalledWith(effective);
+    });
+
+    it('the platform admin view carries the same figures', async () => {
+      prisma.tenant.findUnique.mockResolvedValue({ id: 'tenant-a' });
+      const result = await service.getForAdmin('tenant-a', {});
+      expect(result.usage.conversations).toMatchObject({
+        used: 1620,
+        overageCount: 120,
+        overageAmountMinor: 180_000,
+      });
+      expect(result.subscription.overage.enabled).toBe(true);
+    });
+
+    it('updateSettings stores the choice for the actor and answers with the new summary', async () => {
+      subscriptions.getEffective.mockResolvedValue({
+        ...effective,
+        overageEnabled: false,
+      });
+      const result = await service.updateSettings(
+        'tenant-a',
+        { userId: 'owner-1', tenantId: 'tenant-a', role: 'owner' } as never,
+        { overageEnabled: false },
+      );
+      expect(subscriptions.setOverageEnabled).toHaveBeenCalledWith(
+        'tenant-a',
+        false,
+        { userId: 'owner-1', role: 'owner' },
+      );
+      expect(result.subscription.overage).toMatchObject({
+        available: true,
+        enabled: false,
+      });
+      expect(result.usage.conversations.overageCount).toBe(120);
     });
   });
 

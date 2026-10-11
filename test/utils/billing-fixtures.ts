@@ -123,6 +123,8 @@ export function subscriptionRow(
     statusBeforeSuspension: null,
     closedAt: null,
     entitlementsOverride: null,
+    // the column default (J6): overage on; it only matters on plans that have an overage price
+    overageEnabled: true,
     provider: 'manual',
     providerCustomerId: null,
     providerSubscriptionId: null,
@@ -153,6 +155,10 @@ export function installBilling(
     invoices: [] as Array<Record<string, unknown>>,
     mirrors: [] as Array<Record<string, unknown>>,
     invoiceCounter: 0,
+    /** Conversations counted in usage_daily for the tenant (what the limit check and the billing summary read). */
+    conversationsUsed: 0,
+    /** Conversations of the period that were started over the limit and held for a human. */
+    heldForHuman: 0,
   };
   const plan = (code: unknown) =>
     PLAN_ROWS.find((p) => p.code === code) ?? null;
@@ -206,6 +212,12 @@ export function installBilling(
     },
   );
   prisma.subscription.findMany.mockResolvedValue([]);
+  prisma.usageDaily.aggregate.mockImplementation(() =>
+    Promise.resolve({ _sum: { conversations: state.conversationsUsed } }),
+  );
+  prisma.gatewayConversation.count.mockImplementation(() =>
+    Promise.resolve(state.heldForHuman),
+  );
 
   prisma.$queryRaw.mockImplementation(
     (strings: TemplateStringsArray, ...values: unknown[]) => {

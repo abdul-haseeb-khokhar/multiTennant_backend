@@ -761,3 +761,74 @@ describe('applyEventToState: period.ended', () => {
     expect(result.step).toBeNull();
   });
 });
+
+describe('applyEventToState: payment.succeeded with overage (J6)', () => {
+  const pay = (payload: Record<string, unknown>) =>
+    applyEventToState(
+      state(),
+      'payment.succeeded',
+      {
+        planCode: 'pro',
+        amountMinor: 2_179_900,
+        currency: 'PKR',
+        method: 'bank_transfer',
+        ...payload,
+      } as never,
+      PLANS,
+      T0,
+    );
+
+  it('puts the overage count and amount on the invoice draft and the billing event, without tax lines', () => {
+    const { step } = pay({ overageCount: 120, overageAmountMinor: 180_000 });
+    expect(step?.invoice).toMatchObject({
+      amountMinor: 2_179_900,
+      overageCount: 120,
+      overageAmountMinor: 180_000,
+    });
+    expect(step?.payload).toMatchObject({
+      overageCount: 120,
+      overageAmountMinor: 180_000,
+    });
+    expect(JSON.stringify(step)).not.toMatch(/tax/i);
+  });
+
+  it('without them the invoice records no overage', () => {
+    const { step } = pay({});
+    expect(step?.invoice).toMatchObject({
+      overageCount: null,
+      overageAmountMinor: null,
+    });
+    expect(step?.payload).not.toHaveProperty('overageCount');
+  });
+
+  it('accepts an overage of zero', () => {
+    const { step } = pay({ overageCount: 0, overageAmountMinor: 0 });
+    expect(step?.invoice).toMatchObject({
+      overageCount: 0,
+      overageAmountMinor: 0,
+    });
+  });
+
+  it.each([
+    ['a count without an amount', { overageCount: 5 }],
+    ['an amount without a count', { overageAmountMinor: 5 }],
+    [
+      'an amount above the total paid',
+      {
+        overageCount: 5,
+        overageAmountMinor: 2_179_901,
+      },
+    ],
+    ['a negative amount', { overageCount: 5, overageAmountMinor: -1 }],
+    ['a fractional amount', { overageCount: 5, overageAmountMinor: 1.5 }],
+    ['a negative count', { overageCount: -1, overageAmountMinor: 0 }],
+    ['a fractional count', { overageCount: 1.5, overageAmountMinor: 0 }],
+  ])('rejects %s (400 VALIDATION_ERROR)', (_name, payload) => {
+    expect(() => pay(payload)).toThrow(
+      expect.objectContaining({
+        status: 400,
+        response: expect.objectContaining({ code: 'VALIDATION_ERROR' }),
+      }),
+    );
+  });
+});

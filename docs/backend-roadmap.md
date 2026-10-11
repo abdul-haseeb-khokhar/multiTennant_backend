@@ -173,28 +173,54 @@ Decisions the docs did not settle (taken in Phase 4; change them in code if you 
 **Goal:** Pro tenants choose between paying PKR 15 per extra conversation (default) and a hard stop at the included amount.
 
 Scope (decided by Abdul on 2026-10-10, see team-alignment J6):
-- [ ] `overageEnabled` billing setting (default true), owner-only change with audit entry `billing.overage_changed`; exposed in `GET /v1/me` and `GET …/billing`
-- [ ] `EntitlementsService.check('conversations')` allows past the included amount when overage is on and the plan has an overage price; denies with `PLAN_LIMIT_REACHED` otherwise; the gateway keeps its fallback and `limit_reached` escalation for the hard stop
-- [ ] Overage count and amount per period in the tenant billing summary and in the platform-admin subscription view (manual invoicing now)
-- [ ] Notifications: 80% and 100% of included, overage started, AI stopped (H5, I8)
-- [ ] Decide and, if wanted, build the optional monthly spending cap for overage
-- [ ] Tests: allowed/denied matrix per plan and setting, owner-only change, usage derivation, no overage on Free and Starter
+- [x] `overageEnabled` billing setting (default true), owner-only change (`PATCH /v1/tenants/:tenantId/billing/settings`) with audit entry `billing.overage_changed`; exposed in `GET /v1/me` and `GET …/billing`
+- [x] `EntitlementsService.check('conversations')` allows past the included amount when overage is on and the plan has an overage price; denies with `PLAN_LIMIT_REACHED` otherwise; the gateway keeps its fallback and `limit_reached` escalation for the hard stop
+- [x] Overage count and amount per period in the tenant billing summary and in the platform-admin subscription view (manual invoicing now); `record-payment`/`activate` can store the count and amount on the invoice
+- [x] Notifications: 80% and 100% of included, overage started (`usage.overage_started`), AI stopped (`usage.limit_reached`) (H5, I8)
+- [ ] Decide and, if wanted, build the optional monthly spending cap for overage (**not decided, not built**: open question for Abdul; the design leaves room, see the 4B paragraph)
+- [x] Tests: allowed/denied matrix per plan and setting, owner-only change, usage derivation, no overage on Free and Starter
 
-Depends on: Phase 4 (notifications). **Done when:** switching the setting changes whether the AI keeps answering past the limit, and the billing summary shows the right overage count and amount.
+Depends on: Phase 4 (notifications). **Done when:** switching the setting changes whether the AI keeps answering past the limit, and the billing summary shows the right overage count and amount. (Met, except the optional spending cap, which was not decided.)
+
+Implementation status (branch `phase-4b-4c`, stacked on `phase-4-human-agent`, nothing committed or pushed): built and tested on the mock engine and real Postgres. Migration `20261011092433_phase4b_overage` is expand-only (`subscriptions.overage_enabled boolean not null default true`; `invoices.overage_count` and `overage_amount_minor`, both nullable, with a CHECK that the amount is at most the invoice total); generated against a throwaway database, read, drift-checked.
+
+How it works (rule 10 of `CLAUDE.md`, J6 in team-alignment):
+- **Setting.** `SubscriptionService.setOverageEnabled` (the subscription writer) changes it under the row lock, writes a `overage.changed` billing event and the `billing.overage_changed` audit entry in one transaction and drops the entitlements cache. Owner only (`RolesGuard`); a plan without an overage price answers 409 `OVERAGE_NOT_AVAILABLE`; asking for the current value writes nothing. `overageSettings()` (`billing/overage.ts`) says `{available, enabled, priceMinor, currency}`; it is in the subscription summary of `GET /v1/me`, `GET …/billing` and the admin `GET`.
+- **Enforcement.** `check('conversations')` returns `allowed: true, overage: true` past the included amount when the plan has the price and the setting is on, else `PLAN_LIMIT_REACHED` as before. Seats and knowledge never get overage. **`past_due` does not start overage** (that tenant keeps answering within the limit as before, and must not run up more charges); `suspended`/`closed` are denied first, as before. The gateway needed no new branch: `aiBlocked = !allowed`.
+- **Numbers.** `OverageService.conversationSummary`: `overage count = max(0, used − included − held for a human)`; `used` is the same `usage_daily` figure the limit check reads; "held for a human" are the period's `gateway_conversations.ai_blocked` rows (conversations started at the limit while overage was off: counted as used, never answered by the AI, so never billed). `GET …/billing` and the admin `GET` carry `usage.conversations` (period, included, used, overageCount, overageAmountMinor, overagePriceMinor). Nothing is stored per conversation.
+- **Invoices.** `record-payment` and `activate` accept optional `overageCount` + `overageAmountMinor` (both or neither, integers, amount at most the amount paid); stored on the invoice and in the billing event payload. No tax lines.
+- **Reminders.** At 100% the hourly job sends `usage.overage_started` (overage on and applying) or `usage.limit_reached` (AI stops); 80% is unchanged. The two types have separate dedupe keys per period, so switching the setting never re-sends what was sent and the message that now applies is still sent once.
+
+Decisions the docs did not settle (change them in code if you disagree): the setting lives in a column of `subscriptions` outside the state machine (it is not a state transition); overage does not apply while `past_due`; conversations held for a human are not billed even if the owner later switches overage on (they stay human-only for life, known issue 12); a change reaches other backend instances within the 30 s entitlements cache; the "overage started" reminder is sent when the included amount is used up (100%), before the first extra conversation, and its text says extras are billed from now on.
+
+Open question for Abdul: the optional **monthly spending cap** for overage (J6). Not built. To add it: a nullable `subscriptions.overage_cap_minor`, a check in `EntitlementsService` comparing `OverageService`'s amount with it, and a "cap reached" notification; the summary already has the figures it needs.
 
 ## Phase 4C: Mail provider, Resend in test mode (H3)
 **Goal:** invites, password resets and verification links are really emailed. Starts only after the Phase 4 session has finished, because both touch `env.validation.ts`, `.env.example` and the docs.
 
 Scope (decided by Abdul on 2026-10-10, see team-alignment H3):
-- [ ] `ResendMailer` implementing `Mailer` (HTTPS call to Resend with the API key, timeout, one retry), selected by `MAIL_PROVIDER=console|resend`; production refuses `console`
-- [ ] Settings `RESEND_API_KEY`, `MAIL_FROM`, `MAIL_FROM_NAME`, `MAIL_REDIRECT_TO` validated at boot and listed in `.env.example` (names only); production refuses `MAIL_REDIRECT_TO`
-- [ ] Redirect mode: every message goes to `MAIL_REDIRECT_TO` with the intended recipient in the subject/body header (needed because test mode only delivers to the Resend account's own address)
-- [ ] HTML and plain-text templates for invite, password reset, email verification and the billing reminders, from the `email.*` keys, en and ur (right-to-left), with the link and expiry
-- [ ] Send failures are logged without recipient or link, never break the flow, and are reported to the caller (`delivery: sent | failed | skipped`); health warning after repeated failures
-- [ ] Tests with a fake Resend server (success, 403 test-mode rejection, timeout, retry), redirect mode, production refusals, template rendering in both locales
-- [ ] README section: how to create the Resend account and key, how to switch to a verified domain (SPF, DKIM, DMARC), what the free cap means
+- [x] `ResendMailer` implementing `Mailer` (HTTPS call to Resend with the API key, timeout, one retry), selected by `MAIL_PROVIDER=console|resend`; production refuses `console`
+- [x] Settings `RESEND_API_KEY`, `MAIL_FROM`, `MAIL_FROM_NAME` (default `SupportDesk AI`, a working name), `MAIL_REDIRECT_TO`, `MAIL_TIMEOUT_MS` validated at boot and listed in `.env.example` (names only); production refuses `MAIL_REDIRECT_TO`
+- [x] Redirect mode: every message goes to `MAIL_REDIRECT_TO` with the intended recipient in the subject/body header (needed because test mode only delivers to the Resend account's own address)
+- [x] HTML and plain-text templates for invite, password reset, email verification and the billing reminders, from the `email.*` keys, en and ur (right-to-left), with the link and expiry (the billing templates are rendered and tested but **not sent yet**: wiring them to the reminder job is a follow-up)
+- [x] Send failures are logged without recipient or link, never break the flow, and are reported to the caller (`delivery: sent | failed | skipped`); health warning after repeated failures
+- [x] Tests with a fake Resend server (success, 403 test-mode rejection, timeout, retry), redirect mode, production refusals, template rendering in both locales
+- [x] README section: how to create the Resend account and key, how to switch to a verified domain (SPF, DKIM, DMARC), what the free cap means
 
-Depends on: a Resend account and API key from Abdul (kept in `.env`, never in chat). **Done when:** signing up, inviting and resetting a password deliver real emails to the Resend account's inbox, and the tests above pass.
+Depends on: a Resend account and API key from Abdul (kept in `.env`, never in chat). **Done when:** signing up, inviting and resetting a password deliver real emails to the Resend account's inbox, and the tests above pass. (The tests pass; real delivery to the inbox is **unverified**, Abdul checks it with the list in the README "Email" section.)
+
+Implementation status (branch `phase-4b-4c`, nothing committed or pushed): built and tested against a **fake Resend HTTP server**; the build session never read or printed `RESEND_API_KEY`, and the test suites now force the console provider. No migration. The Resend API facts (error names, the 403 test-mode refusal, 429 quota errors, the Bearer key, the `Idempotency-Key` header, 100 a day / 3,000 a month on the free plan, 10 requests a second per team) were checked against Resend's official documentation on 2026-10-11 (resend.com/docs/api-reference/errors, …/emails/send-email, …/knowledge-base/resend-sending-limits). One thing the pages do not say: what the free plan does at its cap; the code treats a 429 `daily_quota_exceeded` / `monthly_quota_exceeded` as the signal.
+
+How it works (rule 13 of `CLAUDE.md`):
+- **Selection.** `MAIL_PROVIDER=console|resend` picks the `Mailer` in `MailModule`; production refuses `console`, `MAIL_REDIRECT_TO`, a `@resend.dev` sender and `RESEND_API_URL` (a test seam).
+- **Sending.** `ResendMailer` posts to `/emails` with the Bearer key, JSON `from`, `to`, `subject`, `html`, `text` and an `Idempotency-Key`; 5 s per attempt, one retry (same key) only after a network error, a timeout or a 5xx. Failures become `MailDeliveryError` with a stable reason code; the provider's own error text is dropped because its test-mode refusal quotes an address.
+- **Rendering.** `MailRenderer` + `formatMessage` (a small ICU subset: placeholders and plurals) render `email.<template>.*` and `email.layout.*`; HTML escaped everywhere, no images/scripts/tracking, links must be http(s), Urdu has `lang="ur" dir="rtl"`.
+- **Callers.** `MailService.sendNow` never throws: it returns `delivery: sent | failed | skipped`. Used by invite create, signup (`verificationDelivery`) and verification resend; password reset keeps `queue` (background, constant 202). `MAIL_DELIVERY_FAILED` (the old 503 for a failed invite email) is no longer returned; the code stays registered.
+- **Health.** `MailHealth` counts consecutive failures per instance; `GET /health/ready` shows `mail` and turns `degraded` after 3 (readiness stays 200).
+
+Decisions the docs did not settle (change them in code if you disagree): signup and the verification resend now wait for the provider (up to about 10 s in the worst case) instead of sending in the background, because they must report `delivery`; a `@resend.dev` sender is refused in production; `MAIL_FROM_NAME` defaults to `SupportDesk AI`, `MAIL_FROM` to `onboarding@resend.dev`; the invite has no separate "resend" route (inviting the same address again replaces the pending invite and sends a new email); the test suites force the console provider because `.env` may hold real settings.
+
+Follow-ups: send the billing reminders by email (templates exist; needs the recipients' addresses and locales, the 100-a-day cap in mind and a dedupe on the notification rows); bounce and complaint webhooks (suppression list); Urdu email texts need a native-speaker check.
 
 ## Phase 5: Tenant configuration, knowledge, actions and usage
 **Goal:** tenants configure their AI, load knowledge, approve risky actions, and are held to plan limits.

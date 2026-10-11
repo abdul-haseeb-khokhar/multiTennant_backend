@@ -149,6 +149,29 @@ describe('ManualBillingService (platform admin commands)', () => {
     expect(appliedEvent().payload.planCode).toBeUndefined();
   });
 
+  it('recordPayment and activate pass the optional overage count and amount through (J6)', async () => {
+    await service.recordPayment('tenant-a', 'admin-1', {
+      ...payment,
+      overageCount: 120,
+      overageAmountMinor: 180_000,
+    });
+    expect(appliedEvent().payload).toMatchObject({
+      overageCount: 120,
+      overageAmountMinor: 180_000,
+    });
+    subscriptions.applyEvent.mockClear();
+    await service.activate('tenant-a', 'admin-1', {
+      ...payment,
+      planCode: 'pro',
+      overageCount: 3,
+      overageAmountMinor: 4500,
+    });
+    expect(appliedEvent().payload).toMatchObject({
+      overageCount: 3,
+      overageAmountMinor: 4500,
+    });
+  });
+
   it('extend and changePlan map to period.extended and plan.changed', async () => {
     await service.extend('tenant-a', 'admin-1', { days: 7 });
     expect(appliedEvent()).toMatchObject({

@@ -1,14 +1,19 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
+import type { AuthUser } from '../../auth/roles';
 import { ApiException } from '../../common/errors/api.exception';
 import { ErrorCode } from '../../common/errors/error-codes';
 import { resolvePage, toPage } from '../../common/pagination/pagination';
 import { PaginationQueryDto } from '../../common/pagination/pagination-query.dto';
 import { PrismaService } from '../../prisma/prisma.service';
+import { OverageService } from '../overage.service';
+import type { EffectiveSubscription } from '../subscriptions/effective-subscription';
 import { SubscriptionService } from '../subscriptions/subscription.service';
+import { UpdateBillingSettingsDto } from './dto/update-billing-settings.dto';
 import {
   toAdminInvoiceView,
   toAdminSubscriptionSummary,
   toBillingEventView,
+  toConversationUsageView,
   toInvoiceView,
   toSubscriptionSummary,
 } from '../views';
@@ -19,6 +24,7 @@ export class TenantBillingService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly subscriptions: SubscriptionService,
+    private readonly overage: OverageService,
   ) {}
 
   /** `GET /tenants/:tenantId/billing`: current plan, status, period, entitlements and invoices. */
@@ -39,7 +45,28 @@ export class TenantBillingService {
     ]);
     return {
       subscription: toSubscriptionSummary(subscription),
+      usage: await this.usageView(subscription),
       invoices: toPage(invoices.map(toInvoiceView), total, page),
+    };
+  }
+
+  /** `PATCH /tenants/:tenantId/billing/settings` (owner): the J6 overage switch. Answers with the new subscription summary. */
+  async updateSettings(
+    tenantId: string,
+    actor: AuthUser,
+    dto: UpdateBillingSettingsDto,
+  ) {
+    await this.subscriptions.setOverageEnabled(tenantId, dto.overageEnabled, {
+      userId: actor.userId,
+      role: actor.role,
+    });
+    const subscription = await this.subscriptions.getEffective(tenantId);
+    if (!subscription) {
+      throw this.noSubscription(tenantId);
+    }
+    return {
+      subscription: toSubscriptionSummary(subscription),
+      usage: await this.usageView(subscription),
     };
   }
 
@@ -69,8 +96,17 @@ export class TenantBillingService {
     ]);
     return {
       subscription: toAdminSubscriptionSummary(subscription),
+      usage: await this.usageView(subscription),
       invoices: toPage(invoices.map(toAdminInvoiceView), invoiceTotal, page),
       events: toPage(events.map(toBillingEventView), eventTotal, page),
+    };
+  }
+
+  private async usageView(subscription: EffectiveSubscription) {
+    return {
+      conversations: toConversationUsageView(
+        await this.overage.conversationSummary(subscription),
+      ),
     };
   }
 
