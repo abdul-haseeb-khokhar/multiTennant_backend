@@ -122,6 +122,69 @@ describe('MailRenderer', () => {
     });
   });
 
+  describe('upgrade request (J5), sent to the platform admins', () => {
+    const adminLink = 'https://app.example.com/admin/upgrade-requests';
+    const params = {
+      tenantName: 'Acme Support',
+      currentPlan: 'Starter',
+      requestedPlan: 'Pro',
+      note: 'we need more seats',
+    };
+
+    it('names the workspace, both plans and the owner note, in English and Urdu (right to left)', () => {
+      const en = render(
+        message({ template: 'upgrade-request', link: adminLink, params }),
+      );
+      expect(en.subject).toBe('Upgrade request: Acme Support wants Pro');
+      for (const part of [
+        'Acme Support',
+        'Starter',
+        'Pro',
+        'we need more seats',
+      ]) {
+        expect(en.text).toContain(part);
+      }
+      expect(en.html).toContain(`href="${adminLink}"`);
+
+      const ur = render(
+        message({
+          template: 'upgrade-request',
+          locale: 'ur',
+          link: adminLink,
+          params,
+        }),
+      );
+      expect(ur.dir).toBe('rtl');
+      expect(ur.html).toContain('dir="rtl"');
+      for (const part of [
+        'Acme Support',
+        'Starter',
+        'Pro',
+        'we need more seats',
+      ]) {
+        expect(ur.text).toContain(part);
+      }
+    });
+
+    it('escapes what the owner typed: the workspace name and the note cannot inject markup or extra subject lines', () => {
+      const out = render(
+        message({
+          template: 'upgrade-request',
+          link: adminLink,
+          params: {
+            ...params,
+            tenantName: '<script>alert(1)</script>\r\nBcc: evil@example.com',
+            note: '"><img src=x onerror=alert(1)>',
+          },
+        }),
+      );
+      expect(out.html).not.toContain('<script>');
+      expect(out.html).not.toContain('<img');
+      expect(out.html).toContain('&lt;script&gt;');
+      expect(out.subject).not.toMatch(/[\r\n]/);
+    });
+  });
+
   describe('every template has every key in both languages', () => {
     const templates: MailTemplate[] = [
       'staff-invite',
@@ -130,6 +193,7 @@ describe('MailRenderer', () => {
       'billing-period-ending',
       'billing-grace-started',
       'billing-downgraded',
+      'upgrade-request',
     ];
     it.each(templates)(
       '%s renders without empty parts in en and ur',
@@ -145,6 +209,10 @@ describe('MailRenderer', () => {
                 graceDaysLeft: 5,
                 fromPlan: 'Pro',
                 toPlan: 'Free',
+                tenantName: 'Acme',
+                currentPlan: 'Starter',
+                requestedPlan: 'Pro',
+                note: 'more seats',
               },
             }),
           );

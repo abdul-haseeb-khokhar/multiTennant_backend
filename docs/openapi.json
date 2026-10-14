@@ -122,6 +122,7 @@
     },
     "/v1/auth/login": {
       "post": {
+        "description": "The workspace-specific login. A slug the workspace used in the last 30 days still works (J3). Throttled: 429 with Retry-After after 5 wrong passwords for one email from one address in 15 minutes, 30 wrong passwords from one address, or 60 requests a minute from one address.",
         "operationId": "AuthController_login",
         "parameters": [],
         "requestBody": {
@@ -147,6 +148,127 @@
           }
         },
         "summary": "Staff login with tenant slug, email and password",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/v1/auth/login-email": {
+      "post": {
+        "description": "Checks the password against every workspace where this email exists and answers with the workspaces it opens (workspaces), a selectionToken for step two, and how many other workspaces use a different password (unmatchedCount). When exactly one workspace is available the answer also has the access_token and workspace, so the picker can be skipped. A wrong password and an unknown email are the same 401 INVALID_CREDENTIALS in the same time. Throttled like /auth/login.",
+        "operationId": "AuthController_loginByEmail",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginEmailDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoginEmailResponse"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Step one of the email-first login: email and password, no slug (J2)",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/v1/auth/select-workspace": {
+      "post": {
+        "description": "Needs the selectionToken (valid for 10 minutes; it can be used again to switch to another listed workspace) and the tenantId of one of its workspaces. Answers like the slug login, plus the workspace. Errors: 401 SELECTION_TOKEN_INVALID (expired, forged, or the user logged out or changed the password since), 403 WORKSPACE_NOT_SELECTABLE (not one of the listed workspaces), and the usual 403 ACCOUNT_DISABLED / TENANT_SUSPENDED / TENANT_CLOSED.",
+        "operationId": "AuthController_selectWorkspace",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SelectWorkspaceDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SelectWorkspaceResponse"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Step two: open one of the workspaces from step one (J2)",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/v1/auth/slug-available": {
+      "get": {
+        "description": "Used while typing at signup and by the owner's rename (J3). Answers only yes or no and up to three free alternatives; a slug an earlier workspace gave up less than 90 days ago counts as taken. Limited to 30 checks a minute per address (429).",
+        "operationId": "AuthController_slugAvailable",
+        "parameters": [
+          {
+            "name": "slug",
+            "required": true,
+            "in": "query",
+            "description": "The slug to check, as typed. Anything that is not a valid slug (too short, capitals, spaces, a word we keep) simply comes back as not available, with cleaned-up suggestions.",
+            "schema": {
+              "example": "acme-support",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SlugAvailability"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Is this workspace address free? (public)",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/v1/auth/logout": {
+      "post": {
+        "description": "Sets the user's \"tokens valid after\" instant to now: every token issued before it, on every device, stops working (\"log out everywhere\"; one timestamp per user, so a single device cannot be logged out on its own). A login afterwards works at once. Works even when the workspace is suspended. Clear the cookie in the frontend as well. Widget tokens are not affected.",
+        "operationId": "AuthController_logout",
+        "parameters": [],
+        "responses": {
+          "204": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Log out of every session of this user",
         "tags": [
           "auth"
         ]
@@ -211,6 +333,27 @@
           }
         },
         "summary": "Platform-admin login (our own staff, not tenant users)",
+        "tags": [
+          "platform-admin"
+        ]
+      }
+    },
+    "/v1/admin/auth/logout": {
+      "post": {
+        "description": "Every platform token issued before now stops working, on every device (J1).",
+        "operationId": "PlatformAuthController_logout",
+        "parameters": [],
+        "responses": {
+          "204": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Log out of every session of this platform admin",
         "tags": [
           "platform-admin"
         ]
@@ -513,6 +656,7 @@
         ]
       },
       "patch": {
+        "description": "`plan` and `status` are no longer accepted (400 `USE_SUBSCRIPTION_ROUTES`): use `/admin/tenants/:id/subscription` (`activate`, `change-plan`, `suspend`, `unsuspend`, ...).",
         "operationId": "TenantsController_update",
         "parameters": [
           {
@@ -551,7 +695,7 @@
             "bearer": []
           }
         ],
-        "summary": "Rename a tenant, change its plan or suspend it",
+        "summary": "Rename a tenant or change its default language",
         "tags": [
           "platform-admin"
         ]
@@ -587,6 +731,72 @@
         ],
         "tags": [
           "platform-admin"
+        ]
+      }
+    },
+    "/v1/tenants/{tenantId}": {
+      "get": {
+        "operationId": "TenantSettingsController_get",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TenantSettings"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Name, slug, language and time zone of my workspace",
+        "tags": [
+          "tenant"
+        ]
+      },
+      "patch": {
+        "description": "Fields you leave out stay as they are. A slug rename needs a free slug (`409 SLUG_TAKEN` with `suggestions`), at most once every 30 days (`409 SLUG_CHANGE_TOO_SOON` with `nextAllowedAt`), keeps the old slug working at login for 30 days and reserves it for 90. Audited as `tenant.updated` and `tenant.slug_changed`.",
+        "operationId": "TenantSettingsController_update",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateTenantSettingsDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TenantSettings"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`SLUG_TAKEN` (with `suggestions`) or `SLUG_CHANGE_TOO_SOON`"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Change name, default language, time zone or slug (owner only)",
+        "tags": [
+          "tenant"
         ]
       }
     },
@@ -2283,6 +2493,303 @@
         ]
       }
     },
+    "/v1/admin/tenants/{id}/subscription/suspend": {
+      "post": {
+        "description": "Its staff are refused (403 TENANT_SUSPENDED) and its widget answers \"blocked\". Not a plan change: the plan and period stay. Replaces `status: \"suspended\"` on PATCH /admin/tenants/:id (J5).",
+        "operationId": "AdminSubscriptionController_suspend",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SuspendTenantDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionCommandResult"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Suspend the tenant",
+        "tags": [
+          "platform-admin"
+        ]
+      }
+    },
+    "/v1/admin/tenants/{id}/subscription/unsuspend": {
+      "post": {
+        "description": "The tenant returns to the state it had before (a Starter trial returns as the trial, a past-due tenant as past due).",
+        "operationId": "AdminSubscriptionController_unsuspend",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UnsuspendTenantDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionCommandResult"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Lift a suspension",
+        "tags": [
+          "platform-admin"
+        ]
+      }
+    },
+    "/v1/tenants/{tenantId}/billing/upgrade-request": {
+      "post": {
+        "description": "The plan must be a public plan (GET /v1/plans) different from the current one (404 `PLAN_NOT_FOUND`, 409 `ALREADY_ON_PLAN`). A workspace has at most one pending request: asking again while one is pending REPLACES its plan and note (`replacedPending: true`). A platform admin is emailed (`notification`), activates the plan through the subscription routes and marks the request handled. Needs a verified email (403 `EMAIL_NOT_VERIFIED`); limited to 5 per hour (429). Audited as `upgrade.requested`.",
+        "operationId": "TenantUpgradeRequestController_create",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateUpgradeRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpgradeRequestCreated"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`ALREADY_ON_PLAN`"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Ask the platform team to move the workspace to another plan (owner only)",
+        "tags": [
+          "billing"
+        ]
+      },
+      "get": {
+        "description": "Any status, so the billing screen can show \"request sent\" or what the platform team answered.",
+        "operationId": "TenantUpgradeRequestController_latest",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LatestUpgradeRequest"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "The workspace's latest upgrade request, as { request } (null if none)",
+        "tags": [
+          "billing"
+        ]
+      }
+    },
+    "/v1/admin/upgrade-requests": {
+      "get": {
+        "description": "Filter with `status=pending|handled|declined`.",
+        "operationId": "AdminUpgradeRequestsController_list",
+        "parameters": [
+          {
+            "name": "skip",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 0,
+              "default": 0,
+              "type": "number"
+            }
+          },
+          {
+            "name": "take",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "handled",
+                "declined"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data",
+                    "total",
+                    "skip",
+                    "take"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/AdminUpgradeRequestView"
+                      }
+                    },
+                    "total": {
+                      "type": "integer"
+                    },
+                    "skip": {
+                      "type": "integer"
+                    },
+                    "take": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "List upgrade requests, newest first",
+        "tags": [
+          "platform-admin"
+        ]
+      }
+    },
+    "/v1/admin/upgrade-requests/{id}/handle": {
+      "post": {
+        "description": "Does not change the plan: activate it through `POST /admin/tenants/:id/subscription/activate` or `change-plan`. Audited in the tenant's log as `upgrade.handled`.",
+        "operationId": "AdminUpgradeRequestsController_handle",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HandleUpgradeRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpgradeRequestView"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`UPGRADE_REQUEST_ALREADY_HANDLED`"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Mark a pending request handled or declined",
+        "tags": [
+          "platform-admin"
+        ]
+      }
+    },
     "/v1/tenants/{tenantId}/data-use": {
       "get": {
         "description": "Default OFF. This only records the owner's choice; no training export exists (it needs legal review first).",
@@ -3283,6 +3790,194 @@
           "access_token"
         ]
       },
+      "LoginEmailDto": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "example": "owner@acme.com"
+          },
+          "password": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "email",
+          "password"
+        ]
+      },
+      "WorkspaceChoice": {
+        "type": "object",
+        "properties": {
+          "tenantId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "slug": {
+            "type": "string",
+            "example": "acme"
+          },
+          "name": {
+            "type": "string",
+            "example": "Acme Support"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "owner",
+              "admin",
+              "agent"
+            ]
+          },
+          "available": {
+            "type": "boolean",
+            "description": "False when this workspace cannot be opened right now (see `reason`). It is still listed: the caller proved the password for it."
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "ACCOUNT_DISABLED",
+              "TENANT_SUSPENDED",
+              "TENANT_CLOSED"
+            ],
+            "description": "Why it is not available; an error code the frontend translates (`errors.<code>`)."
+          }
+        },
+        "required": [
+          "tenantId",
+          "slug",
+          "name",
+          "role",
+          "available"
+        ]
+      },
+      "OpenedWorkspace": {
+        "type": "object",
+        "properties": {
+          "tenantId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "slug": {
+            "type": "string",
+            "example": "acme"
+          },
+          "name": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "owner",
+              "admin",
+              "agent"
+            ]
+          }
+        },
+        "required": [
+          "tenantId",
+          "slug",
+          "name",
+          "role"
+        ]
+      },
+      "LoginEmailResponse": {
+        "type": "object",
+        "properties": {
+          "selectionToken": {
+            "type": "string",
+            "description": "Proof, for 10 minutes, of the workspaces listed below. Send it to `POST /auth/select-workspace`. Not an access token; keep it in memory, not in a cookie."
+          },
+          "expiresIn": {
+            "type": "number",
+            "example": 600,
+            "description": "Seconds the token stays valid."
+          },
+          "workspaces": {
+            "description": "Only workspaces where this email AND this password match; sorted by name.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkspaceChoice"
+            }
+          },
+          "unmatchedCount": {
+            "type": "number",
+            "example": 1,
+            "description": "How many other workspaces use this email with a different password (or could not be checked). Show \"N other workspaces use a different password: reset your password\". It reveals nothing to anyone who did not type a correct password."
+          },
+          "access_token": {
+            "type": "string",
+            "description": "Present only when exactly ONE listed workspace is available: the normal staff access token, so the picker can be skipped."
+          },
+          "workspace": {
+            "description": "The workspace `access_token` belongs to.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/OpenedWorkspace"
+              }
+            ]
+          }
+        },
+        "required": [
+          "selectionToken",
+          "expiresIn",
+          "workspaces",
+          "unmatchedCount"
+        ]
+      },
+      "SelectWorkspaceDto": {
+        "type": "object",
+        "properties": {
+          "selectionToken": {
+            "type": "string",
+            "description": "The `selectionToken` returned by `POST /auth/login-email`."
+          },
+          "tenantId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The `tenantId` of one of the listed workspaces. A workspace that was not listed gets 403 `WORKSPACE_NOT_SELECTABLE`."
+          }
+        },
+        "required": [
+          "selectionToken",
+          "tenantId"
+        ]
+      },
+      "SelectWorkspaceResponse": {
+        "type": "object",
+        "properties": {
+          "access_token": {
+            "type": "string",
+            "description": "The normal staff access token for that workspace."
+          },
+          "workspace": {
+            "$ref": "#/components/schemas/OpenedWorkspace"
+          }
+        },
+        "required": [
+          "access_token",
+          "workspace"
+        ]
+      },
+      "SlugAvailability": {
+        "type": "object",
+        "properties": {
+          "available": {
+            "type": "boolean"
+          },
+          "suggestions": {
+            "description": "Up to three free alternatives when the slug is not available; empty when it is.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "available",
+          "suggestions"
+        ]
+      },
       "SignupDto": {
         "type": "object",
         "properties": {
@@ -3357,6 +4052,17 @@
             "example": "en",
             "description": "Default language (H7)"
           },
+          "timezone": {
+            "type": "string",
+            "example": "Asia/Karachi",
+            "description": "IANA time zone (J7)"
+          },
+          "slugChangedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "When the slug was last renamed by its owner (J3)."
+          },
           "createdAt": {
             "type": "string",
             "format": "date-time"
@@ -3369,6 +4075,8 @@
           "plan",
           "status",
           "defaultLocale",
+          "timezone",
+          "slugChangedAt",
           "createdAt"
         ]
       },
@@ -3497,7 +4205,7 @@
           "tenantSlug": {
             "type": "string",
             "example": "acme",
-            "description": "The tenant slug"
+            "description": "The tenant slug. Leave it out (J2) and the reset covers EVERY workspace where this email exists: one email, one link, and the new password is set in all of them. With a slug (the original flow) only that workspace is reset."
           },
           "email": {
             "type": "string",
@@ -3505,7 +4213,6 @@
           }
         },
         "required": [
-          "tenantSlug",
           "email"
         ]
       },
@@ -3614,7 +4321,7 @@
               "enterprise"
             ],
             "deprecated": true,
-            "description": "Deprecated: same as POST /admin/tenants/:id/subscription/change-plan with no payment (a paid plan gets one interval, no invoice)."
+            "description": "REMOVED (J5): sending it answers 400 `USE_SUBSCRIPTION_ROUTES`. Use POST /admin/tenants/:id/subscription/change-plan or activate."
           },
           "status": {
             "type": "string",
@@ -3624,12 +4331,120 @@
               "suspended"
             ],
             "deprecated": true,
-            "description": "`suspended` suspends the tenant; `active` or `trial` lifts a suspension (it returns to the state it had). Nothing else changes: the real state is the subscription."
+            "description": "REMOVED (J5): sending it answers 400 `USE_SUBSCRIPTION_ROUTES`. Use POST /admin/tenants/:id/subscription/suspend or unsuspend."
           },
           "defaultLocale": {
             "type": "string",
             "example": "en",
             "description": "The tenant's default language (H7). A locale code from GET /v1/i18n/locales (BCP-47, for example `en`, `ur`)."
+          }
+        }
+      },
+      "PreviousSlug": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "type": "string",
+            "example": "acme"
+          },
+          "acceptedUntil": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Until then the old slug still logs in."
+          },
+          "reservedUntil": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Until then nobody else can take the old slug."
+          }
+        },
+        "required": [
+          "slug",
+          "acceptedUntil",
+          "reservedUntil"
+        ]
+      },
+      "TenantSettings": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string",
+            "example": "acme"
+          },
+          "defaultLocale": {
+            "type": "string",
+            "example": "en",
+            "description": "Default language (H7)"
+          },
+          "timezone": {
+            "type": "string",
+            "example": "Asia/Karachi",
+            "description": "IANA time zone name (J7)."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "slugChangedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "When the slug was last renamed; null if never."
+          },
+          "slugChangeAllowedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "When the slug may be renamed again; null when a rename is possible now."
+          },
+          "previousSlugs": {
+            "description": "Slugs this workspace used to have that are still reserved (90 days), newest first.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PreviousSlug"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "slug",
+          "defaultLocale",
+          "timezone",
+          "createdAt",
+          "slugChangedAt",
+          "slugChangeAllowedAt",
+          "previousSlugs"
+        ]
+      },
+      "UpdateTenantSettingsDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "example": "Acme Support"
+          },
+          "defaultLocale": {
+            "type": "string",
+            "example": "en",
+            "description": "The workspace's default language (H7). A locale code from GET /v1/i18n/locales (BCP-47, for example `en`, `ur`)."
+          },
+          "timezone": {
+            "type": "string",
+            "example": "Asia/Karachi",
+            "description": "IANA time zone of the workspace (J7), for example `Asia/Karachi` (the default). Working hours, the audit display and reminder wording use it; stored timestamps stay UTC."
+          },
+          "slug": {
+            "type": "string",
+            "example": "acme-support",
+            "description": "Renames the workspace slug (3-40 chars: a-z, 0-9, dashes). Allowed once every 30 days. The new slug must be free (409 `SLUG_TAKEN` with `suggestions` otherwise). The old slug keeps working at login for 30 days and nobody else can take it for 90 days. Widget keys are unaffected."
           }
         }
       },
@@ -5295,6 +6110,320 @@
           }
         }
       },
+      "SuspendTenantDto": {
+        "type": "object",
+        "properties": {
+          "idempotencyKey": {
+            "type": "string",
+            "maxLength": 100,
+            "description": "Optional client-chosen key. Sending the same key again for this tenant changes nothing (`duplicate: true`), so a retry or a double click cannot record a payment twice."
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 200,
+            "description": "Why (kept in the billing event log, not shown to the tenant)."
+          }
+        }
+      },
+      "UnsuspendTenantDto": {
+        "type": "object",
+        "properties": {
+          "idempotencyKey": {
+            "type": "string",
+            "maxLength": 100,
+            "description": "Optional client-chosen key. Sending the same key again for this tenant changes nothing (`duplicate: true`), so a retry or a double click cannot record a payment twice."
+          }
+        }
+      },
+      "CreateUpgradeRequestDto": {
+        "type": "object",
+        "properties": {
+          "planCode": {
+            "type": "string",
+            "example": "pro",
+            "description": "The plan the owner wants. Must be a public plan from GET /v1/plans and different from the current one."
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 500,
+            "description": "Anything the platform team should know (seen by them only)."
+          }
+        },
+        "required": [
+          "planCode"
+        ]
+      },
+      "UpgradeRequestCreated": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "requestedPlanCode": {
+            "type": "string",
+            "example": "pro"
+          },
+          "requestedPlanName": {
+            "type": "string",
+            "example": "Pro"
+          },
+          "note": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "handled",
+              "declined"
+            ]
+          },
+          "handledAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "handledNote": {
+            "type": "string",
+            "nullable": true,
+            "description": "What the platform admin wrote when handling it."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "replacedPending": {
+            "type": "boolean",
+            "description": "True when the tenant already had a pending request and this one replaced its plan and note."
+          },
+          "notification": {
+            "type": "string",
+            "enum": [
+              "sent",
+              "failed",
+              "skipped",
+              "not_configured"
+            ],
+            "description": "What happened to the email to the platform admins. The request is stored whatever this says. `not_configured`: PLATFORM_ADMIN_NOTIFY_EMAIL is not set; `skipped`: the development console mailer is active."
+          }
+        },
+        "required": [
+          "id",
+          "requestedPlanCode",
+          "requestedPlanName",
+          "note",
+          "status",
+          "handledAt",
+          "handledNote",
+          "createdAt",
+          "updatedAt",
+          "replacedPending",
+          "notification"
+        ]
+      },
+      "UpgradeRequestView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "requestedPlanCode": {
+            "type": "string",
+            "example": "pro"
+          },
+          "requestedPlanName": {
+            "type": "string",
+            "example": "Pro"
+          },
+          "note": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "handled",
+              "declined"
+            ]
+          },
+          "handledAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "handledNote": {
+            "type": "string",
+            "nullable": true,
+            "description": "What the platform admin wrote when handling it."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "requestedPlanCode",
+          "requestedPlanName",
+          "note",
+          "status",
+          "handledAt",
+          "handledNote",
+          "createdAt",
+          "updatedAt"
+        ]
+      },
+      "LatestUpgradeRequest": {
+        "type": "object",
+        "properties": {
+          "request": {
+            "nullable": true,
+            "description": "The latest request of this workspace in any status, or null if there never was one.",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/UpgradeRequestView"
+              }
+            ]
+          }
+        },
+        "required": [
+          "request"
+        ]
+      },
+      "UpgradeRequestTenant": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string",
+            "example": "acme"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "slug"
+        ]
+      },
+      "AdminUpgradeRequestView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "requestedPlanCode": {
+            "type": "string",
+            "example": "pro"
+          },
+          "requestedPlanName": {
+            "type": "string",
+            "example": "Pro"
+          },
+          "note": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "handled",
+              "declined"
+            ]
+          },
+          "handledAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "handledNote": {
+            "type": "string",
+            "nullable": true,
+            "description": "What the platform admin wrote when handling it."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "tenant": {
+            "$ref": "#/components/schemas/UpgradeRequestTenant"
+          },
+          "currentPlanCode": {
+            "type": "string",
+            "nullable": true,
+            "example": "starter",
+            "description": "The tenant's plan now (from its subscription)."
+          },
+          "requestedByEmail": {
+            "type": "string",
+            "nullable": true
+          },
+          "handledBy": {
+            "type": "string",
+            "nullable": true,
+            "description": "The platform admin who handled it."
+          }
+        },
+        "required": [
+          "id",
+          "requestedPlanCode",
+          "requestedPlanName",
+          "note",
+          "status",
+          "handledAt",
+          "handledNote",
+          "createdAt",
+          "updatedAt",
+          "tenant",
+          "currentPlanCode",
+          "requestedByEmail",
+          "handledBy"
+        ]
+      },
+      "HandleUpgradeRequestDto": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "handled",
+              "declined"
+            ],
+            "description": "`handled`: the platform admin took care of it (normally by activating the plan through the subscription routes). `declined`: no."
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
       "DataUse": {
         "type": "object",
         "properties": {
@@ -6006,6 +7135,11 @@
           "defaultLocale": {
             "type": "string",
             "example": "en"
+          },
+          "timezone": {
+            "type": "string",
+            "example": "Asia/Karachi",
+            "description": "IANA time zone of the workspace (J7)."
           }
         },
         "required": [
@@ -6014,7 +7148,8 @@
           "slug",
           "plan",
           "status",
-          "defaultLocale"
+          "defaultLocale",
+          "timezone"
         ]
       },
       "Me": {

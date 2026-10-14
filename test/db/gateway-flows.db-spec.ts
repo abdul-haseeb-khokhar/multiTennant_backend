@@ -477,9 +477,9 @@ describe('Gateway flows (real database, mock engine)', () => {
       const admin = bearer(login.body.access_token);
 
       await http()
-        .patch(`/v1/admin/tenants/${t.tenantId}`)
+        .post(`/v1/admin/tenants/${t.tenantId}/subscription/suspend`)
         .set('Authorization', admin)
-        .send({ status: 'suspended' })
+        .send({})
         .expect(200);
       const blocked = await session(key, visitor(31)).expect(200);
       expect(blocked.body).toMatchObject({
@@ -489,9 +489,9 @@ describe('Gateway flows (real database, mock engine)', () => {
       expect(blocked.body.token).toBeUndefined();
 
       await http()
-        .patch(`/v1/admin/tenants/${t.tenantId}`)
+        .post(`/v1/admin/tenants/${t.tenantId}/subscription/unsuspend`)
         .set('Authorization', admin)
-        .send({ status: 'active' })
+        .send({})
         .expect(200);
       expect((await session(key, visitor(31)).expect(200)).body.status).toBe(
         'ready',

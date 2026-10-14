@@ -26,6 +26,11 @@ model Tenant {
   plan          String   @default("free")
   status        String   @default("trial")
   defaultLocale String   @default("en") @map("default_locale")
+  // IANA time zone name (J7): working hours, the audit display and reminder wording use it; stored
+  // timestamps stay UTC.
+  timezone      String   @default("Asia/Karachi")
+  // When the slug was last renamed (J3): one rename per 30 days.
+  slugChangedAt DateTime? @map("slug_changed_at")
   createdAt     DateTime @default(now()) @map("created_at")
 
   tenantUsers          TenantUser[]
@@ -43,8 +48,58 @@ model Tenant {
   notifications        Notification[]
   engineEvents         EngineEvent[]
   streamTickets        StreamTicket[]
+  slugAliases          TenantSlugAlias[]
+  upgradeRequests      UpgradeRequest[]
 
   @@map("tenants")
+  @@schema("tenant_core")
+}
+
+/// An owner's request to move to another plan while payments are manual (J5). A platform admin
+/// handles it (activates the plan through the subscription routes, or declines). At most one
+/// request per tenant is pending (a partial unique index in the migration); asking again updates it.
+/// requested_by and handled_by are plain columns (no foreign key), like audit_logs.
+model UpgradeRequest {
+  id                String    @id @default(uuid())
+  tenantId          String    @map("tenant_id")
+  requestedPlanCode String    @map("requested_plan_code")
+  note              String?
+  // The tenant user who asked.
+  requestedBy       String    @map("requested_by")
+  // 'pending' | 'handled' | 'declined'
+  status            String    @default("pending")
+  // The platform admin who handled it, when, and their note.
+  handledBy         String?   @map("handled_by")
+  handledAt         DateTime? @map("handled_at")
+  handledNote       String?   @map("handled_note")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @default(now()) @updatedAt @map("updated_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+  plan   Plan   @relation(fields: [requestedPlanCode], references: [code])
+
+  @@index([tenantId, createdAt(sort: Desc)])
+  @@index([status, createdAt(sort: Desc)])
+  @@map("upgrade_requests")
+  @@schema("tenant_core")
+}
+
+/// A slug a tenant used to have (J3). For 30 days the old slug still resolves to the tenant at login
+/// (accepted_until); for 90 days nobody else can take it (reserved_until). Rows are never deleted by
+/// the application, only ignored once reserved_until has passed (or removed when the tenant takes
+/// the slug back).
+model TenantSlugAlias {
+  id            String   @id @default(uuid())
+  tenantId      String   @map("tenant_id")
+  slug          String   @unique
+  acceptedUntil DateTime @map("accepted_until")
+  reservedUntil DateTime @map("reserved_until")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId])
+  @@map("tenant_slug_aliases")
   @@schema("tenant_core")
 }
 
@@ -61,6 +116,9 @@ model TenantUser {
   emailVerifiedAt   DateTime? @map("email_verified_at")
   // Tokens issued before this instant are rejected (password reset).
   passwordChangedAt DateTime? @map("password_changed_at")
+  // Tokens issued before this instant are rejected (logout, J1). One timestamp per user, so a
+  // logout ends every session of that user.
+  tokensValidAfter  DateTime? @map("tokens_valid_after")
   // Dashboard language; null falls back to tenants.default_locale.
   locale            String?
   createdAt         DateTime  @default(now()) @map("created_at")
@@ -94,10 +152,12 @@ model EndCustomer {
 }
 
 model PlatformAdmin {
-  id           String   @id @default(uuid())
-  email        String   @unique
-  passwordHash String   @map("password_hash")
-  createdAt    DateTime @default(now()) @map("created_at")
+  id               String    @id @default(uuid())
+  email            String    @unique
+  passwordHash     String    @map("password_hash")
+  // Tokens issued before this instant are rejected (logout, J1).
+  tokensValidAfter DateTime? @map("tokens_valid_after")
+  createdAt        DateTime  @default(now()) @map("created_at")
 
   @@map("platform_admins")
   @@schema("tenant_core")
@@ -126,12 +186,19 @@ model StaffInvite {
 
 /// Self-service password reset (H2). Rows are removed with their user (ephemeral data).
 model PasswordReset {
-  id        String    @id @default(uuid())
-  userId    String    @map("user_id")
-  tokenHash String    @unique @map("token_hash")
-  expiresAt DateTime  @map("expires_at")
-  usedAt    DateTime? @map("used_at")
-  createdAt DateTime  @default(now()) @map("created_at")
+  id            String    @id @default(uuid())
+  userId        String    @map("user_id")
+  tokenHash     String    @unique @map("token_hash")
+  expiresAt     DateTime  @map("expires_at")
+  usedAt        DateTime? @map("used_at")
+  // The address the link was emailed to (J2). Confirming is refused if the user's email changed
+  // since, so a link in an old mailbox cannot reset a password that now belongs to someone else.
+  // Null on rows from before Phase 3C (no check).
+  email         String?
+  // J2: the link was requested by email alone and sets the new password on EVERY membership with
+  // that email (proof of the mailbox covers them all); false = this one workspace only.
+  allWorkspaces Boolean   @default(false) @map("all_workspaces")
+  createdAt     DateTime  @default(now()) @map("created_at")
 
   user TenantUser @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -209,7 +276,8 @@ model Plan {
   createdAt        DateTime @default(now()) @map("created_at")
   updatedAt        DateTime @default(now()) @updatedAt @map("updated_at")
 
-  subscriptions Subscription[]
+  subscriptions   Subscription[]
+  upgradeRequests UpgradeRequest[]
 
   @@map("plans")
   @@schema("tenant_core")

@@ -12,6 +12,7 @@ describe('SessionTokenService', () => {
       tenantId: 't1',
       role: 'agent',
       scope: 'tenant',
+      iatMs: expect.any(Number),
     });
   });
 });

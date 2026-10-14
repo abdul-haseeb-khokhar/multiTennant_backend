@@ -16,6 +16,12 @@ export const AuditAction = {
   USER_EMAIL_CHANGED: 'user.email_changed',
   USER_DELETED: 'user.deleted',
   PASSWORD_RESET: 'password.reset',
+  // upgrade requests (J5)
+  UPGRADE_REQUESTED: 'upgrade.requested',
+  UPGRADE_HANDLED: 'upgrade.handled',
+  AUTH_LOGOUT: 'auth.logout',
+  TENANT_UPDATED: 'tenant.updated',
+  TENANT_SLUG_CHANGED: 'tenant.slug_changed',
   TENANT_SUSPENDED: 'tenant.suspended',
   TENANT_REACTIVATED: 'tenant.reactivated',
   // billing (section I)

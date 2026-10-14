@@ -49,6 +49,12 @@ class MeTenant {
 
   @ApiProperty({ example: 'en' })
   defaultLocale: string;
+
+  @ApiProperty({
+    example: 'Asia/Karachi',
+    description: 'IANA time zone of the workspace (J7).',
+  })
+  timezone: string;
 }
 
 export class Me {

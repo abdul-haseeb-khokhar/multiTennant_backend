@@ -31,6 +31,51 @@ describe('RateLimiter', () => {
     expect(limiter.hit('k', 1, 60_000).allowed).toBe(true);
   });
 
+  describe('peek and reset (login throttling)', () => {
+    it('peek counts nothing: the limit is reached only by hits', () => {
+      const limiter = new RateLimiter();
+      for (let i = 0; i < 10; i++) {
+        expect(limiter.peek('k', 2).allowed).toBe(true);
+      }
+      limiter.hit('k', 2, 60_000);
+      expect(limiter.peek('k', 2).allowed).toBe(true);
+      limiter.hit('k', 2, 60_000);
+      expect(limiter.peek('k', 2)).toEqual({
+        allowed: false,
+        retryAfterSeconds: 60,
+      });
+    });
+
+    it('peek reports the time left, and allows again when the window has passed', () => {
+      const limiter = new RateLimiter();
+      limiter.hit('k', 1, 60_000);
+      jest.advanceTimersByTime(45_000);
+      expect(limiter.peek('k', 1)).toEqual({
+        allowed: false,
+        retryAfterSeconds: 15,
+      });
+      jest.advanceTimersByTime(15_001);
+      expect(limiter.peek('k', 1)).toEqual({
+        allowed: true,
+        retryAfterSeconds: 0,
+      });
+    });
+
+    it('an unknown key is allowed', () => {
+      expect(new RateLimiter().peek('nobody', 1).allowed).toBe(true);
+    });
+
+    it('reset forgets the counter of one key only', () => {
+      const limiter = new RateLimiter();
+      limiter.hit('a', 1, 60_000);
+      limiter.hit('b', 1, 60_000);
+      limiter.reset('a');
+      expect(limiter.peek('a', 1).allowed).toBe(true);
+      expect(limiter.peek('b', 1).allowed).toBe(false);
+      limiter.reset('never-seen');
+    });
+  });
+
   it('reports the remaining time of the window', () => {
     const limiter = new RateLimiter();
     limiter.hit('k', 1, 60_000);

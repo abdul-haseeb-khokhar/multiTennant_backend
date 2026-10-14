@@ -10,8 +10,8 @@ import { OptionalLocaleProperty } from '../../common/validation/locale';
 
 /**
  * Platform-admin only (`/v1/admin/tenants`). Tenants are created through signup, never through
- * this API. `plan` and `status` are kept for compatibility but no longer write the tenant
- * columns: they are translated into subscription events (see TenantsService.update). Use
+ * this API. `plan` and `status` are still declared so a client that sends them gets a clear
+ * 400 `USE_SUBSCRIPTION_ROUTES` (J5) instead of having them silently ignored; use
  * `/v1/admin/tenants/:id/subscription` for billing.
  */
 export class UpdateTenantDto {
@@ -26,7 +26,7 @@ export class UpdateTenantDto {
     enum: ['starter', 'free', 'pro', 'enterprise'],
     deprecated: true,
     description:
-      'Deprecated: same as POST /admin/tenants/:id/subscription/change-plan with no payment (a paid plan gets one interval, no invoice).',
+      'REMOVED (J5): sending it answers 400 `USE_SUBSCRIPTION_ROUTES`. Use POST /admin/tenants/:id/subscription/change-plan or activate.',
   })
   @IsOptional()
   @IsIn(['starter', 'free', 'pro', 'enterprise'])
@@ -36,7 +36,7 @@ export class UpdateTenantDto {
     enum: ['trial', 'active', 'suspended'],
     deprecated: true,
     description:
-      '`suspended` suspends the tenant; `active` or `trial` lifts a suspension (it returns to the state it had). Nothing else changes: the real state is the subscription.',
+      'REMOVED (J5): sending it answers 400 `USE_SUBSCRIPTION_ROUTES`. Use POST /admin/tenants/:id/subscription/suspend or unsuspend.',
   })
   @IsOptional()
   @IsIn(['trial', 'active', 'suspended'])

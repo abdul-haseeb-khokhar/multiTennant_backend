@@ -102,6 +102,15 @@ export class EnvironmentVariables {
   @IsEmail()
   MAIL_REDIRECT_TO?: string;
 
+  /**
+   * Where the platform's own notifications go (J5): today an email when a tenant owner asks for a
+   * plan upgrade. Optional; when unset the request is only stored. In the Resend test stage
+   * MAIL_REDIRECT_TO still sends the message to the redirect address instead.
+   */
+  @IsOptional()
+  @IsEmail()
+  PLATFORM_ADMIN_NOTIFY_EMAIL?: string;
+
   /** Time allowed per attempt when calling the mail provider (default 5000 ms; one retry follows a network error or a 5xx). */
   @IsOptional()
   @Type(() => Number)
@@ -208,11 +217,12 @@ const MAIL_OPTIONAL_TEXT = [
   'MAIL_FROM_NAME',
   'MAIL_REDIRECT_TO',
   'RESEND_API_URL',
+  'PLATFORM_ADMIN_NOTIFY_EMAIL',
 ];
 
 /** Used by `ConfigModule.forRoot({ validate })`: the app refuses to start on a bad environment. */
 export function validateEnv(rawConfig: Record<string, unknown>) {
-  // `MAIL_REDIRECT_TO=` left empty in .env means "not set", not "an invalid address".
+  // `MAIL_REDIRECT_TO=` (or PLATFORM_ADMIN_NOTIFY_EMAIL=) left empty in .env means "not set", not "an invalid address".
   const config = { ...rawConfig };
   for (const name of MAIL_OPTIONAL_TEXT) {
     if (config[name] === '') delete config[name];

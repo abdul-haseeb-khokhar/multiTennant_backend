@@ -55,12 +55,14 @@ Principles:
 ### 4.1 `tenant_core` (backend). Exists today
 | Table | Columns | Notes |
 |---|---|---|
-| `tenants` | id, name, slug (unique), plan (`free`/`pro`/`enterprise`), status (`trial`/`active`/`suspended`), default_locale, created_at | |
-| `platform_admins` | id, email (unique), password_hash, created_at | our own staff; created with `npm run platform-admin:create` |
-| `tenant_user` | id, tenant_id, email (lower-case, CHECK constraint), name?, password_hash, role (`owner`/`admin`/`agent`), status (`active`/`disabled`), email_verified_at?, password_changed_at?, locale?, created_at | unique (tenant_id, email), FK RESTRICT |
+| `tenants` | id, name, slug (unique), plan (`free`/`pro`/`enterprise`), status (`trial`/`active`/`suspended`), default_locale, timezone (IANA name, default `Asia/Karachi`, J7), slug_changed_at?, created_at | the owner edits name, language, time zone and slug through `PATCH /v1/tenants/:tenantId` (J3) |
+| `tenant_slug_aliases` | id, tenant_id, slug (unique), accepted_until, reserved_until, created_at | slugs a tenant gave up (J3): accepted at login for 30 days, reserved for 90; **built (Phase 3C)** |
+| `upgrade_requests` | id, tenant_id, requested_plan_code, note?, requested_by, status (`pending`/`handled`/`declined`), handled_by?, handled_at?, handled_note?, created_at, updated_at | the owner's request for a plan while payments are manual (J5); at most one pending per tenant (partial unique index); `requested_by` and `handled_by` have no FK; **built (Phase 3C)** |
+| `platform_admins` | id, email (unique), password_hash, tokens_valid_after?, created_at | our own staff; created with `npm run platform-admin:create` |
+| `tenant_user` | id, tenant_id, email (lower-case, CHECK constraint), name?, password_hash, role (`owner`/`admin`/`agent`), status (`active`/`disabled`), email_verified_at?, password_changed_at?, tokens_valid_after? (logout, J1), locale?, created_at | unique (tenant_id, email), FK RESTRICT |
 | `end_customers` | id, tenant_id, external_id, name?, locale?, metadata jsonb?, created_at | unique (tenant_id, external_id), FK RESTRICT |
 | `staff_invites` | id, tenant_id, email, role, token_hash (unique), expires_at (7 days), invited_by?, accepted_at?, revoked_at?, created_at | invitation flow (H1); `invited_by` has no FK |
-| `password_resets` | id, user_id, token_hash (unique), expires_at (1 hour), used_at?, created_at | self-service reset (H2); removed with the user (cascade) |
+| `password_resets` | id, user_id, token_hash (unique), expires_at (1 hour), used_at?, email? (the address the link was sent to), all_workspaces (J2), created_at | self-service reset (H2); removed with the user (cascade) |
 | `email_verifications` | id, user_id, token_hash (unique), expires_at (24 hours), used_at?, created_at | email verification (H4); removed with the user (cascade) |
 | `audit_logs` | id, tenant_id, actor_user_id?, actor_role?, action, target_type?, target_id?, before jsonb?, after jsonb?, ip?, user_agent?, request_id?, created_at | append-only (a trigger refuses UPDATE/DELETE); `actor_user_id` has no FK and holds a `platform_admins` id when `actor_role` is `platform_admin` (H6) |
 
@@ -102,6 +104,8 @@ Details and reasoning are in [team-alignment.md](team-alignment.md) (C and E sec
 
 ### 5.1 Staff sign-up and login (exists)
 `POST /v1/auth/signup` creates tenant plus owner in one transaction (the tenant `slug` is the caller's or derived from the name) and returns a JWT. `POST /v1/auth/login` takes `tenantSlug`, email and password and returns a JWT with `sub`, `tenantId`, `role`, `scope: "tenant"`. Tenant-scoped routes are `/v1/tenants/:tenantId/...` and the guard rejects a token whose `tenantId` differs from the URL (403 `TENANT_MISMATCH`) or whose tenant is suspended (403 `TENANT_SUSPENDED`). Platform admins log in at `POST /v1/admin/auth/login` and get a token with `scope: "platform"` for `/v1/admin/...`.
+
+**Phase 3C (built):** *Email-first login (J2).* `POST /v1/auth/login-email {email, password}` checks the password against the memberships of that email (exactly 3 bcrypt comparisons per request, distinct hashes first) and returns the workspaces whose password matched, `unmatchedCount`, and a 10-minute `selectionToken` (`scope: "workspace-select"`, a secret derived from `JWT_SECRET`, user ids only); with exactly one available workspace it also returns the `access_token`. `POST /v1/auth/select-workspace {selectionToken, tenantId}` re-checks the user, the workspace and J1 and returns the normal access token; the same token can open another listed workspace until it expires. `POST /v1/auth/login` (slug) stays. Both are throttled in process memory (60 requests a minute per IP; 5 wrong passwords per email and IP and 30 per IP in 15 minutes; 429 with `Retry-After`). *Logout (J1).* `POST /v1/auth/logout` and `POST /v1/admin/auth/logout` stamp `tokens_valid_after`; every token issued before it (tokens carry `iatMs`, milliseconds) is refused, so a logout ends all sessions of that user and a login right after it works. *Password reset (J2).* `POST /v1/auth/password-reset/request {email}` (slug optional) sends one link; confirming sets one new hash on every membership with that email and ends their sessions. *Workspace address (J3).* `GET /v1/auth/slug-available?slug=` and the owner's rename (`PATCH /v1/tenants/:tenantId`): the old slug stays an alias (login 30 days, reserved 90), at most one rename every 30 days. *Upgrade request (J5).* The owner posts `…/billing/upgrade-request`; a platform admin is emailed (`PLATFORM_ADMIN_NOTIFY_EMAIL`), lists the requests at `/v1/admin/upgrade-requests`, activates the plan through the subscription routes and marks the request handled.
 
 ### 5.2 Customer chat from the widget (**Built in Phase 3 against the mock engine; the real engine is not connected yet**)
 1. The widget loads with the tenant's public `widgetKey` and a locally stored `visitorId`.
@@ -149,16 +153,17 @@ Event-driven rows are created in the event's transaction. Billing reminders are 
 
 | Module | Routes | Auth |
 |---|---|---|
-| `auth` | `POST /v1/auth/signup`, `POST /v1/auth/login`, `POST /v1/admin/auth/login`, `POST /v1/auth/password-reset/request` and `/confirm`, `POST /v1/auth/verify-email`, `GET /v1/auth/invites/preview?token=` (rate limited), `POST /v1/auth/invites/accept` | public |
-| `auth` (signed in) | `POST /v1/auth/verify-email/resend` | staff JWT |
+| `auth` | `POST /v1/auth/signup`, `POST /v1/auth/login`, `POST /v1/auth/login-email`, `POST /v1/auth/select-workspace`, `GET /v1/auth/slug-available?slug=` (rate limited), `POST /v1/admin/auth/login`, `POST /v1/auth/password-reset/request` (`{email}`, slug optional) and `/confirm`, `POST /v1/auth/verify-email`, `GET /v1/auth/invites/preview?token=` (rate limited), `POST /v1/auth/invites/accept` | public |
+| `auth` (signed in) | `POST /v1/auth/verify-email/resend`, `POST /v1/auth/logout` (J1; works while the workspace is suspended), `POST /v1/admin/auth/logout` (platform token) | staff JWT / platform token |
+| `tenants` (own workspace) | `GET /v1/tenants/:tenantId` (all roles), `PATCH /v1/tenants/:tenantId` (owner: name, defaultLocale, timezone, slug; J3, J7) | JWT + tenant match |
 | `me` | `GET/PATCH /v1/me` | staff JWT (any role) |
 | `invites` | `POST/GET /v1/tenants/:tenantId/invites`, `DELETE …/:id` | JWT + tenant match + owner/admin (create also needs a verified email) |
 | `audit` | `GET /v1/tenants/:tenantId/audit-logs` | JWT + tenant match + owner/admin |
 | `i18n` | `GET /v1/i18n/locales`, `GET /v1/i18n/:locale/:namespace` | public, cacheable |
-| `tenants` | `GET /v1/admin/tenants`, `GET/PATCH/DELETE /v1/admin/tenants/:id` (no create: signup is the only way in) | platform-admin token |
+| `tenants` (platform) | `GET /v1/admin/tenants`, `GET/PATCH/DELETE /v1/admin/tenants/:id` (no create: signup is the only way in; PATCH takes name and defaultLocale, `plan`/`status` answer 400 `USE_SUBSCRIPTION_ROUTES`) | platform-admin token |
 | `tenant-users` | `GET /v1/tenants/:tenantId/users`, `GET/PATCH/DELETE …/:id` (people join by invite, so no create) | JWT + tenant match + role (B2) |
 | `end-customers` | CRUD `/v1/tenants/:tenantId/customers` | JWT + tenant match + role (B2) |
-| `billing` | `GET /v1/plans` (public), `GET /v1/tenants/:tenantId/billing` (plan, usage, overage figures, invoices), `PATCH /v1/tenants/:tenantId/billing/settings` (`{overageEnabled}`, owner only), `/v1/admin/tenants/:id/subscription` (+ `activate`, `record-payment` with optional `overageCount`/`overageAmountMinor`, `extend`, `change-plan`, `cancel`) | public / JWT owner+admin (settings: owner) / platform-admin token |
+| `billing` | `GET /v1/plans` (public), `GET /v1/tenants/:tenantId/billing` (plan, usage, overage figures, invoices), `PATCH /v1/tenants/:tenantId/billing/settings` (`{overageEnabled}`, owner only), `/v1/admin/tenants/:id/subscription` (+ `activate`, `record-payment` with optional `overageCount`/`overageAmountMinor`, `extend`, `change-plan`, `cancel`, and since Phase 3C `suspend` / `unsuspend`), `POST/GET /v1/tenants/:tenantId/billing/upgrade-request` (owner asks, owner and admin read), `GET /v1/admin/upgrade-requests` and `POST /v1/admin/upgrade-requests/:id/handle` | public / JWT owner+admin (settings and the request: owner) / platform-admin token |
 | `data-use` | `GET/PUT /v1/tenants/:tenantId/data-use` (model-training consent, default off) | JWT + tenant match + owner |
 | `api-keys` | `POST/GET /v1/tenants/:tenantId/api-keys`, `GET/PATCH/DELETE …/:id` (Phase 3) | JWT + tenant match + owner/admin |
 | `widget` | `POST /v1/widget/sessions` (public: widget key + Origin), `POST /v1/widget/messages` (SSE), `GET /v1/widget/conversation`, `GET /v1/widget/events` (SSE, Phase 4) | widget token (a staff or platform token is refused) + key + Origin |
@@ -186,6 +191,7 @@ Full plan with scope checklists, dependencies and exit criteria: [backend-roadma
 | 7 | Human-agent productivity: routing, SLAs, notes, transfer (deferred) |
 | 8 | Production hardening and launch |
 | 2B | Billing foundation: plans, Starter→Free, entitlements, manual payments (section I) |
+| 3C | Account decisions: logout, email-first login, owner self-service and slug rename, upgrade request, time zone (J1 to J5, J7) |
 | 9 | Payment provider integration |
 
 ## 8. Out of scope for now

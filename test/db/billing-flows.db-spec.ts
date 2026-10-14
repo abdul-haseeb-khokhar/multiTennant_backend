@@ -386,9 +386,9 @@ describe('Billing flows (real database)', () => {
     it('a suspended tenant is locked out, cannot be billed, and returns to its previous state when lifted', async () => {
       const t = await signup('Suspend');
       await http()
-        .patch(`/v1/admin/tenants/${t.tenantId}`)
+        .post(`/v1/admin/tenants/${t.tenantId}/subscription/suspend`)
         .set('Authorization', bearer(adminToken))
-        .send({ status: 'suspended' })
+        .send({})
         .expect(200);
       const locked = await http()
         .get('/v1/me')
@@ -401,9 +401,9 @@ describe('Billing flows (real database)', () => {
       expect(refused.body.code).toBe('INVALID_SUBSCRIPTION_STATE');
 
       await http()
-        .patch(`/v1/admin/tenants/${t.tenantId}`)
+        .post(`/v1/admin/tenants/${t.tenantId}/subscription/unsuspend`)
         .set('Authorization', bearer(adminToken))
-        .send({ status: 'active' })
+        .send({})
         .expect(200);
       const me = await meOf(t);
       expect(me.subscription).toMatchObject({

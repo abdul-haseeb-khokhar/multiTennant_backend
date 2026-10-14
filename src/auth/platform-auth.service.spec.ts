@@ -42,7 +42,7 @@ describe('PlatformAuthService', () => {
       service.login({ email: 'ops@example.com', password: 'password123' }),
     ).resolves.toEqual({ access_token: 'platform.jwt' });
     expect(jwt.sign).toHaveBeenCalledWith(
-      { sub: 'admin-1', scope: 'platform' },
+      { sub: 'admin-1', scope: 'platform', iatMs: expect.any(Number) },
       { expiresIn: '1h' },
     );
   });
@@ -67,5 +67,14 @@ describe('PlatformAuthService', () => {
       response: { code: 'INVALID_CREDENTIALS' },
     });
     expect(jwt.sign).not.toHaveBeenCalled();
+  });
+
+  it('logout stamps tokensValidAfter on the admin (J1)', async () => {
+    prisma.platformAdmin.update.mockResolvedValue({});
+    await service.logout('admin-1');
+    expect(prisma.platformAdmin.update).toHaveBeenCalledWith({
+      where: { id: 'admin-1' },
+      data: { tokensValidAfter: expect.any(Date) },
+    });
   });
 });

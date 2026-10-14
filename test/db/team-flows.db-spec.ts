@@ -594,7 +594,7 @@ describe('Team management flows (real database)', () => {
       expect([403, 409]).toContain(statuses[1]);
     });
 
-    it('the only owner cannot be demoted, disabled or deleted', async () => {
+    it('the only owner cannot demote, disable or delete themselves (J4: CANNOT_MODIFY_SELF comes first; the last-owner rule needs a second owner to act, which the race test below does)', async () => {
       const solo = await signup('Soloowner', `solo.${run}@x.com`);
       for (const call of [
         () =>
@@ -610,9 +610,13 @@ describe('Team management flows (real database)', () => {
       ]) {
         const res = await call()
           .set('Authorization', bearer(solo.token))
-          .expect(409);
-        expect(res.body.code).toBe('LAST_OWNER');
+          .expect(403);
+        expect(res.body.code).toBe('CANNOT_MODIFY_SELF');
       }
+      const stillThere = await prisma.tenantUser.findUniqueOrThrow({
+        where: { id: solo.ownerId },
+      });
+      expect(stillThere).toMatchObject({ role: 'owner', status: 'active' });
     });
   });
 
@@ -676,9 +680,9 @@ describe('Team management flows (real database)', () => {
       const adminToken = adminLogin.body.access_token;
 
       await http()
-        .patch(`/v1/admin/tenants/${tenant.tenantId}`)
+        .post(`/v1/admin/tenants/${tenant.tenantId}/subscription/suspend`)
         .set('Authorization', bearer(adminToken))
-        .send({ status: 'suspended' })
+        .send({})
         .expect(200);
 
       const locked = await http()
@@ -688,9 +692,9 @@ describe('Team management flows (real database)', () => {
       expect(locked.body.code).toBe('TENANT_SUSPENDED');
 
       await http()
-        .patch(`/v1/admin/tenants/${tenant.tenantId}`)
+        .post(`/v1/admin/tenants/${tenant.tenantId}/subscription/unsuspend`)
         .set('Authorization', bearer(adminToken))
-        .send({ status: 'active' })
+        .send({})
         .expect(200);
 
       const audit = await http()

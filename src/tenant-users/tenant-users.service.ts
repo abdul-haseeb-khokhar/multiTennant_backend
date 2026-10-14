@@ -2,7 +2,7 @@ import { HttpStatus, Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { AuditAction, AuditService } from '../audit/audit.service';
 import { EmailVerificationService } from '../auth/email-verification.service';
-import { AuthUser } from '../auth/roles';
+import { AuthUser, ROLES } from '../auth/roles';
 import { EntitlementsService } from '../billing/entitlements/entitlements.service';
 import { ConversationsService } from '../conversations/conversations.service';
 import { ApiException } from '../common/errors/api.exception';
@@ -17,12 +17,21 @@ import { UpdateTenantUserDto } from './dto/update-tenant-user.dto';
 
 const MAX_SERIALIZATION_ATTEMPTS = 3;
 
+/** Higher is more powerful: owner 2, admin 1, agent 0 (an unknown role ranks below all of them). */
+const rank = (role: string) => {
+  const index = ROLES.indexOf(role as never);
+  return index === -1 ? -1 : ROLES.length - 1 - index;
+};
+
 /**
  * Every method takes `tenantId` first and puts it in each query's `where`. `actor` is the staff
  * member making the change; it drives the owner rules from the role matrix (B2): only an owner
  * may change, disable or delete an owner or promote someone to owner, and a tenant never loses
  * its last active owner. People join through invitations (`InvitesService`), so there is no
  * create here, and nobody can set another person's password.
+ *
+ * Nobody can disable, demote or delete themselves (J4, `CANNOT_MODIFY_SELF`): another owner or admin
+ * does it. The last-owner rule stays on top of that.
  *
  * Changes that depend on a count (the last-owner rule) run in a serializable transaction, so two
  * simultaneous owner removals cannot both pass the check. Role and status changes also write
@@ -71,6 +80,9 @@ export class TenantUsersService {
     actor: AuthUser,
   ) {
     const email = dto.email ? normalizeEmail(dto.email) : undefined;
+    if (id === actor.userId && dto.status === 'disabled') {
+      throw this.cannotModifySelf();
+    }
     let emailChanged: { id: string; email: string; locale: string } | undefined;
     let becameDisabled = false;
 
@@ -82,6 +94,13 @@ export class TenantUsersService {
         });
         if (!existing) {
           throw this.notFound(id);
+        }
+        if (
+          id === actor.userId &&
+          dto.role !== undefined &&
+          rank(dto.role) < rank(existing.role)
+        ) {
+          throw this.cannotModifySelf();
         }
         if (existing.role === 'owner' || dto.role === 'owner') {
           this.requireOwner(actor);
@@ -200,6 +219,9 @@ export class TenantUsersService {
   }
 
   async remove(tenantId: string, id: string, actor: AuthUser) {
+    if (id === actor.userId) {
+      throw this.cannotModifySelf();
+    }
     try {
       const removed = await this.serializable(async (tx) => {
         const existing = await tx.tenantUser.findFirst({
@@ -276,6 +298,14 @@ export class TenantUsersService {
         }
       }
     }
+  }
+
+  private cannotModifySelf() {
+    return new ApiException(
+      HttpStatus.FORBIDDEN,
+      ErrorCode.CANNOT_MODIFY_SELF,
+      'You cannot disable, demote or delete your own account',
+    );
   }
 
   private requireOwner(actor: AuthUser) {

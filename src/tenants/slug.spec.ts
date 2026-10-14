@@ -1,4 +1,11 @@
-import { isReservedSlug, SLUG_PATTERN, slugify, withSuffix } from './slug';
+import {
+  isReservedSlug,
+  MAX_SLUG_LENGTH,
+  SLUG_PATTERN,
+  slugify,
+  suggestionCandidates,
+  withSuffix,
+} from './slug';
 
 describe('slug', () => {
   describe('slugify', () => {
@@ -45,5 +52,43 @@ describe('slug', () => {
     expect(slug.length).toBeLessThanOrEqual(40);
     expect(slug).toMatch(SLUG_PATTERN);
     expect(withSuffix('acme')).toMatch(/^acme-[0-9a-f]{6}$/);
+  });
+
+  describe('suggestionCandidates', () => {
+    it('proposes numbered and descriptive variants of a taken slug', () => {
+      expect(suggestionCandidates('acme-support')).toEqual([
+        'acme-support-2',
+        'acme-support-3',
+        'acme-support-support',
+        'acme-support-team',
+        'acme-support-hq',
+      ]);
+    });
+
+    it('puts the cleaned form of what was typed first', () => {
+      expect(suggestionCandidates('Acme Support!')[0]).toBe('acme-support');
+    });
+
+    it('every candidate is a valid, non-reserved slug within 40 characters, even for a maximal base', () => {
+      for (const wanted of [
+        'x'.repeat(40),
+        'a-'.repeat(19) + 'ab',
+        'admin',
+        '!!!',
+      ]) {
+        const candidates = suggestionCandidates(wanted);
+        expect(candidates.length).toBeGreaterThan(0);
+        for (const candidate of candidates) {
+          expect(candidate).toMatch(SLUG_PATTERN);
+          expect(candidate.length).toBeLessThanOrEqual(MAX_SLUG_LENGTH);
+          expect(isReservedSlug(candidate)).toBe(false);
+        }
+      }
+    });
+
+    it('has no duplicates', () => {
+      const candidates = suggestionCandidates('workspace');
+      expect(new Set(candidates).size).toBe(candidates.length);
+    });
   });
 });

@@ -273,6 +273,49 @@ describe('validateEnv mail provider (H3, Phase 4C)', () => {
     ).toMatchObject({ MAIL_PROVIDER: 'console' });
   });
 
+  describe('PLATFORM_ADMIN_NOTIFY_EMAIL (J5)', () => {
+    it('is optional: unset and empty both mean "only store the upgrade request"', () => {
+      expect(validateEnv(valid).PLATFORM_ADMIN_NOTIFY_EMAIL).toBeUndefined();
+      expect(
+        validateEnv({ ...valid, PLATFORM_ADMIN_NOTIFY_EMAIL: '' })
+          .PLATFORM_ADMIN_NOTIFY_EMAIL,
+      ).toBeUndefined();
+    });
+
+    it('accepts an email address, also in production (it is a real setting, not a test seam)', () => {
+      expect(
+        validateEnv({
+          ...valid,
+          PLATFORM_ADMIN_NOTIFY_EMAIL: 'ops@example.com',
+        }).PLATFORM_ADMIN_NOTIFY_EMAIL,
+      ).toBe('ops@example.com');
+      expect(() =>
+        validateEnv({
+          ...valid,
+          NODE_ENV: 'production',
+          FRONTEND_URL: 'https://app.example.com',
+          ...engine,
+          ...mailProd,
+          PLATFORM_ADMIN_NOTIFY_EMAIL: 'ops@example.com',
+        }),
+      ).not.toThrow();
+    });
+
+    it('refuses something that is not an address, naming the setting but never printing the value', () => {
+      let message = '';
+      try {
+        validateEnv({
+          ...valid,
+          PLATFORM_ADMIN_NOTIFY_EMAIL: 'not-an-address',
+        });
+      } catch (error) {
+        message = (error as Error).message;
+      }
+      expect(message).toMatch(/PLATFORM_ADMIN_NOTIFY_EMAIL/);
+      expect(message).not.toContain('not-an-address');
+    });
+  });
+
   it.each([
     ['an address that is not an email', { MAIL_FROM: 'nope' }],
     ['a redirect that is not an email', { MAIL_REDIRECT_TO: 'nope' }],

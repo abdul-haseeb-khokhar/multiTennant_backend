@@ -540,6 +540,96 @@ describe('TenantUsersService', () => {
     });
   });
 
+  describe('nobody disables, demotes or deletes themselves (J4)', () => {
+    const SELF = 'o1'; // the owner actor's own id
+
+    const refused = { status: 403, response: { code: 'CANNOT_MODIFY_SELF' } };
+
+    it('an owner cannot disable themselves, even with another owner around, and nothing is read or written', async () => {
+      await expect(
+        service.update('tenant-a', SELF, { status: 'disabled' }, owner),
+      ).rejects.toMatchObject(refused);
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+      expect(prisma.tenantUser.update).not.toHaveBeenCalled();
+      expect(audit.record).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['an owner to admin', owner, 'owner', 'admin'],
+      ['an owner to agent', owner, 'owner', 'agent'],
+      ['an admin to agent', admin, 'admin', 'agent'],
+    ])('nobody demotes themselves: %s', async (_name, actor, current, next) => {
+      prisma.tenantUser.findFirst.mockResolvedValue(
+        row({ id: actor.userId, role: current }),
+      );
+      prisma.tenantUser.count.mockResolvedValue(3); // plenty of other owners: not the last-owner rule
+      await expect(
+        service.update(
+          'tenant-a',
+          actor.userId,
+          { role: next as never },
+          actor,
+        ),
+      ).rejects.toMatchObject(refused);
+      expect(prisma.tenantUser.update).not.toHaveBeenCalled();
+    });
+
+    it('nobody deletes themselves, with no database access at all', async () => {
+      await expect(
+        service.remove('tenant-a', SELF, owner),
+      ).rejects.toMatchObject(refused);
+      await expect(
+        service.remove('tenant-a', 'a1', admin),
+      ).rejects.toMatchObject(refused);
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+      expect(prisma.tenantUser.delete).not.toHaveBeenCalled();
+    });
+
+    it('the sole owner who tries it gets the self rule, and the last-owner rule still holds for others', async () => {
+      prisma.tenantUser.findFirst.mockResolvedValue(row({ role: 'owner' }));
+      prisma.tenantUser.count.mockResolvedValue(0);
+      await expect(
+        service.update('tenant-a', 'u1', { status: 'disabled' }, owner),
+      ).rejects.toMatchObject({
+        status: 409,
+        response: { code: 'LAST_OWNER' },
+      });
+    });
+
+    it('everything else about oneself stays possible: keeping the role, changing the email, staying active', async () => {
+      prisma.tenantUser.findFirst.mockResolvedValue(
+        row({ id: SELF, role: 'owner' }),
+      );
+      prisma.tenantUser.update.mockResolvedValue(
+        row({ id: SELF, role: 'owner' }),
+      );
+      await expect(
+        service.update(
+          'tenant-a',
+          SELF,
+          { role: 'owner', status: 'active' },
+          owner,
+        ),
+      ).resolves.toBeDefined();
+    });
+
+    it('others are unaffected: an owner may demote, disable and delete a colleague', async () => {
+      prisma.tenantUser.findFirst.mockResolvedValue(
+        row({ id: 'a2', role: 'admin' }),
+      );
+      prisma.tenantUser.update.mockResolvedValue(
+        row({ id: 'a2', role: 'agent' }),
+      );
+      await expect(
+        service.update('tenant-a', 'a2', { role: 'agent' }, owner),
+      ).resolves.toBeDefined();
+      prisma.tenantUser.delete.mockResolvedValue(row({ id: 'a2' }));
+      await expect(
+        service.remove('tenant-a', 'a2', owner),
+      ).resolves.toBeDefined();
+    });
+  });
+
   describe('remove', () => {
     it('REGRESSION: takes (tenantId, id) and deletes that user instead of always answering 404', async () => {
       prisma.tenantUser.findFirst.mockResolvedValue(row());

@@ -42,6 +42,9 @@ describe('Auth (e2e)', () => {
 
     beforeEach(() => {
       billing = installBilling(prisma, clock, { subscription: null });
+      // No slug is taken or reserved (SlugService looks at both tables, J3).
+      prisma.tenant.findMany.mockResolvedValue([]);
+      prisma.tenantSlugAlias.findMany.mockResolvedValue([]);
       prisma.tenant.create.mockImplementation(({ data }) =>
         Promise.resolve({ id: 't1', plan: 'free', status: 'trial', ...data }),
       );

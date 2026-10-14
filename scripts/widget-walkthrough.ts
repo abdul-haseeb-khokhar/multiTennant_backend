@@ -224,10 +224,11 @@ async function main() {
   );
 
   step('8. Suspended tenant: blocked state, no token');
-  const suspend = await api('PATCH', `/v1/admin/tenants/${tenantId}`, {
-    token: admin,
-    body: { status: 'suspended' },
-  });
+  const suspend = await api(
+    'POST',
+    `/v1/admin/tenants/${tenantId}/subscription/suspend`,
+    { token: admin, body: {} },
+  );
   check(suspend.status === 200, 'tenant suspended');
   const blocked = await start(visitor(5));
   check(
@@ -237,9 +238,9 @@ async function main() {
     'session -> blocked, no token',
   );
   console.log(`fallback: ${blocked.json.fallback.message}`);
-  await api('PATCH', `/v1/admin/tenants/${tenantId}`, {
+  await api('POST', `/v1/admin/tenants/${tenantId}/subscription/unsuspend`, {
     token: admin,
-    body: { status: 'active' },
+    body: {},
   });
 
   console.log('\nWalkthrough complete.');
