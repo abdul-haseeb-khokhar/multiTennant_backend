@@ -10,17 +10,22 @@ Size: **S** ≈ days · **M** ≈ 1–2 weeks · **L** ≈ 2+ weeks (rough, solo
 |---|---|---|---|---|
 | 0 | Foundation and hardening | M | nothing | FE (OpenAPI, stable errors/pagination) |
 | 1 | Account and team management | M | nothing (H3 mail provider can follow) | FE (auth, invite, audit, language screens) |
-| 2 | Shared infrastructure and engine contract | S–M | AI: A1–A6, D2, schema requests | everything that talks to the engine |
+| 2 | Shared infrastructure and engine contract (continued as **5C**) | S–M | AI: A1–A6, D2, schema requests | everything that talks to the engine |
 | 2B | Billing foundation (plans, subscriptions, entitlements, manual payments) | M | nothing (can run beside 2); **built**, reminders wait for H5 | Phase 3 enforcement, FE billing screens |
 | 3 | Gateway and widget entry (**built**, mock engine only; widget work **frozen**, L2) | M | AI: B5, D1–D3, engine create/message API; Phase 2B | FE widget, first end-to-end chat |
 | 3B | Frontend gap-report fixes (confirmed defects, section J of team-alignment) | S | nothing; decisions J1–J8 from Abdul | FE (correct, safe API) |
-| 4 | Human-agent flow and notifications | L | AI: C1–C4, D5, D6 | FE dashboard conversations |
+| 4 | Human-agent flow and notifications (**built**; staff chat features **halted**, L2) | L | AI: C1–C4, D5, D6 | FE dashboard conversations |
 | 4C | Mail provider: Resend, test mode (H3, decided) | S | Resend account and API key from Abdul | invites, resets and verification reach a real inbox |
 | 4B | Pro overage setting and optional spending cap (J6, decided) | S | nothing; follows Phase 4 | FE billing switch |
 | 3C | Account decisions: logout and revocation, email-first login, owner self-service and slug rename, upgrade request, time zone (J1, J2, J3, J4, J5, J7; J8 deferred) (**built**) | M | nothing | FE (logout, two-step login, settings, upgrade request) |
-| 5 | **Voice-first backend core** (reshaped 2026-10-21): tenant status check, requests workflow, phone numbers, call usage, settings and knowledge | L | AI: M1, M3 answers | phone agent can serve a business |
-| 6 | Telephony go-live (Twilio, tickets, consent); WhatsApp deferred | L | AI: D4, E5; Twilio account | real phone calls |
-| 7 | Human-agent productivity (deferred) | M | product decision | team efficiency |
+| 5A | Voice-first alignment: plans with call minutes, overage for minutes, contracts, timeouts, docs, mock voice | S–M | Abdul: minute numbers (placeholders ok), answers to M3 | everything below |
+| 5B | Engine essentials: tenant status check and the requests workflow | L | AI: confirm request shape and event names | staff can confirm what the agent takes |
+| 5C | Real-engine integration, first slice | M | AI: Q1–Q5 tested, his build steps 1–3 done | proof that the contract works |
+| 5D | Phone numbers and call tickets | L | AI: ticket design, public voice endpoint; Twilio account | a dialled number reaches the right business |
+| 5E | Call usage, billing and call history | M | AI: usage-event shape | minutes counted, limited and shown |
+| 5F | Agent settings and knowledge | L | Abdul: ownership and storage decisions; AI | business teaches and configures the agent |
+| 6 | Telephony go-live (numbers, consent, SMS confirmation) | L | Twilio account, legal wording | real phone calls for real customers |
+| 7 | Deferred: chat and widget (halted), WhatsApp, agent productivity, calendar, translation keys, spending cap | – | product decisions | – |
 | 8 | Production hardening and launch | L | all above | go-live |
 | 9 | Payment provider integration | M | provider chosen; company/bank account set up | self-serve card payments |
 
@@ -68,6 +73,8 @@ Depends on: Phase 0. Decision needed: H3 (mail provider; everything else is buil
 **Done when:** an owner can invite an agent who sets their own password, reset flows work end to end, role changes appear in the audit log, and the frontend can load `en` and `ur`. (All four are covered by `test/db/team-flows.db-spec.ts`; only the real mail provider is outstanding.)
 
 ## Phase 2: Shared infrastructure and engine contract
+**Status 2026-10-21:** not started; its database and contract work is now scheduled as Phase 5C (real-engine integration), after Abdullah answered Q1 to Q5 (team-alignment M1) and tests the two-migration-history scenario.
+
 **Goal:** both services run on one database and agree on the contract.
 
 Scope:
@@ -256,44 +263,110 @@ Decisions the docs did not settle (taken in Phase 3C; change them in code if you
 - **Time zone** is validated against the runtime's tz database through `Intl` (aliases such as `asia/karachi` are accepted and stored in the canonical spelling; UTC offsets such as `+05:00` are refused).
 - **Admin PATCH:** `plan`/`status` are refused with 400 `USE_SUBSCRIPTION_ROUTES` instead of being ignored silently; the admin PATCH still takes `name` and `defaultLocale` only.
 
-## Phase 5: Voice-first backend core (reshaped 2026-10-21)
-**Goal:** a business can be served by the phone agent: the engine can ask whether a tenant may be served, save requests that staff confirm, map a dialled number to a tenant, and be billed in call minutes. Decided in team-alignment L (voice-first; widget frozen; integration secrets and risky-action approvals dropped) after reading Abdullah's answers (M). Nothing here is built yet. The engine side of each block is a proposal until he confirms (M).
+## Voice-first plan (decided 2026-10-21): how the next phases fit together
+
+**Direction (team-alignment L and M):** the product is an AI **phone receptionist**. Callers talk to Abdullah's engine; the engine saves **requests** (appointments, call-backs) that staff confirm; the backend owns tenants, plans and billing in **call minutes**, the staff screens, phone numbers and the status check the engine asks before serving a business.
+**Halted (decided 2026-10-21): message operations.** Nothing is removed and everything built keeps working, but there is no new work on the chat widget (Phase 3), the widget keys, the staff chat queue with claim and reply (Phase 4), WhatsApp, or the chat-conversation limits. Chat is a secondary channel for later (Phase 7).
+**Dropped:** tenant integration secrets and risky-action approvals (the engine executes no actions; each side keeps its own secrets).
+**Frontend track (runs beside every phase):** after each backend phase the frontend prototype is adapted and re-verified, and its gap report refreshed. New screens: requests, phone numbers, minutes usage, call history, plan and billing with minutes.
+**People track (not code):** send Abdullah the answers to his eight questions (M3); he tests the two-migration-history scenario (Q2); Abdul decides the open items in Phase 5A and 5F.
+
+## Phase 5A: Voice-first alignment
+**Goal:** make everything already built consistent with a voice-first product, so later phases do not build on the old chat assumptions.
 
 Scope:
-- [ ] **5a Tenant status check (his B1):** `GET /internal/tenants/{tenantId}/status` → `{tenantId, serviceable, reason, plan}` from the effective subscription and entitlements; service-token auth; tests for suspended, closed, over quota, unknown tenant (L4.1)
-- [ ] **5b Requests workflow (his B4):** requests table (reference unique per tenant, `submissionKey` idempotency, status workflow with conditional updates, `locked` rule once confirmed), internal routes (create, update details, withdraw, customer upsert by phone), staff API `/v1/tenants/:tenantId/requests` (list, detail, change status), audit, notifications and a receiver for `record.submitted` and `record.updated` events, role rules (L4.2)
-- [ ] **5c Phone numbers and call tickets (his B11):** `phone_numbers` table (E.164 → tenant), platform-admin assignment, `GET /internal/numbers/{e164}`, Twilio signature check and signed single-use call ticket for the engine's voice gateway, end customer from the caller's number (L4.3, Q26)
-- [ ] **5d Call usage and billing (his B8):** agreed usage-event shape, call minutes in entitlements and `usage_daily`, usage endpoint for owners (no token counts), call-history view (L4.4)
-- [ ] **5e Agent settings and knowledge (his B2, B3, B5):** only after Abdul decides the ownership question (M3.4): either the backend stores and versions the settings, or only plan-derived values; knowledge: the backend keeps the original in its own storage, enforces plan limits and file types, forwards the file by multipart, follows the job (L4.5, K2 and K6 of [phase-5-plan.md](phase-5-plan.md))
-- [ ] Reconcile the event names and the internal key and port names with Abdullah (M2)
+- [ ] **Plans with call minutes** (decided: Starter and Free include them). New entitlement keys `callMinutesPerPeriod`, `callMinutePeriod` (`total` or `month`) and `overageMinuteMinor`; `voice` becomes true and `channels` includes `voice` on Starter, Free, Pro and Enterprise. Seeded through an expand-only data migration after a dump. **Placeholder numbers, adjustable as data:** Starter 30 minutes in total (15 days), Free 20 minutes a month, Pro 300 minutes a month with overage PKR 25 a minute (the price already in the plan), Enterprise custom. The chat-conversation limits stay as they are (frozen).
+- [ ] **Overage for minutes:** the owner's on/off switch (J6, default on) applies to call minutes on plans that have an overage price; off means a hard stop (the status check answers `quota_exceeded`). The overage count and amount come from `usage_daily.call_minutes`; the 80% and 100% reminders and the billing summary show minutes. (Conversation overage stays as built for chat.)
+- [ ] **Engine defaults:** `ENGINE_FIRST_TOKEN_TIMEOUT_MS` 10000; accept the internal token as Bearer `INTERNAL_API_TOKEN` (his new routes) and document the old `x-internal-key` routes; list the port clash (both default 3000) in the README.
+- [ ] **Contracts:** update `engine-internal.openapi.yaml` and `backend-events.openapi.yaml` with what Abdullah agreed (M1: `content_key`, `provider`, token counts, idempotent claim, 10 s); write a new `backend-internal.openapi.yaml` for the routes the engine calls (status check, requests, customer upsert, number lookup); decide the event names (`record.submitted` and `record.updated` added to the receiver, M2.4).
+- [ ] **Mock engine:** simulate a call-shaped request (a saved request, its updates, and call-minute usage) so the backend and frontend can be built without the real engine.
+- [ ] **Docs:** voice flow and the new ownership split in `architecture.md`; CLAUDE.md rules; mark the chat features halted.
+- [ ] Remove or leave unused the `action.proposed` event and notification (approvals dropped).
 
-Dropped from this phase (L3): tenant integration secrets and encryption key, action approvals. Frozen (L2): widget key rotation, widget wording from settings.
-Depends on: Abdullah's answers to M3, the usage-event shape, and the database agreement (Q1 to Q5).
-**Done when:** with the engine (or its mock) a call-shaped request is saved, appears on the staff screen, is confirmed, and call minutes appear in usage.
+Needs: Abdul accepts or changes the placeholder minute numbers; Abdul's answers to M3 go to Abdullah.
+**Done when:** the plans table, entitlements, status of billing screens and the contracts all describe a voice-first product, tests and docs are updated, and the mock can produce a request and minutes.
 
-## Phase 6: Telephony go-live, WhatsApp deferred
-**Goal:** real phone calls reach the right business.
+## Phase 5B: Engine essentials: tenant status check and requests workflow
+**Goal:** the engine can ask whether a business may be served, and staff can confirm the requests the agent takes.
 
 Scope:
-- [ ] Twilio account on the backend, number purchase or porting flow, number → tenant management screens
-- [ ] Public secure WebSocket entry for the voice gateway with ticket-only access (agreed with Abdullah, D4, Q26)
+- [ ] **Tenant status check (his B1):** `GET /internal/tenants/{tenantId}/status` → `{tenantId, serviceable, reason, plan}`, `reason` one of `suspended`, `unpaid`, `quota_exceeded`, `unknown_tenant` or null, derived from the effective subscription and entitlements including call minutes; internal-token auth; no data leak for an unknown tenant
+- [ ] **Requests (his B4):** requests table (reference unique per tenant, `submissionKey` idempotency, status workflow with conditional updates, 409 `locked` once confirmed), customer upsert by phone, internal routes (create, update details, withdraw), receiver for `record.submitted` and `record.updated`
+- [ ] **Staff API** `/v1/tenants/:tenantId/requests` (list with filters and search, detail, change status), audit entries, a notification for new requests, a live update on the dashboard stream, roles (proposal: all roles can work requests), rows in the role-matrix test
+- [ ] Tests at unit, e2e and database level incl. two-tenant isolation and idempotent create; the mock engine drives the whole flow
+- [ ] Frontend: requests list and detail with confirm, done and cancel
+
+Needs from AI: confirm the request shape and the event names (M2.4). Details: [phase-5-plan.md](phase-5-plan.md).
+**Done when:** with the mock engine a call-shaped request is saved, appears on the staff screen, is confirmed, and the engine's later update is refused with `locked`.
+
+## Phase 5C: Real-engine integration, first slice
+**Goal:** prove the contract against Abdullah's real engine early, before building more on guesses.
+
+Scope:
+- [ ] Shared database agreed and tested on a throwaway database (Q1 to Q5): database `caller-ai-agent`, separate `?schema=` per project, `vector` extension created in schema `ai_engine`, `tenants.id` is text, his foreign keys on every table with `tenant_id` as a separate migration, migration order, dev compose and seed
+- [ ] `ENGINE_MODE=http` against the real engine: status check, requests, events, and (as far as he has built them) the conversation routes; the shared token set privately
+- [ ] Contract tests that run against both the mock and the real engine; fix every drift found; update the contract files
+- [ ] Record what is still different (timeouts, missing routes) in team-alignment M
+
+Needs from AI: his build steps 1 to 3 done (columns, idempotency table, outbox, Bearer guard); Q2 tested. **This phase waits for him; do not start before he reports ready.**
+**Done when:** a request saved by the real engine appears on the staff screen and the status check is answered for a real tenant.
+
+## Phase 5D: Phone numbers and call tickets
+**Goal:** a dialled number reaches the right business.
+
+Scope:
+- [ ] `phone_numbers` table (E.164 unique, tenant, provider, provider id, status), platform-admin assignment screens/API, tenant view of its numbers
+- [ ] `GET /internal/numbers/{e164}` → `{tenantId}` for the engine after it verifies the Twilio signature
+- [ ] The call ticket (his Q26): backend verifies the Twilio webhook signature, maps the number, signs a one-minute single-use ticket for the engine's voice gateway; agree the exact flow with Abdullah
+- [ ] End customer upserted from the caller's number; privacy rules for phone numbers (F1)
+- [ ] Tests incl. unknown number, replayed ticket, another tenant's number
+
+Needs: Twilio account on the backend; Abdullah's design of the public secure WebSocket for the voice gateway.
+**Done when:** with Twilio test numbers a call to a business's number is routed to that tenant and the caller exists as an end customer.
+
+## Phase 5E: Call usage, billing and call history
+**Goal:** minutes are counted, limited and visible.
+
+Scope:
+- [ ] Agree the usage-event shape with Abdullah (his proposal: `usage.call_minutes {conversationId, seconds, channel}` and others) and ingest it idempotently into `usage_daily`
+- [ ] Enforce the minutes allowance through the status check and the entitlements; overage and reminders as in 5A
+- [ ] Owner usage endpoint (calls, minutes, requests; no token counts) and the billing summary with minutes
+- [ ] Call history for staff (through the engine's call logs) with the rules about what is shown (no raw audio; recording consent is Phase 6)
+- [ ] Frontend: usage, billing and call-history screens
+
+Needs from AI: the usage-event shape and the call-log read route.
+**Done when:** a finished call adds its minutes to the tenant's usage, and running out of minutes stops service with the right message.
+
+## Phase 5F: Agent settings and knowledge
+**Goal:** a business teaches and configures its agent from the dashboard.
+
+Scope (decisions first, see [phase-5-plan.md](phase-5-plan.md)):
+- [ ] **Agent settings** (his B2, B3): after Abdul decides who stores them (backend with versions, or a hybrid with plan-derived values only); the "what the agent collects" checklist uses the engine's catalogue and validation
+- [ ] **Knowledge** (his B5): the backend keeps the original file in its own storage, enforces plan size and file types, forwards the file to the engine by multipart upload, follows the ingestion job, shows the document list with status and failure codes; real `knowledgeMb` usage
+- [ ] Frontend: agent settings, collect checklist and knowledge screens
+
+Needs: Abdul's decisions (settings ownership, storage provider); Abdullah's ingest routes moved to the header-based tenant.
+**Done when:** an owner uploads a document, sees it become ready, and changes the agent's name or hours and the engine uses them.
+
+## Phase 6: Telephony go-live
+**Goal:** real phone calls for real customers.
+
+Scope:
+- [ ] Twilio production setup: number purchase or porting flow and management screens
+- [ ] Public secure WebSocket entry for the voice gateway with ticket-only access, as agreed with Abdullah (D4, Q26)
 - [ ] Recording disclosure and consent switches, calling-hours rules (E5, F2); legal wording before real customers
 - [ ] Confirmation to the customer when staff confirm a request (his B9): SMS, sender to be decided (L5)
 - [ ] Idempotent handling of provider retries (C3)
-- [ ] **WhatsApp: deferred, not planned** (Abdul, 2026-10-21)
 
-Depends on: Phase 5; D4, E5; a Twilio account.
-**Done when:** a real phone call to a business's number is answered by the agent, produces a request on the staff screen, and is billed in minutes.
+Needs: Phases 5B to 5E; a Twilio account; legal review of recording and calling rules.
+**Done when:** a real phone call to a business's number is answered, produces a request on the staff screen, is confirmed, the customer is told, and the minutes are billed.
 
-## Phase 7: Human-agent productivity (deferred)
-**Goal:** make a team of agents efficient. Do this only after real usage shows the need; owner is backend + frontend (H8).
-
-Scope (pick from):
-- [ ] Routing rules (round-robin, least busy, skills) and working hours
-- [ ] SLA timers, breach highlighting and alerts through in-app notifications
-- [ ] Internal notes, transfer between agents, tags, canned replies (tables in `tenant_core`, plain `conversation_id`)
-
-Depends on: Phase 4; a product decision. AI-assisted extras (suggested replies, auto-tags) belong to the AI engine.
+## Phase 7: Deferred (nothing started, decided later)
+- **Message operations (halted 2026-10-21):** new work on the chat widget, widget key rotation and wording, the staff chat queue (claim, reply, release), chat-conversation limits.
+- **WhatsApp** (not planned on either side).
+- **Agent productivity:** routing and SLAs, notes, tags, transfer, canned replies (H8).
+- **Calendar availability** (his B10): the engine checks opening hours only today.
+- **Translation keys (J8)**, the **overage spending cap**, tenant integration secrets and action approvals (revisit if the engine ever executes actions).
 
 ## Phase 8: Production hardening and launch
 **Goal:** safe to run for real customers.
@@ -308,6 +381,8 @@ Scope:
 - [ ] CI/CD, environments (dev/staging/prod), backups and restore test, deployment runbook
 
 **Done when:** a staging environment passes an end-to-end acceptance script, a restore from backup has been rehearsed, and the security review has no open high findings.
+
+**Additions for the voice product (2026-10-21):** security review of the public voice WebSocket and the ticket (replay, expiry, per-number rate limits); monitoring of failed and dropped calls; load test with concurrent calls (the engine allows 3 per tenant today); backups of the requests data; the retention purge scheduled daily (the engine has no scheduler: the backend's job calls his purge route); recording-consent compliance; paid LLM and speech terms with no training on customer data (Q25).
 
 ## Phase 9: Payment provider integration
 **Goal:** self-serve payments, replacing manual recording. Do this when the first customers want to pay by card and a provider is chosen.
@@ -331,6 +406,6 @@ Depends on: Phase 2B and Phase 8 (production environment).
 5. **Definition of done for a phase:** exit criteria met, docs updated, demo run on the seeded tenant.
 
 ## Next three actions
-1. Commit the docs and the `main.ts` CORS change on a branch, then send [team-alignment.md](team-alignment.md) to Abdullah and the frontend colleague.
-2. Start Phase 0 in the order listed (security first: `/tenants` lock-down, then roles, then the delete bug).
-3. While waiting for answers, run Phase 1 and prepare the throwaway-database check for A2.
+1. Merge the docs branch, then send Abdullah the answers to his eight questions (team-alignment M3) and ask him to test Q2 on a throwaway database.
+2. Abdul accepts or changes the placeholder call-minute numbers (Phase 5A) and decides the two open items for 5F: who stores the agent settings, and the storage provider for knowledge originals.
+3. Start Phase 5A in a build session; then 5B.

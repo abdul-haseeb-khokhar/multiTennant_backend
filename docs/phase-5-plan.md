@@ -1,6 +1,6 @@
 # Phase 5 plan: voice-first backend core
 
-Status: **reshaped 2026-10-21, nothing built.** Owner: Abdul Haseeb. This replaces the first version of this file (2026-10-14), which assumed a chat product with integration secrets and action approvals. Sources: [team-alignment.md](team-alignment.md) sections L (the decision) and M (Abdullah's answers), [backend-roadmap.md](backend-roadmap.md) Phase 5, and Abdullah's two files `reply-to-abdul-haseeb.md` and `handoff-to-backend.md`.
+Status: **reshaped 2026-10-21, nothing built.** The phases are now 5A to 5F, with Phase 6 telephony go-live, in [backend-roadmap.md](backend-roadmap.md); this file keeps the detail for the blocks below (its 5a to 5e map to roadmap 5B, 5D, 5E, 5F; the alignment step 5A and the integration slice 5C are only in the roadmap). Owner: Abdul Haseeb. This replaces the first version of this file (2026-10-14), which assumed a chat product with integration secrets and action approvals. Sources: [team-alignment.md](team-alignment.md) sections L (the decision) and M (Abdullah's answers), [backend-roadmap.md](backend-roadmap.md) Phase 5, and Abdullah's two files `reply-to-abdul-haseeb.md` and `handoff-to-backend.md`.
 
 ## 1. What changed and why
 

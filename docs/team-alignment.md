@@ -403,7 +403,7 @@ Plans are rows with `code`, `name`, `visibility` (`public` | `hidden`), `price_m
 | Channels | chat | chat, "powered by" label | chat + WhatsApp | all |
 | Voice | none | none | add-on, about PKR 25 per minute | custom |
 
-Prices exclude tax; tax is a separate invoice line and its treatment needs an accountant (I7).
+Prices exclude tax; tax is a separate invoice line and its treatment needs an accountant (I7). **Update 2026-10-21 (L6): every plan now includes call minutes and voice is on; the voice row above and the conversation numbers are superseded for the voice-first product, see L6.**
 
 **Built (Phase 2B):** table `plans` seeded with these four rows by the migration (adjust the rows, not the code). Columns as proposed plus `yearly_price_minor` (Pro: PKR 199,990 = `19999000` minor units, monthly `1999900`), `sort_order` and `active`; `price_minor` is `null` for a custom quote (Enterprise) and `interval` is `none` for plans without a billing interval (Enterprise is per contract, so an admin passes `periodEnd`). **Entitlements JSON:** `{ "seats": 3, "conversationsPerPeriod": 100, "conversationPeriod": "total" | "month", "knowledgeMb": 20, "channels": ["chat"], "voice": false, "poweredByLabel": false, "overageConversationMinor"?: 1500, "voicePerMinuteMinor"?: 2500 }`; `null` = unlimited, a missing key = the most restrictive value, `total` = since the subscription period began (Starter), Pro voice is an add-on so `voice` is false there until a per-tenant override (`subscriptions.entitlements_override`, same keys) grants it. Public list: `GET /v1/plans` (Free, Pro, Enterprise; Starter is hidden). Starter and Free values are placeholders.
 Status: ☐
@@ -604,9 +604,9 @@ Context: Abdullah's two documents (section M) describe the engine as an AI recep
 The platform's main product is an AI agent that answers a business's phone calls from the business's own material and takes appointment and call-back **requests** that staff confirm. Text chat stays possible but is secondary. Engine rule that never changes: the AI never books, confirms or cancels anything on its own authority; it saves a request as `requested` and a person confirms it.
 Status: decided
 
-### L2. Widget work is frozen: BE (**decided 2026-10-21**)
-Phase 3 (widget gateway, widget API keys, widget live stream) stays exactly as built and keeps working (it is useful for demos and tests) but gets **no new work**: no widget key rotation (K7), no widget wording from the agent configuration (K8), no widget CORS changes, no new widget features. **Assumption to confirm with Abdul:** Phase 4's staff chat features (conversation queue, claim, reply, release, resolve, escalation notifications) also stay as built with no new work, because they fit text chat more than a live phone call.
-Status: decided; the Phase 4 assumption is open
+### L2. Message operations are halted: BE (**decided 2026-10-21**)
+**Decision (Abdul): halt the message operations for now.** Everything already built keeps working and nothing is removed, but there is **no new work** on: the chat widget gateway, widget API keys and the widget live stream (Phase 3); the staff chat queue with claim, reply, release and resolve and its notifications (Phase 4); widget key rotation (K7); widget wording from settings (K8); WhatsApp; chat-conversation limits. They move to the deferred list (Phase 7). The widget stays useful for demos and tests.
+Status: decided
 
 ### L3. Dropped from Phase 5: BE (**decided 2026-10-21**)
 **Tenant integration secrets (K3, E4) and risky-action approvals (K4, E4; for-abdullah Q23) are dropped for now.** The engine executes no actions (its flag `TOOL_EXECUTION_AVAILABLE` is false) and Abdullah's decided approach (his B6) is that each side keeps its own secrets: only the internal key and the event-signing secret are shared. Revisit both when real tool execution exists. E4 and Q23 are superseded by this decision.
@@ -627,6 +627,10 @@ Status: decided (order and scope); details open with Abdullah
 - What "hand over to a human" means on a phone call: his `escalation` setting holds an email and phone number; the chat-style claim and reply of Phase 4 does not apply to a live call.
 - WhatsApp is out of scope for now (Abdul, 2026-10-21).
 Status: open
+
+### L6. Plans include call minutes: BE (**decided 2026-10-21; numbers are placeholders**)
+**Decision (Abdul): Starter and Free include call minutes.** All plans get voice turned on. New entitlement keys `callMinutesPerPeriod`, `callMinutePeriod` (`total` or `month`) and `overageMinuteMinor`. **Placeholder numbers (adjustable as data in the `plans` table, to be confirmed against real call costs once calls exist):** Starter 30 minutes in total (15 days), Free 20 minutes a month, Pro 300 minutes a month with overage PKR 25 a minute (the price already in the plan), Enterprise custom. The owner's overage switch (J6, default on, owner can switch off for a hard stop) is proposed to apply to call minutes on plans with an overage price; the conversation overage stays as built for chat. The prices in I1 were set for chat and must be revisited once call costs are measured. Built in Phase 5A.
+Status: decided (placeholders); the minutes-overage proposal and the Pro numbers are for Abdul to confirm
 
 ---
 

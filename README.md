@@ -15,7 +15,7 @@ Backend core of a multi-tenant **AI customer-support platform**. Businesses and 
 | 4B | Pro overage setting (the owner chooses between PKR 15 per extra conversation and a hard stop), overage figures, overage reminder | merged (PR #6); the optional spending cap is undecided |
 | 4C | Real email through Resend (test mode), HTML and plain-text templates in English and Urdu, `delivery` in API answers, mail health | merged (PR #6); real delivery in test mode was confirmed by the owner on 2026-10-11 (see Email below) |
 | 3C | Account decisions: logout that ends all sessions, email-first login with a workspace picker (and login throttling), owner self-service with slug rename and time zone, nobody can disable, demote or delete themselves, upgrade requests to the platform team | built on branch `phase-3c-account`, not yet merged; see the frontend list in [docs/team-alignment.md](docs/team-alignment.md) J1 to J5 |
-| 5 and later | Voice-first core (tenant status check, requests workflow, phone numbers, call usage), telephony go-live, hardening; the widget is frozen and WhatsApp deferred | planned, see [docs/backend-roadmap.md](docs/backend-roadmap.md) and team-alignment L |
+| 5A to 5F, 6 and later | Voice-first plan: alignment with call minutes, tenant status check and requests workflow, real-engine integration, phone numbers, call usage and billing, agent settings and knowledge; then telephony go-live and hardening. Message operations are halted and WhatsApp is deferred | planned, see [docs/backend-roadmap.md](docs/backend-roadmap.md) and team-alignment L |
 
 ## Documentation
 
