@@ -1,0 +1,271 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://supportdesk.example/contracts/agent-config.schema.json",
+  "title": "AgentConfig (draft v0, proposed by the backend, not yet confirmed by the AI engine owner)",
+  "description": "ON HOLD (2026-10-21): this draft assumed the backend owns the agent configuration and covers chat and actions. Abdullah's engine keeps its own settings (business name, purpose, tone, timezone, hours, escalation, capabilities, voices and a \"what the agent collects\" checklist) and the ownership question (team-alignment M, Q21) is open; do not implement this schema until it is decided. The per-tenant configuration of the AI agent (team-alignment E1). The backend stores it versioned in tenant_core.agent_configs and serves the latest version to the engine at GET /internal/tenants/{tenantId}/agent-config. Owners and admins edit it from the dashboard; agents can read it. The engine must treat every free-text field as untrusted input to the model (it is typed by a tenant user), and must validate action parameters in code, not trust the model (E4). `version`, `updatedAt` and `updatedBy` are set by the backend and ignored on save.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "persona",
+    "languages",
+    "defaultLanguage",
+    "greeting",
+    "fallbackMessage",
+    "handoffMessage",
+    "escalation",
+    "workingHours",
+    "allowedActions",
+    "retentionDays"
+  ],
+  "properties": {
+    "version": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Set by the backend; every save creates a new version."
+    },
+    "updatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updatedBy": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Staff user id, null for system changes."
+    },
+    "persona": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "tone",
+        "instructions"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60,
+          "description": "The name the agent uses for itself."
+        },
+        "tone": {
+          "enum": [
+            "friendly",
+            "formal",
+            "concise"
+          ]
+        },
+        "instructions": {
+          "type": "string",
+          "maxLength": 4000,
+          "description": "Free-text guidance from the tenant. Untrusted: never allowed to override platform rules, tenant isolation or action limits."
+        }
+      }
+    },
+    "languages": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$"
+      },
+      "description": "Languages the agent may answer in (BCP-47). Must be a subset of what the engine can really answer in; today en and ur. Not the same list as the dashboard languages."
+    },
+    "defaultLanguage": {
+      "type": "string",
+      "description": "Must be one of `languages`."
+    },
+    "greeting": {
+      "$ref": "#/$defs/localizedText"
+    },
+    "fallbackMessage": {
+      "$ref": "#/$defs/localizedText",
+      "description": "Shown to the customer when the AI cannot answer (engine down, tenant blocked). The widget falls back to the platform's own translated text when a language is missing."
+    },
+    "handoffMessage": {
+      "$ref": "#/$defs/localizedText",
+      "description": "Shown when the conversation is passed to a human."
+    },
+    "escalation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "customerAsksHuman",
+        "lowConfidence",
+        "failedAttempts",
+        "sentiment",
+        "failedAction",
+        "outsideHours",
+        "topicKeywords"
+      ],
+      "properties": {
+        "customerAsksHuman": {
+          "type": "boolean"
+        },
+        "lowConfidence": {
+          "type": "boolean"
+        },
+        "failedAttempts": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10,
+          "description": "Escalate after this many answers the customer did not accept."
+        },
+        "sentiment": {
+          "type": "boolean"
+        },
+        "failedAction": {
+          "type": "boolean"
+        },
+        "outsideHours": {
+          "type": "boolean",
+          "description": "Escalate (or queue) outside the working hours below."
+        },
+        "topicKeywords": {
+          "type": "array",
+          "maxItems": 50,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 60
+          }
+        }
+      }
+    },
+    "workingHours": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "timezone",
+        "days"
+      ],
+      "properties": {
+        "timezone": {
+          "type": "string",
+          "description": "IANA name; defaults to the tenant's timezone (J7, default Asia/Karachi)."
+        },
+        "days": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mon",
+            "tue",
+            "wed",
+            "thu",
+            "fri",
+            "sat",
+            "sun"
+          ],
+          "properties": {
+            "mon": {
+              "$ref": "#/$defs/day"
+            },
+            "tue": {
+              "$ref": "#/$defs/day"
+            },
+            "wed": {
+              "$ref": "#/$defs/day"
+            },
+            "thu": {
+              "$ref": "#/$defs/day"
+            },
+            "fri": {
+              "$ref": "#/$defs/day"
+            },
+            "sat": {
+              "$ref": "#/$defs/day"
+            },
+            "sun": {
+              "$ref": "#/$defs/day"
+            }
+          }
+        }
+      }
+    },
+    "allowedActions": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "enabled",
+          "limitMinor",
+          "approval"
+        ],
+        "properties": {
+          "kind": {
+            "enum": [
+              "refund",
+              "booking",
+              "record_update"
+            ]
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "limitMinor": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0,
+            "maximum": 2000000000,
+            "description": "Amount limit in minor units of PKR (null = no amount concept for this kind). Above it the action stops at `proposed` and needs an owner or admin."
+          },
+          "approval": {
+            "enum": [
+              "above_limit",
+              "always"
+            ]
+          }
+        }
+      }
+    },
+    "retentionDays": {
+      "type": "integer",
+      "minimum": 30,
+      "maximum": 730,
+      "default": 365,
+      "description": "How long the engine keeps messages, recordings and logs of this tenant (F1). Independent of the 60-day rules after a plan ends (I10)."
+    }
+  },
+  "$defs": {
+    "localizedText": {
+      "type": "object",
+      "description": "Text per language code. Must contain the defaultLanguage; other keys must be in `languages`.",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "string",
+        "maxLength": 500
+      }
+    },
+    "day": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "from",
+        "to"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "from": {
+          "type": "string",
+          "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$"
+        },
+        "to": {
+          "type": "string",
+          "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$",
+          "description": "Must be later than `from` on the same day (no overnight ranges in v0)."
+        }
+      }
+    }
+  }
+}

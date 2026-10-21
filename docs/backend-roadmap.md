@@ -12,14 +12,14 @@ Size: **S** ≈ days · **M** ≈ 1–2 weeks · **L** ≈ 2+ weeks (rough, solo
 | 1 | Account and team management | M | nothing (H3 mail provider can follow) | FE (auth, invite, audit, language screens) |
 | 2 | Shared infrastructure and engine contract | S–M | AI: A1–A6, D2, schema requests | everything that talks to the engine |
 | 2B | Billing foundation (plans, subscriptions, entitlements, manual payments) | M | nothing (can run beside 2); **built**, reminders wait for H5 | Phase 3 enforcement, FE billing screens |
-| 3 | Gateway and widget entry (**built**, mock engine only) | M | AI: B5, D1–D3, engine create/message API; Phase 2B | FE widget, first end-to-end chat |
+| 3 | Gateway and widget entry (**built**, mock engine only; widget work **frozen**, L2) | M | AI: B5, D1–D3, engine create/message API; Phase 2B | FE widget, first end-to-end chat |
 | 3B | Frontend gap-report fixes (confirmed defects, section J of team-alignment) | S | nothing; decisions J1–J8 from Abdul | FE (correct, safe API) |
 | 4 | Human-agent flow and notifications | L | AI: C1–C4, D5, D6 | FE dashboard conversations |
 | 4C | Mail provider: Resend, test mode (H3, decided) | S | Resend account and API key from Abdul | invites, resets and verification reach a real inbox |
 | 4B | Pro overage setting and optional spending cap (J6, decided) | S | nothing; follows Phase 4 | FE billing switch |
 | 3C | Account decisions: logout and revocation, email-first login, owner self-service and slug rename, upgrade request, time zone (J1, J2, J3, J4, J5, J7; J8 deferred) (**built**) | M | nothing | FE (logout, two-step login, settings, upgrade request) |
-| 5 | Tenant configuration, knowledge, actions, usage | L | AI: E1–E4 | AI personalisation, plan limits |
-| 6 | Channels: WhatsApp and voice | L | AI: D4, E5; provider accounts | phone/WhatsApp customers |
+| 5 | **Voice-first backend core** (reshaped 2026-10-21): tenant status check, requests workflow, phone numbers, call usage, settings and knowledge | L | AI: M1, M3 answers | phone agent can serve a business |
+| 6 | Telephony go-live (Twilio, tickets, consent); WhatsApp deferred | L | AI: D4, E5; Twilio account | real phone calls |
 | 7 | Human-agent productivity (deferred) | M | product decision | team efficiency |
 | 8 | Production hardening and launch | L | all above | go-live |
 | 9 | Payment provider integration | M | provider chosen; company/bank account set up | self-serve card payments |
@@ -256,31 +256,34 @@ Decisions the docs did not settle (taken in Phase 3C; change them in code if you
 - **Time zone** is validated against the runtime's tz database through `Intl` (aliases such as `asia/karachi` are accepted and stored in the canonical spelling; UTC offsets such as `+05:00` are refused).
 - **Admin PATCH:** `plan`/`status` are refused with 400 `USE_SUBSCRIPTION_ROUTES` instead of being ignored silently; the admin PATCH still takes `name` and `defaultLocale` only.
 
-## Phase 5: Tenant configuration, knowledge, actions and usage
-**Goal:** tenants configure their AI, load knowledge, approve risky actions, and are held to plan limits.
+## Phase 5: Voice-first backend core (reshaped 2026-10-21)
+**Goal:** a business can be served by the phone agent: the engine can ask whether a tenant may be served, save requests that staff confirm, map a dialled number to a tenant, and be billed in call minutes. Decided in team-alignment L (voice-first; widget frozen; integration secrets and risky-action approvals dropped) after reading Abdullah's answers (M). Nothing here is built yet. The engine side of each block is a proposal until he confirms (M).
 
 Scope:
-- [ ] `agent_configs` with versioning and the internal read endpoint for the engine (E1)
-- [ ] Knowledge: upload to S3/MinIO, `knowledge_sources` status, trigger and track ingestion, delete by source (E2)
-- [ ] `tenant_integrations` with encrypted credentials and the internal fetch endpoint (E4)
-- [ ] Action approval API (list proposed, approve, reject) and notifications (E4, H5)
-- [ ] Plan limits: monthly messages, KB size, seats, enforced at the gateway with `PLAN_LIMIT_REACHED`; usage endpoint (B6)
-- [ ] API-key management screens' endpoints (create, rotate, revoke)
+- [ ] **5a Tenant status check (his B1):** `GET /internal/tenants/{tenantId}/status` → `{tenantId, serviceable, reason, plan}` from the effective subscription and entitlements; service-token auth; tests for suspended, closed, over quota, unknown tenant (L4.1)
+- [ ] **5b Requests workflow (his B4):** requests table (reference unique per tenant, `submissionKey` idempotency, status workflow with conditional updates, `locked` rule once confirmed), internal routes (create, update details, withdraw, customer upsert by phone), staff API `/v1/tenants/:tenantId/requests` (list, detail, change status), audit, notifications and a receiver for `record.submitted` and `record.updated` events, role rules (L4.2)
+- [ ] **5c Phone numbers and call tickets (his B11):** `phone_numbers` table (E.164 → tenant), platform-admin assignment, `GET /internal/numbers/{e164}`, Twilio signature check and signed single-use call ticket for the engine's voice gateway, end customer from the caller's number (L4.3, Q26)
+- [ ] **5d Call usage and billing (his B8):** agreed usage-event shape, call minutes in entitlements and `usage_daily`, usage endpoint for owners (no token counts), call-history view (L4.4)
+- [ ] **5e Agent settings and knowledge (his B2, B3, B5):** only after Abdul decides the ownership question (M3.4): either the backend stores and versions the settings, or only plan-derived values; knowledge: the backend keeps the original in its own storage, enforces plan limits and file types, forwards the file by multipart, follows the job (L4.5, K2 and K6 of [phase-5-plan.md](phase-5-plan.md))
+- [ ] Reconcile the event names and the internal key and port names with Abdullah (M2)
 
-Depends on: Phase 4; E1–E4 and the engine's ingest/approve endpoints.
-**Done when:** a tenant uploads a document, the AI answers from it, a high-value action waits for approval, and exceeding the plan limit is blocked cleanly.
+Dropped from this phase (L3): tenant integration secrets and encryption key, action approvals. Frozen (L2): widget key rotation, widget wording from settings.
+Depends on: Abdullah's answers to M3, the usage-event shape, and the database agreement (Q1 to Q5).
+**Done when:** with the engine (or its mock) a call-shaped request is saved, appears on the staff screen, is confirmed, and call minutes appear in usage.
 
-## Phase 6: Channels: WhatsApp and voice
-**Goal:** reach customers by WhatsApp and phone.
+## Phase 6: Telephony go-live, WhatsApp deferred
+**Goal:** real phone calls reach the right business.
 
 Scope:
-- [ ] `channel_connections`, provider signature verification, number → tenant mapping (D4)
-- [ ] WhatsApp webhooks (inbound, delivery status, outbound replies, session-window rules)
-- [ ] Voice: telephony webhooks, call start/end, recording settings and consent switches (E5, F2); media-stream routing as agreed in D4
+- [ ] Twilio account on the backend, number purchase or porting flow, number → tenant management screens
+- [ ] Public secure WebSocket entry for the voice gateway with ticket-only access (agreed with Abdullah, D4, Q26)
+- [ ] Recording disclosure and consent switches, calling-hours rules (E5, F2); legal wording before real customers
+- [ ] Confirmation to the customer when staff confirm a request (his B9): SMS, sender to be decided (L5)
 - [ ] Idempotent handling of provider retries (C3)
+- [ ] **WhatsApp: deferred, not planned** (Abdul, 2026-10-21)
 
-Depends on: Phase 4; D4, E5; provider accounts and approved WhatsApp business setup (lead time, start early).
-**Done when:** a WhatsApp message and a phone call each produce a conversation visible in the dashboard with correct tenant and customer.
+Depends on: Phase 5; D4, E5; a Twilio account.
+**Done when:** a real phone call to a business's number is answered by the agent, produces a request on the staff screen, and is billed in minutes.
 
 ## Phase 7: Human-agent productivity (deferred)
 **Goal:** make a team of agents efficient. Do this only after real usage shows the need; owner is backend + frontend (H8).

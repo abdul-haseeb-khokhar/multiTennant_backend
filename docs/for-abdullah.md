@@ -1,6 +1,6 @@
 # For Abdullah: what the backend needs from the AI engine
 
-From: Abdul Haseeb (backend core) · Date: 2026-10-11 · Status: **everything below is the backend's proposal; nothing has run against your real engine yet.**
+From: Abdul Haseeb (backend core) · Date: 2026-10-11 · Status: **everything below is the backend's proposal; nothing has run against your real engine yet.** *Update 2026-10-21: Abdullah answered (reply of 2026-10-15 and the newer handoff); his answers, the conflicts and our decisions are in team-alignment sections L and M. Q23 is superseded.*
 
 You own the AI engine (conversations, messages, retrieval, model calls, actions, voice). I own tenants, users, billing, the widget gateway and the dashboard API. This document is the one place that lists what I need you to confirm or change, in the order that blocks us. Please answer in the table at the end.
 

@@ -207,7 +207,7 @@ Status: ☐
 
 ## E. Knowledge base, agent configuration, actions and voice
 
-### E1. Tenant agent configuration: BE owns, AI reads
+### E1. Tenant agent configuration: BE owns, AI reads (**ownership under review: see M, Q21**)
 **Proposal:** table `tenant_core.agent_configs` (versioned JSON: persona, tone, languages, greeting, fallback message, working hours, escalation rules, allowed actions with limits, handoff message). Edited from the dashboard. The engine fetches `GET /internal/tenants/:id/agent-config` (cached ≤ 60 s) and may ask for a specific `version`. A published config schema lives in `docs/contracts/agent-config.schema.json` (to be written jointly).
 Status: ☐
 
@@ -221,7 +221,7 @@ Embeddings are locked to `vector(768)` (Gemini). We record `embedding_model` so 
 **Note for pgvector:** an approximate (HNSW/IVF) index combined with `WHERE tenant_id = …` can return **fewer results than requested** because filtering happens after the index scan. Options: pgvector ≥ 0.8 iterative index scans, a partial/partitioned index per large tenant, or an exact scan for small tenants. Every similarity query must still filter by `tenant_id`, with a test proving tenant B never sees tenant A's chunks.
 Status: ☐
 
-### E4. Agent actions, integration credentials and approvals: BE + AI
+### E4. Agent actions, integration credentials and approvals: BE + AI (**superseded 2026-10-21: see L3**)
 Agent actions (refunds, bookings) touch the tenant's real systems.
 **Proposal:**
 - Tenant integration credentials are stored by the **backend**, encrypted at rest (AES-256-GCM, key from environment/KMS), in `tenant_integrations`. The engine fetches them per execution through the internal API and **never places them in LLM context or logs**.
@@ -595,6 +595,87 @@ Everything the backend knows about the engine is *our proposal* in [contracts/en
 7. Agent-config schema (G13) and knowledge-base limits, status values and failure codes (G14).
 **All of J9, the contract questions and the columns and later-phase items are now collected, de-duplicated and renumbered Q1 to Q27 in [for-abdullah.md](for-abdullah.md): send him that file (plus the three files in `contracts/`), not this one.** The Phase 4 questions are numbered 6 to 11 under "Open questions for the AI engine owner (Phase 4)" in [contracts/README.md](contracts/README.md): the staff calls and their 409 codes, the extra conversation fields and `X-Acting-*` headers, the system lines, the event receiver with its HMAC signing, and silence while `human_active`. Items 4 and 5 above are now concrete proposals in `contracts/engine-internal.openapi.yaml` and `contracts/backend-events.openapi.yaml`.
 Status: ☐
+
+## L. Product direction: voice-first (decided 2026-10-21)
+
+Context: Abdullah's two documents (section M) describe the engine as an AI receptionist whose main channel is the **telephone**; text chat is an internal test surface and he deleted his own browser widget on purpose. Abdul decided on 2026-10-21 to follow that direction.
+
+### L1. The product is voice-first: BE + AI (**decided 2026-10-21**)
+The platform's main product is an AI agent that answers a business's phone calls from the business's own material and takes appointment and call-back **requests** that staff confirm. Text chat stays possible but is secondary. Engine rule that never changes: the AI never books, confirms or cancels anything on its own authority; it saves a request as `requested` and a person confirms it.
+Status: decided
+
+### L2. Widget work is frozen: BE (**decided 2026-10-21**)
+Phase 3 (widget gateway, widget API keys, widget live stream) stays exactly as built and keeps working (it is useful for demos and tests) but gets **no new work**: no widget key rotation (K7), no widget wording from the agent configuration (K8), no widget CORS changes, no new widget features. **Assumption to confirm with Abdul:** Phase 4's staff chat features (conversation queue, claim, reply, release, resolve, escalation notifications) also stay as built with no new work, because they fit text chat more than a live phone call.
+Status: decided; the Phase 4 assumption is open
+
+### L3. Dropped from Phase 5: BE (**decided 2026-10-21**)
+**Tenant integration secrets (K3, E4) and risky-action approvals (K4, E4; for-abdullah Q23) are dropped for now.** The engine executes no actions (its flag `TOOL_EXECUTION_AVAILABLE` is false) and Abdullah's decided approach (his B6) is that each side keeps its own secrets: only the internal key and the event-signing secret are shared. Revisit both when real tool execution exists. E4 and Q23 are superseded by this decision.
+Status: decided
+
+### L4. New backend priorities, in order: BE (**decided 2026-10-21**; the engine side of each needs Abdullah's confirmation, section M)
+1. **Tenant status check (his B1).** `GET /internal/tenants/{tenantId}/status` returns `{tenantId, serviceable, reason, plan}` with `reason` one of `suspended`, `unpaid`, `quota_exceeded`, `unknown_tenant` or null; derived from the effective subscription and entitlements; the engine caches it about 60 seconds and answers its own caller 403, 429 or 404 accordingly.
+2. **Requests workflow (his B4).** Tables for requests (appointment or call-back; reference unique per tenant; status `requested`, `confirmed`, `done`, `cancelled`; data validated by the engine; summary; scheduled time kept as the business's wall-clock string; idempotent creation by `(tenant, submissionKey)`). Internal routes the engine calls: create (201, or 200 for a repeated key), update details, withdraw, and customer upsert by phone. Rules: the engine may change a request only while it is `requested` (otherwise 409 `locked`); status moves `requested → confirmed | cancelled`, `confirmed → done | cancelled | requested`, `done → confirmed`, `cancelled → requested`, with a conditional update on the status that was read. A staff API and screen under `/v1/tenants/:tenantId/requests` (list with filters, detail, change status), audit entries, and notifications from the engine's `record.submitted` and `record.updated` events.
+3. **Phone numbers and call tickets (his B11, our Q26).** A table mapping each dialled number (E.164) to a tenant; a platform-admin way to assign a number (purchase and porting come later); `GET /internal/numbers/{e164}` returns the tenant; the Twilio webhook signature is verified, then the backend signs a short-lived single-use ticket so the telephone provider connects straight to the engine's voice gateway (which needs a public secure WebSocket endpoint). The backend keeps the Twilio account keys. The end customer is created from the caller's number.
+4. **Call usage and billing (his B8).** Agree the usage-event shape with Abdullah, add **call minutes** to the plan entitlements and `usage_daily`, a usage endpoint for owners (conversations, messages, call minutes; no token counts, K5), and a call-history view.
+5. **Agent settings and knowledge (his B2, B3, B5).** Depends on the ownership answer in M (Q21). Knowledge: the backend keeps the original uploaded file in its own storage, enforces plan limits and file types, forwards the file to the engine by multipart upload, and follows the ingestion job's progress.
+Status: decided (order and scope); details open with Abdullah
+
+### L5. Questions this direction opens: BE + AI
+- Who sends the confirmation to the customer when staff confirm a request (his B9)? Proposal: the backend, triggered by its own `confirmed` transition (it holds the number, the provider account and the billing); the channel is SMS only because WhatsApp is deferred. Open.
+- Calendar availability (his B10): later, the engine checks opening hours only today.
+- Call recording consent and calling-hours rules (F2): legal wording needed before real customers.
+- What "hand over to a human" means on a phone call: his `escalation` setting holds an email and phone number; the chat-style claim and reply of Phase 4 does not apply to a live call.
+- WhatsApp is out of scope for now (Abdul, 2026-10-21).
+Status: open
+
+---
+
+## M. Abdullah's answers (reply of 2026-10-15 and handoff of about 2026-10-21)
+
+Two files from Abdullah (engine commit `bea913b` for the reply): `reply-to-abdul-haseeb.md` (answers to Q1 to Q27) and `handoff-to-backend.md` (his view of who owns what, duties B1 to B12). **None of the contract is implemented in the engine yet**; he will not start the first three build steps until Q1 to Q5 are settled and tested on a throwaway database. Where the two files disagree, the handoff is newer (it mentions a migration dated 2026-10-20) and wins.
+
+### M1. His answers
+| Q | Answer | What changes for us |
+|---|---|---|
+| Q1, Q2, Q5 | Agree | He will test the two-migration-history scenario on a throwaway database before anyone migrates |
+| Q3 | Agree, with a change | Create the `vector` extension **in schema `ai_engine`** (`CREATE EXTENSION IF NOT EXISTS vector SCHEMA ai_engine`), not in `public`; A3's init script must be changed |
+| Q4 | Agree, with changes | `tenants.id` must be `text`; the foreign key covers **every** table with `tenant_id` (not five); separate raw-SQL migration after our table exists; his test scripts need real tenant rows |
+| Q6, Q7 | Agree, with changes | New `/internal/*` routes; his base URL is port 3000 (ours is also 3000); streaming adapter; token counts and an idempotency table to build; 2,000 characters on the new routes |
+| Q8, Q9 | Agree | `escalate`, `aiReply: false`, atomic claim with the 409 codes |
+| Q10 | Agree for new routes, change for old | New routes: Bearer `INTERNAL_API_TOKEN` plus `X-Tenant-Id`. Old `/api/*` routes use `?tenantId=` and `x-internal-key`; he converts only those our backend calls |
+| Q11 | Agree, with a technical limit | Tokens already streamed cannot be recalled; no AI message is stored or counted after a claim |
+| Q12 | Agree, one column added | `content_key` on messages |
+| Q13 | Partly | First: `customer_requested`, `outside_hours`, `ai_unavailable`, `limit_reached`. Later after evaluation: `low_confidence`, `sentiment`, `topic`, `failed_action` |
+| Q14 | **Change** | First-token timeout default **10 s** until a faster model (free-tier Gemini takes 3.5 to 10 s; Groq about 1 s); 30 s total is fine |
+| Q15 to Q17 | Agree | Signed events from a database outbox, retries with the same id |
+| Q18 to Q20 | Agree | Plus `provider` and `content_key` on messages |
+| Q21 | **Change** | Agent configuration stays **in his schema**; plan-derived values come from us (hybrid). The newer handoff says the backend stores and versions it: unresolved |
+| Q22 | Agree, with changes | His own `source_id` stays; ours goes into `external_source_id`; replacement keyed by source id; stable failure codes; asks which storage |
+| Q23 | Agree in principle | No actions exist; **superseded by L3** |
+| Q24 | Agree, open point | The engine has no scheduler: someone must call a purge route daily |
+| Q25 | Agree | No training export; hosted model providers' free tiers may use submitted content, so production needs paid no-training terms |
+| Q26 | Agree for voice | Backend verifies the Twilio signature, maps the number, signs a ticket; the voice gateway needs a public secure WebSocket. WhatsApp is not planned on his side |
+| Q27 | Agree | Embeddings are Gemini-only, 768 dimensions, not swappable |
+
+### M2. Where our plan and his documents conflict
+1. **Product shape.** Ours was chat support with human takeover; his is a phone receptionist taking requests (resolved by L1).
+2. **Who owns the agent settings** (Q21 against his B2): open.
+3. **Integration secrets and risky actions** (resolved by L3).
+4. **Events.** His real events today are `record.submitted` and `record.updated`; our receiver expects `conversation.*`, `message.created`, `usage.recorded`, `action.proposed`. To reconcile.
+5. **Names and numbers:** his `x-internal-key` and `INTERNAL_API_KEY` against our Bearer `INTERNAL_API_TOKEN`; both services default to port 3000; first-token timeout 10 s against our 5 s.
+6. **Files.** His handoff: the backend stores the original and forwards it by multipart. His reply asked about a storage key. Resolution proposed: multipart, no `storageKey`.
+7. **Small inconsistencies in his documents:** unit-test counts (327 against 446) and languages (the reply still mentions Italian; the handoff says only English and Urdu). The handoff is newer.
+
+### M3. His questions back to us (status: open; recommended answers, not yet sent to him)
+1. **`tenant_core.tenants.id` type:** `text` (a UUID stored as text). Fact, no decision needed.
+2. **Which old `/api/*` routes will the backend call:** proposal: knowledge (upload, list, delete, retry, job progress) and, depending on Q21, agent settings and the collect checklist. Open until the scope is final.
+3. **Object storage for knowledge originals:** Abdul to decide the provider (the backend keeps the originals); the engine receives the file by multipart.
+4. **Q21 hybrid:** open, Abdul to decide.
+5. **10 s first-token timeout:** recommended yes (the backend's `ENGINE_FIRST_TOKEN_TIMEOUT_MS` default changes to 10000).
+6. **Who triggers the daily retention purge:** recommended the backend, from its hourly job, calling his purge route once a day.
+7. **Who creates end customers for voice callers:** the backend, from the caller's number (L4.3).
+8. **"Zero late tokens" guarantee in the claim race:** recommended no; it matters for streamed chat, not for phone calls.
+Status: open
 
 ---
 
