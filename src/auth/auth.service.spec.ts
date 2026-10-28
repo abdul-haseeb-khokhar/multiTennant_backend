@@ -5,6 +5,7 @@ import {
   PrismaMock,
   prismaError,
 } from '../../test/utils/prisma-mock';
+import { AgentProvisioningService } from '../agents/agent-provisioning.service';
 import { AuditService } from '../audit/audit.service';
 import { SubscriptionService } from '../billing/subscriptions/subscription.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -28,6 +29,7 @@ describe('AuthService', () => {
   let verification: { issue: jest.Mock };
   let subscriptions: { createStarter: jest.Mock };
   let audit: { record: jest.Mock };
+  let agents: { provision: jest.Mock };
   let throttle: {
     assertAllowed: jest.Mock;
     recordFailure: jest.Mock;
@@ -55,6 +57,7 @@ describe('AuthService', () => {
     verification = { issue: jest.fn().mockResolvedValue({}) };
     subscriptions = { createStarter: jest.fn().mockResolvedValue({}) };
     audit = { record: jest.fn().mockResolvedValue(undefined) };
+    agents = { provision: jest.fn().mockResolvedValue({ id: 'agent-1' }) };
     throttle = {
       assertAllowed: jest.fn(),
       recordFailure: jest.fn(),
@@ -77,6 +80,7 @@ describe('AuthService', () => {
         { provide: AuditService, useValue: audit },
         { provide: LoginThrottleService, useValue: throttle },
         { provide: SlugService, useValue: slugs },
+        { provide: AgentProvisioningService, useValue: agents },
       ],
     }).compile();
     service = module.get(AuthService);
@@ -345,6 +349,24 @@ describe('AuthService', () => {
       await service.signup(dto);
       expect(subscriptions.createStarter).toHaveBeenCalledTimes(1);
       expect(subscriptions.createStarter).toHaveBeenCalledWith(prisma, 't1');
+    });
+
+    it('creates the default agent with its first settings in the signup transaction (L7)', async () => {
+      await service.signup(dto);
+      expect(agents.provision).toHaveBeenCalledTimes(1);
+      const [tx, tenant, options] = agents.provision.mock.calls[0];
+      expect(tx).toBe(prisma);
+      expect(tenant).toMatchObject({ id: 't1', name: 'Acme Support' });
+      expect(options).toEqual({
+        isDefault: true,
+        actor: { userId: 'u1', role: 'owner' },
+      });
+    });
+
+    it('does not create a default agent when the signup fails', async () => {
+      prisma.tenantUser.create.mockRejectedValue(new Error('boom'));
+      await expect(service.signup(dto)).rejects.toThrow('boom');
+      expect(agents.provision).not.toHaveBeenCalled();
     });
 
     it('does not create a subscription when the signup fails (the transaction rolls back)', async () => {

@@ -26,13 +26,13 @@ A multi-tenant platform where **businesses and call centres put an AI agent in f
 | Duty | Backend core | AI engine |
 |---|---|---|
 | Who is the tenant, may it be served | tenants, plans, subscriptions, the **tenant status check** the engine asks before a call (Phase 5B) | caches the answer about 60 s and refuses or serves the call |
-| Which agents a tenant has (L7) | the **`agents` table** (identity, status, default), plan limits on agents and numbers (Phase 5B-1) | keeps each agent's settings, knowledge and checklist keyed by (tenant, agent) |
+| Which agents a tenant has (L7) | the **`agents` table** (identity, status, default), plan limits on agents and numbers (**built in Phase 5B-1**) | keeps each agent's settings, knowledge and checklist keyed by (tenant, agent) |
 | Which agent owns a dialled number | **phone numbers** (each linked to exactly one agent), the telephone provider's signature check and a short-lived call ticket carrying tenant and agent (Phase 5D, Design B, L8) | the voice gateway accepts only a valid ticket |
 | The caller as a person | creates the **end customer** from the caller's number | sends the number to the customer upsert |
 | What was agreed on the call | the **requests** table, the staff screen (list, confirm, done, cancel), audit, notifications (Phase 5B) | understands the call, validates and saves the request, owns the reference, may change it only while it is `requested` |
 | Minutes, limits, billing | `usage_daily.call_minutes`, plan limits, overage, reminders, invoices (built in 5A, fed by the engine in 5E) | reports each finished call's length |
 | Transcripts, call logs, voice, LLM, knowledge chunks | read-only views for staff (Phase 5E) | owns them (schema `ai_engine`) |
-| Agent settings, knowledge originals | **the backend** stores and versions each agent's settings (sent to the engine at the start of every call, L7) and keeps the original knowledge files (storage provider undecided) | reads the settings at call start; indexes the knowledge per agent (Phase 5F) |
+| Agent settings, knowledge originals | **the backend** stores and versions each agent's settings (`agent_settings`; the engine pulls them from `GET /internal/tenants/{tenantId}/agents/{agentId}/config` at the start of every call, L7; **built in Phase 5B-1**) and keeps the original knowledge files (storage provider undecided) | reads the settings at call start; indexes the knowledge per agent (Phase 5F) |
 | Confirmation to the caller when staff confirm | proposed: the backend, by SMS (Phase 6; open) | – |
 
 ## 3. System overview
@@ -81,6 +81,8 @@ Principles:
 | `password_resets` | id, user_id, token_hash (unique), expires_at (1 hour), used_at?, email? (the address the link was sent to), all_workspaces (J2), created_at | self-service reset (H2); removed with the user (cascade) |
 | `email_verifications` | id, user_id, token_hash (unique), expires_at (24 hours), used_at?, created_at | email verification (H4); removed with the user (cascade) |
 | `audit_logs` | id, tenant_id, actor_user_id?, actor_role?, action, target_type?, target_id?, before jsonb?, after jsonb?, ip?, user_agent?, request_id?, created_at | append-only (a trigger refuses UPDATE/DELETE); `actor_user_id` has no FK and holds a `platform_admins` id when `actor_role` is `platform_admin` (H6) |
+| `agents` | id, tenant_id, name (1 to 80, trimmed, unique per tenant ignoring case), status (`active`/`disabled`), is_default (exactly one true per tenant: partial unique index), created_by?, created_at, updated_at | the tenant's own setup the one engine uses for a call (L7); **built (Phase 5B-1)**; FK RESTRICT; `created_by` has no FK |
+| `agent_settings` | id, tenant_id, agent_id, version (from 1), document jsonb (the engine's shape; may hold forwarding phone numbers), created_by?, created_at | one row per version, append-only (a trigger refuses UPDATE), unique (agent_id, version), composite FK (tenant_id, agent_id) to `agents` so a row cannot name another tenant's agent, deleted only with its agent (cascade); **built (Phase 5B-1)** |
 
 ### 4.2 `tenant_core`: **Proposed** additions
 | Table / change | Purpose |
@@ -90,7 +92,7 @@ Principles:
 | `gateway_conversations` (tenant_id, conversation_id, end_customer_id, channel, ai_blocked, escalation_reason, escalation_pending, escalation_attempts, escalation_last_attempt_at, closed_at) | What the gateway knows about a conversation it started: resume for a returning visitor, "AI may not answer" (plan limit), an escalation not yet delivered. **Built (Phase 3)** |
 | `usage_events` (tenant_id, kind, ref_id, day) | Dedupe ledger so `usage_daily` counts a conversation, a message or (since Phase 5A) a call once; `kind` is `conversation`, `message` or `call`. **Built (Phase 3, 5A)** |
 | `channel_connections` (tenant_id, channel, provider, external_account_id, credentials_ref, status) | Map a WhatsApp number or phone number to a tenant for inbound webhooks |
-| `agent_configs` (tenant_id, version, config jsonb) | Persona, tone, language, greeting, escalation rules, working hours, allowed actions |
+| ~~`agent_configs` (tenant_id, version, config jsonb)~~ | Replaced by `agents` + `agent_settings` (4.1, per agent, Phase 5B-1) |
 | `tenant_integrations` (tenant_id, kind, credentials_encrypted) | Credentials for the tenant's own systems that agent actions call |
 | `knowledge_sources` (tenant_id, name, type, storage_key, status, error, created_at) | Uploaded docs/URLs and their ingestion state (chunks live in `ai_engine`) |
 | `usage_daily` (tenant_id, day, conversations, messages, tokens_in, tokens_out, call_minutes) | Plan limits and billing. **Built (Phase 3)**, written only by `UsageService` |
@@ -101,6 +103,8 @@ Principles:
 Billing (section I, **built in Phase 2B**): `plans`, `subscriptions`, `invoices`, `invoice_sequences`, `billing_events` (append-only) and `data_use_consents`; `tenants.plan` / `tenants.status` stay as denormalised mirrors of the subscription (only `SubscriptionService` writes them). Starter (hidden, 15 days) falls back to Free; Pro and Enterprise are paid; payments are recorded manually at launch behind a `BillingProvider` interface so a payment provider can be added later without rework. Amounts are integer minor units plus currency (PKR). **Overage (J6, built in Phase 4B):** `subscriptions.overage_enabled` (default true) is the owner's choice on plans that have an overage price (Pro, `overageConversationMinor`); past the included conversations the AI keeps answering and each extra conversation is billed, or, switched off, it stops hard (fallback and `limit_reached` escalation). The overage count is derived, never stored: `max(0, conversations used − included − conversations held for a human)` from `usage_daily` and `gateway_conversations.ai_blocked`; invoices only carry the count and amount the admin recorded (`overage_count`, `overage_amount_minor`).
 
 **Call minutes (L6, built in Phase 5A).** Every plan includes voice and a call-minute allowance: the entitlements `callMinutesPerPeriod`, `callMinutePeriod` (`total` for Starter, `month` otherwise) and, on Pro, the price `overageMinuteMinor` (placeholders: Starter 30 minutes in total, Free 20 a month, Pro 300 a month at PKR 25 an extra minute, Enterprise unlimited). The same owner switch (`overage_enabled`) governs both units: on, calls continue past the included minutes and each extra minute is billed; off, a hard stop (the status check of Phase 5B answers `quota_exceeded`). Minutes are summed from `usage_daily.call_minutes`, written once per call through `usage_events` (kind `call`); the engine's call-usage event is ingested in Phase 5E. The plan numbers and Pro prices can be set from **environment variables** (`PLAN_*`, README "Plan numbers and prices"): at startup `PlanCatalogSyncService` writes the variables that are set into the `plans` table, which stays the one source of truth.
+
+**Agents and their limits (L7, built in Phase 5B-1).** The entitlements `agents` (the tenant's agents, disabled ones included) and `phoneNumbers` (real numbers; 0 = browser test calls only) sit beside the other limits: Starter 1 and 0, Free 1 and 0, Pro 3 and 5, Enterprise unlimited, a missing key means 0; they can be set from `PLAN_*_AGENTS` and `PLAN_*_PHONE_NUMBERS`. Creating an agent takes the subscription row lock and counts inside the transaction (`EntitlementsService.assertCountAvailable`), so two simultaneous creations cannot both take the last slot. The settings of an agent are a versioned JSON document in the engine's own shape; the backend checks only its structure (the engine owns the field list in depth, and `collect` is stored as it is) and the engine reads the current version at the start of every call, so a new version applies to the next call.
 
 Translations are files, not tables: `src/lang/<locale>/<namespace>.json`, served at `/v1/i18n/...` (H7, built).
 
@@ -170,7 +174,7 @@ Rows in `notifications` hold no text. The frontend renders `<type>.title` and `<
 
 Event-driven rows are created in the event's transaction. Billing reminders are created by the hourly billing job (`BillingRemindersService`), idempotent through the `dedupe_key` (kind, threshold and period), so any number of sweeps or instances create each reminder once. Retention: 90 days (housekeeping in the same job). Data-deletion notices (I10) are Phase 8.
 
-### 5.8 A phone call (voice-first; **Proposed, not built**: Phases 5B to 5E and 6)
+### 5.8 A phone call (voice-first; **Proposed, not built**: Phases 5B-2 to 5E and 6; the settings pull is built, 5B-1)
 
 ```
  Caller ──dials the business's number──► Telephone provider (Twilio)
@@ -214,6 +218,8 @@ The routes in this flow are drafted in [contracts/backend-internal.openapi.yaml]
 | `billing` | `GET /v1/plans` (public), `GET /v1/tenants/:tenantId/billing` (plan, usage with `usage.callMinutes` and `usage.conversations`, overage figures, invoices), `PATCH /v1/tenants/:tenantId/billing/settings` (`{overageEnabled}`, owner only), `/v1/admin/tenants/:id/subscription` (+ `activate`, `record-payment` with optional `overageCount`/`overageAmountMinor`, `extend`, `change-plan`, `cancel`, and since Phase 3C `suspend` / `unsuspend`), `POST/GET /v1/tenants/:tenantId/billing/upgrade-request` (owner asks, owner and admin read), `GET /v1/admin/upgrade-requests` and `POST /v1/admin/upgrade-requests/:id/handle` | public / JWT owner+admin (settings and the request: owner) / platform-admin token |
 | `data-use` | `GET/PUT /v1/tenants/:tenantId/data-use` (model-training consent, default off) | JWT + tenant match + owner |
 | `api-keys` | `POST/GET /v1/tenants/:tenantId/api-keys`, `GET/PATCH/DELETE …/:id` (Phase 3) | JWT + tenant match + owner/admin |
+| `agents` | `GET /v1/tenants/:tenantId/agents` (+ `/:agentId`; every role: name, status, default flag), `POST` and `PATCH/DELETE …/:agentId` (owner/admin; the default agent cannot be deleted, an agent with numbers cannot be disabled or deleted), `GET/PUT …/:agentId/settings` and `GET …/settings/versions`, `…/versions/:n` (owner/admin; the settings can hold forwarding phone numbers) (Phase 5B-1) | JWT + tenant match + role |
+| `agents` (engine) | `GET /internal/tenants/{tenantId}/agents/{agentId}/config` (**outside `/v1`**, not in the public OpenAPI; `?version=`, ETag/304, `Cache-Control: private, max-age=60`; Phase 5B-1) | `Authorization: Bearer <INTERNAL_API_TOKEN>`, private network only |
 | `widget` | `POST /v1/widget/sessions` (public: widget key + Origin), `POST /v1/widget/messages` (SSE), `GET /v1/widget/conversation`, `GET /v1/widget/events` (SSE, Phase 4) | widget token (a staff or platform token is refused) + key + Origin |
 | `conversations` | `GET /v1/tenants/:tenantId/conversations` (+ `/counts`, `/:id`), `POST …/:id/claim`, `/release`, `/resolve`, `/messages`; `GET …/customers/:id/conversations` (Phase 4) | JWT + tenant match; every role reads and works; reply/release/resolve only for the assignee |
 | `notifications` | `GET /v1/tenants/:tenantId/notifications` (`?unread=true`), `POST …/:id/read`, `POST …/read-all` (Phase 4) | JWT + tenant match; every role, own rows only |

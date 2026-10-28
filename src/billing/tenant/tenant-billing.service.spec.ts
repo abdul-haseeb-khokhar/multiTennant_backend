@@ -1,6 +1,7 @@
 import { Test } from '@nestjs/testing';
 import { createPrismaMock, PrismaMock } from '../../../test/utils/prisma-mock';
 import { PrismaService } from '../../prisma/prisma.service';
+import { UsageProvider } from '../entitlements/usage.provider';
 import { OverageService } from '../overage.service';
 import { SubscriptionService } from '../subscriptions/subscription.service';
 import { TenantBillingService } from './tenant-billing.service';
@@ -23,7 +24,13 @@ const effective = {
   provider: 'manual',
   currency: 'PKR',
   overageEnabled: true,
-  entitlements: { seats: 10, overageConversationMinor: 1500 },
+  entitlements: {
+    seats: 10,
+    overageConversationMinor: 1500,
+    conversationPeriod: 'month',
+    agents: 3,
+    phoneNumbers: 5,
+  },
   entitlementsOverride: { seats: 25 },
   nextTransitionAt: new Date('2026-11-07T00:00:00.000Z'),
 };
@@ -54,12 +61,18 @@ describe('TenantBillingService', () => {
   let prisma: PrismaMock;
   let subscriptions: { getEffective: jest.Mock; setOverageEnabled: jest.Mock };
   let overage: { conversationSummary: jest.Mock; callMinuteSummary: jest.Mock };
+  let usage: { getUsage: jest.Mock };
 
   beforeEach(async () => {
     prisma = createPrismaMock();
     subscriptions = {
       getEffective: jest.fn().mockResolvedValue(effective),
       setOverageEnabled: jest.fn().mockResolvedValue({ changed: true }),
+    };
+    usage = {
+      getUsage: jest.fn(async (_tenantId: string, key: string) =>
+        key === 'agents' ? 2 : 0,
+      ),
     };
     overage = {
       conversationSummary: jest.fn().mockResolvedValue({
@@ -114,6 +127,7 @@ describe('TenantBillingService', () => {
         { provide: PrismaService, useValue: prisma },
         { provide: SubscriptionService, useValue: subscriptions },
         { provide: OverageService, useValue: overage },
+        { provide: UsageProvider, useValue: usage },
       ],
     }).compile();
     service = module.get(TenantBillingService);
@@ -207,6 +221,26 @@ describe('TenantBillingService', () => {
         currency: 'PKR',
       });
       expect(overage.callMinuteSummary).toHaveBeenCalledWith(effective);
+    });
+
+    it('shows the agents and phone numbers the plan allows next to what the workspace has (L7)', async () => {
+      const result = await service.getForTenant('tenant-a', {});
+      expect(result.usage.agents).toEqual({ included: 3, used: 2 });
+      expect(result.usage.phoneNumbers).toEqual({ included: 5, used: 0 });
+      expect(usage.getUsage).toHaveBeenCalledWith(
+        'tenant-a',
+        'agents',
+        expect.objectContaining({ periodStart: T0 }),
+      );
+    });
+
+    it('null limits stay null (unlimited)', async () => {
+      subscriptions.getEffective.mockResolvedValue({
+        ...effective,
+        entitlements: { ...effective.entitlements, agents: null },
+      });
+      const result = await service.getForTenant('tenant-a', {});
+      expect(result.usage.agents).toEqual({ included: null, used: 2 });
     });
 
     it('the platform admin view carries the same figures', async () => {

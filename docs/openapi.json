@@ -3148,6 +3148,524 @@
         ]
       }
     },
+    "/v1/tenants/{tenantId}/agents": {
+      "post": {
+        "description": "An agent is the workspace's own setup that the AI uses for a call (not the staff role named `agent`). It starts with the default settings (see the settings routes). The plan limits how many agents a workspace has, disabled ones included: 403 PLAN_LIMIT_REACHED with `details: { limit: \"agents\", used, max }`. The name is unique within the workspace, ignoring case (409 AGENT_NAME_TAKEN).",
+        "operationId": "AgentsController_create",
+        "parameters": [
+          {
+            "name": "tenantId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateAgentDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Agent"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Create an agent (owner/admin)",
+        "tags": [
+          "Agents"
+        ]
+      },
+      "get": {
+        "description": "The default agent first, then in the order they were created. Name, status and the default flag only: the settings are owner/admin only.",
+        "operationId": "AgentsController_findAll",
+        "parameters": [
+          {
+            "name": "tenantId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "skip",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 0,
+              "default": 0,
+              "type": "number"
+            }
+          },
+          {
+            "name": "take",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "description": "Only agents with this status.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "active",
+                "disabled"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data",
+                    "total",
+                    "skip",
+                    "take"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Agent"
+                      }
+                    },
+                    "total": {
+                      "type": "integer"
+                    },
+                    "skip": {
+                      "type": "integer"
+                    },
+                    "take": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "List the workspace's agents (every role)",
+        "tags": [
+          "Agents"
+        ]
+      }
+    },
+    "/v1/tenants/{tenantId}/agents/{agentId}": {
+      "get": {
+        "operationId": "AgentsController_findOne",
+        "parameters": [
+          {
+            "name": "tenantId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "agentId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Agent"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "One agent (every role)",
+        "tags": [
+          "Agents"
+        ]
+      },
+      "patch": {
+        "description": "A disabled agent can still be read and edited; callers hear the \"not available\" message. Disabling an agent that has phone numbers is refused (409 AGENT_HAS_NUMBERS). Changing nothing is a no-op.",
+        "operationId": "AgentsController_update",
+        "parameters": [
+          {
+            "name": "tenantId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "agentId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateAgentDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Agent"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Rename, disable or enable an agent (owner/admin)",
+        "tags": [
+          "Agents"
+        ]
+      },
+      "delete": {
+        "description": "The default agent cannot be deleted (409 CANNOT_DELETE_DEFAULT_AGENT) and neither can an agent that has phone numbers (409 AGENT_HAS_NUMBERS). The deleted agent is returned.",
+        "operationId": "AgentsController_remove",
+        "parameters": [
+          {
+            "name": "tenantId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "agentId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Agent"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Delete an agent and its settings (owner/admin)",
+        "tags": [
+          "Agents"
+        ]
+      }
+    },
+    "/v1/tenants/{tenantId}/agents/{agentId}/settings": {
+      "get": {
+        "description": "Owner and admin only: the document holds the forwarding contacts' phone numbers; the staff role `agent` gets the agent's name and status from the agents routes. `version` goes back as `expectedVersion` when saving.",
+        "operationId": "AgentSettingsController_current",
+        "parameters": [
+          {
+            "name": "tenantId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "agentId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentSettingsVersion"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "The current settings of an agent (owner/admin)",
+        "tags": [
+          "Agents"
+        ]
+      },
+      "put": {
+        "description": "Send the keys to change and the `expectedVersion` you read: the keys you send replace those keys, the rest stay. Adds version n+1 and keeps the old ones. 409 AGENT_SETTINGS_VERSION_CONFLICT (with `currentVersion`) if someone saved in between; 400 AGENT_SETTINGS_INVALID with `details: [{ field, code, params? }]` for a structural problem (codes are translated in the `common` namespace as `agent_settings.problem.<code>`). Saving a change that alters nothing returns the current version and adds none. The engine reads the settings at the start of each call, so a new version applies to the next call.",
+        "operationId": "AgentSettingsController_update",
+        "parameters": [
+          {
+            "name": "tenantId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "agentId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateAgentSettingsDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentSettingsVersion"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Save the settings of an agent as a new version (owner/admin)",
+        "tags": [
+          "Agents"
+        ]
+      }
+    },
+    "/v1/tenants/{tenantId}/agents/{agentId}/settings/versions": {
+      "get": {
+        "description": "Version number, who saved it and when; not the documents.",
+        "operationId": "AgentSettingsController_versions",
+        "parameters": [
+          {
+            "name": "tenantId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "agentId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "skip",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 0,
+              "default": 0,
+              "type": "number"
+            }
+          },
+          {
+            "name": "take",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data",
+                    "total",
+                    "skip",
+                    "take"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/AgentSettingsVersionSummary"
+                      }
+                    },
+                    "total": {
+                      "type": "integer"
+                    },
+                    "skip": {
+                      "type": "integer"
+                    },
+                    "take": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "The versions of an agent's settings, newest first (owner/admin)",
+        "tags": [
+          "Agents"
+        ]
+      }
+    },
+    "/v1/tenants/{tenantId}/agents/{agentId}/settings/versions/{version}": {
+      "get": {
+        "operationId": "AgentSettingsController_version",
+        "parameters": [
+          {
+            "name": "tenantId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "agentId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentSettingsVersion"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "One past version of the settings (owner/admin)",
+        "tags": [
+          "Agents"
+        ]
+      }
+    },
     "/v1/tenants/{tenantId}/events/ticket": {
       "post": {
         "description": "A browser `EventSource` cannot send an `Authorization` header, and the access token must never be put in a URL. Call this with the normal `Authorization` header, then open `GET …/events?ticket=<ticket>` within 30 seconds. The ticket works once; open a new one (this call again) for every reconnect. A server-side proxy that can set the header does not need tickets.",
@@ -5076,6 +5594,18 @@
             ],
             "description": "`total` = since the subscription period began (Starter), `month` = per UTC calendar month."
           },
+          "agents": {
+            "type": "number",
+            "nullable": true,
+            "example": 3,
+            "description": "Agents the workspace may have, disabled ones included (L7). null = unlimited. Creating one past the limit answers 403 PLAN_LIMIT_REACHED with `details: { limit: \"agents\", used, max }`. Set by `PLAN_*_AGENTS`."
+          },
+          "phoneNumbers": {
+            "type": "number",
+            "nullable": true,
+            "example": 5,
+            "description": "Real phone numbers the workspace may hold (L7, assigned from Phase 5D). 0 on Free and Starter: they make browser test calls only. null = unlimited. Set by `PLAN_*_PHONE_NUMBERS`."
+          },
           "overageConversationMinor": {
             "type": "number",
             "description": "Price: one extra conversation, minor units (chat, halted)."
@@ -5099,7 +5629,9 @@
           "voice",
           "poweredByLabel",
           "callMinutesPerPeriod",
-          "callMinutePeriod"
+          "callMinutePeriod",
+          "agents",
+          "phoneNumbers"
         ]
       },
       "PlanView": {
@@ -5421,6 +5953,26 @@
           "currency"
         ]
       },
+      "CountUsageView": {
+        "type": "object",
+        "properties": {
+          "included": {
+            "type": "number",
+            "nullable": true,
+            "example": 3,
+            "description": "What the plan allows. null = unlimited."
+          },
+          "used": {
+            "type": "number",
+            "example": 1,
+            "description": "What the workspace has now."
+          }
+        },
+        "required": [
+          "included",
+          "used"
+        ]
+      },
       "BillingUsageView": {
         "type": "object",
         "properties": {
@@ -5439,11 +5991,29 @@
                 "$ref": "#/components/schemas/ConversationUsageView"
               }
             ]
+          },
+          "agents": {
+            "description": "Agents (L7): the limit and how many exist, disabled ones included.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CountUsageView"
+              }
+            ]
+          },
+          "phoneNumbers": {
+            "description": "Real phone numbers (L7): the limit and how many are assigned (0 until Phase 5D).",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CountUsageView"
+              }
+            ]
           }
         },
         "required": [
           "callMinutes",
-          "conversations"
+          "conversations",
+          "agents",
+          "phoneNumbers"
         ]
       },
       "InvoiceView": {
@@ -6774,6 +7344,175 @@
             }
           }
         }
+      },
+      "CreateAgentDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "example": "Evening reception",
+            "minLength": 1,
+            "maxLength": 80,
+            "description": "The label of the agent inside the dashboard. Unique within the workspace, ignoring case (409 AGENT_NAME_TAKEN)."
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "Agent": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "tenantId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string",
+            "example": "Evening reception"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "disabled"
+            ],
+            "description": "A disabled agent is still readable and editable by staff; callers hear the \"not available\" message."
+          },
+          "isDefault": {
+            "type": "boolean",
+            "description": "Every workspace has exactly one default agent. It cannot be deleted."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "tenantId",
+          "name",
+          "status",
+          "isDefault",
+          "createdAt",
+          "updatedAt"
+        ]
+      },
+      "UpdateAgentDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "example": "Night desk",
+            "minLength": 1,
+            "maxLength": 80,
+            "description": "Rename the agent (409 AGENT_NAME_TAKEN if another one has the name)."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "disabled"
+            ],
+            "description": "`disabled`: the engine plays the \"not available\" message for this agent; staff can still read and edit it. Refused (409 AGENT_HAS_NUMBERS) while the agent has phone numbers."
+          }
+        }
+      },
+      "AgentSettingsVersion": {
+        "type": "object",
+        "properties": {
+          "agentId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "version": {
+            "type": "number",
+            "example": 3,
+            "description": "Starts at 1; every save adds one."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "createdBy": {
+            "type": "string",
+            "nullable": true,
+            "description": "The staff user who saved it; null for the first version."
+          },
+          "document": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "The settings document in the engine's shape: businessName, purpose, tone, timezone, uiLocale, replyLanguage, hours, escalation (call forwarding, with the contacts' phone numbers), capabilities, voices, collect."
+          }
+        },
+        "required": [
+          "agentId",
+          "version",
+          "createdAt",
+          "createdBy",
+          "document"
+        ]
+      },
+      "UpdateAgentSettingsDto": {
+        "type": "object",
+        "properties": {
+          "expectedVersion": {
+            "type": "number",
+            "minimum": 1,
+            "example": 3,
+            "description": "The version you started from (the `version` of your last GET). If someone saved in between, the answer is 409 AGENT_SETTINGS_VERSION_CONFLICT with `currentVersion`: reload and make the change again."
+          },
+          "settings": {
+            "type": "object",
+            "additionalProperties": true,
+            "example": {
+              "tone": "friendly",
+              "replyLanguage": "ur"
+            },
+            "description": "The keys to change. Each key you send replaces that whole key; keys you leave out keep their value. Known keys: businessName, purpose, tone (professional|friendly|concise|formal), timezone (IANA), uiLocale and replyLanguage (en|ur), hours (`{mon: [[\"09:00\",\"17:00\"]], …}` or null), escalation (call forwarding), capabilities, voices, collect (what the agent collects: the engine's document, stored as it is; null = not set up). The backend checks the structure only (400 AGENT_SETTINGS_INVALID with `details`); deeper checks of `collect` and `voices` belong to the engine."
+          }
+        },
+        "required": [
+          "expectedVersion",
+          "settings"
+        ]
+      },
+      "AgentSettingsVersionSummary": {
+        "type": "object",
+        "properties": {
+          "agentId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "version": {
+            "type": "number",
+            "example": 3,
+            "description": "Starts at 1; every save adds one."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "createdBy": {
+            "type": "string",
+            "nullable": true,
+            "description": "The staff user who saved it; null for the first version."
+          }
+        },
+        "required": [
+          "agentId",
+          "version",
+          "createdAt",
+          "createdBy"
+        ]
       },
       "StreamTicketResponse": {
         "type": "object",

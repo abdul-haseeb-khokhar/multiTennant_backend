@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { APP_INTERCEPTOR } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
+import { AgentsModule } from './agents/agents.module';
 import { ApiKeysModule } from './api-keys/api-keys.module';
 import { ConversationsModule } from './conversations/conversations.module';
 import { AuditModule } from './audit/audit.module';
@@ -44,6 +45,7 @@ import { WidgetModule } from './widget/widget.module';
     PlanCatalogModule,
     DataUseModule,
     ApiKeysModule,
+    AgentsModule,
     UsageModule,
     RealtimeModule,
     NotificationsModule,

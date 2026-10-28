@@ -21,6 +21,8 @@ describe('parseEntitlements', () => {
         overageConversationMinor: 1500,
         overageMinuteMinor: 2500,
         voicePerMinuteMinor: 2500,
+        agents: 3,
+        phoneNumbers: 5,
       }),
     ).toEqual({
       seats: 10,
@@ -32,9 +34,29 @@ describe('parseEntitlements', () => {
       poweredByLabel: false,
       callMinutesPerPeriod: 300,
       callMinutePeriod: 'month',
+      agents: 3,
+      phoneNumbers: 5,
       overageConversationMinor: 1500,
       overageMinuteMinor: 2500,
       voicePerMinuteMinor: 2500,
+    });
+  });
+
+  it('reads the agent and phone-number limits (L7): a number, null for unlimited, 0 when missing', () => {
+    expect(parseEntitlements({ agents: 3, phoneNumbers: 5 })).toMatchObject({
+      agents: 3,
+      phoneNumbers: 5,
+    });
+    expect(
+      parseEntitlements({ agents: null, phoneNumbers: null }),
+    ).toMatchObject({ agents: null, phoneNumbers: null });
+    expect(parseEntitlements({ seats: 3 })).toMatchObject({
+      agents: 0,
+      phoneNumbers: 0,
+    });
+    expect(parseEntitlements({ agents: -1, phoneNumbers: 1.5 })).toMatchObject({
+      agents: 0,
+      phoneNumbers: 0,
     });
   });
 
@@ -73,6 +95,8 @@ describe('parseEntitlements', () => {
         poweredByLabel: true,
         callMinutesPerPeriod: 0,
         callMinutePeriod: 'month',
+        agents: 0,
+        phoneNumbers: 0,
       });
     }
     const odd = parseEntitlements({
@@ -148,6 +172,8 @@ describe('validateOverride', () => {
       overageConversationMinor: 1000,
       overageMinuteMinor: 2000,
       voicePerMinuteMinor: 2000,
+      agents: 10,
+      phoneNumbers: null,
     };
     expect(validateOverride(input)).toEqual({ ok: true, value: input });
   });
@@ -167,6 +193,9 @@ describe('validateOverride', () => {
     ['a fractional call-minute limit', { callMinutesPerPeriod: 2.5 }],
     ['a string call-minute limit', { callMinutesPerPeriod: '30' }],
     ['a bad call-minute period', { callMinutePeriod: 'week' }],
+    ['a negative agent limit', { agents: -1 }],
+    ['a fractional phone-number limit', { phoneNumbers: 1.5 }],
+    ['a string agent limit', { agents: '3' }],
     ['a negative minute price', { overageMinuteMinor: -1 }],
     ['a fractional minute price', { overageMinuteMinor: 1.5 }],
   ])('rejects %s', (_name, value) => {

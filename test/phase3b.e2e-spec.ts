@@ -274,6 +274,7 @@ describe('Phase 3B: frontend gap-report fixes (e2e)', () => {
       );
       expect(deletes.map(([path]) => path).sort()).toEqual([
         '/v1/admin/tenants/{id}',
+        '/v1/tenants/{tenantId}/agents/{agentId}',
         '/v1/tenants/{tenantId}/api-keys/{id}',
         '/v1/tenants/{tenantId}/customers/{id}',
         '/v1/tenants/{tenantId}/invites/{id}',

@@ -20,6 +20,8 @@ const entitlements = (over: Partial<Entitlements> = {}): Entitlements => ({
   poweredByLabel: false,
   callMinutesPerPeriod: 30,
   callMinutePeriod: 'total',
+  agents: 1,
+  phoneNumbers: 0,
   ...over,
 });
 
@@ -440,6 +442,141 @@ describe('EntitlementsService', () => {
       await expect(
         service.assertSeatAvailable(tx as never, 'tenant-a', 'invite'),
       ).rejects.toMatchObject({ response: { code: 'TENANT_SUSPENDED' } });
+    });
+  });
+
+  describe('agents and phone numbers (L7): assertCountAvailable', () => {
+    const tx = { agent: { count: jest.fn() } };
+    const thrown = async (promise: Promise<unknown>) => {
+      try {
+        await promise;
+      } catch (error) {
+        return error as {
+          getStatus(): number;
+          getResponse(): Record<string, unknown>;
+        };
+      }
+      throw new Error('expected a rejection');
+    };
+
+    const plan = (agents: number | null, phoneNumbers: number | null = 0) =>
+      subscriptions.getEffective.mockResolvedValue(
+        effective({ entitlements: entitlements({ agents, phoneNumbers }) }),
+      );
+
+    beforeEach(() => {
+      tx.agent.count.mockReset().mockResolvedValue(0);
+    });
+
+    it('counts the agents of the tenant (disabled ones too) inside the transaction, behind the subscription lock', async () => {
+      plan(3);
+      tx.agent.count.mockResolvedValue(2);
+      await expect(
+        service.assertCountAvailable(tx as never, 'tenant-a', 'agents'),
+      ).resolves.toBeUndefined();
+      expect(subscriptions.lock).toHaveBeenCalledWith(tx, 'tenant-a');
+      expect(tx.agent.count).toHaveBeenCalledWith({
+        where: { tenantId: 'tenant-a' },
+      });
+    });
+
+    it.each([
+      ['Starter / Free (1)', 1],
+      ['Pro (3)', 3],
+    ])(
+      '%s: at the limit it answers 403 PLAN_LIMIT_REACHED with details {limit, used, max}',
+      async (_name, max) => {
+        plan(max);
+        tx.agent.count.mockResolvedValue(max);
+        const error = await thrown(
+          service.assertCountAvailable(tx as never, 'tenant-a', 'agents'),
+        );
+        expect(error.getStatus()).toBe(403);
+        expect(error.getResponse()).toMatchObject({
+          statusCode: 403,
+          code: 'PLAN_LIMIT_REACHED',
+          details: { limit: 'agents', used: max, max },
+        });
+      },
+    );
+
+    it('null is unlimited (Enterprise)', async () => {
+      plan(null);
+      tx.agent.count.mockResolvedValue(500);
+      await expect(
+        service.assertCountAvailable(tx as never, 'tenant-a', 'agents'),
+      ).resolves.toBeUndefined();
+    });
+
+    it('a plan row without the key allows none (most restrictive)', async () => {
+      subscriptions.getEffective.mockResolvedValue(
+        effective({ entitlements: entitlements({ agents: 0 }) }),
+      );
+      await expect(
+        service.assertCountAvailable(tx as never, 'tenant-a', 'agents'),
+      ).rejects.toMatchObject({ response: { code: 'PLAN_LIMIT_REACHED' } });
+    });
+
+    it('a suspended, closed or past-due tenant cannot add agents, and gets the matching code without limit details', async () => {
+      for (const [status, code] of [
+        ['suspended', 'TENANT_SUSPENDED'],
+        ['closed', 'TENANT_CLOSED'],
+        ['past_due', 'SUBSCRIPTION_PAST_DUE'],
+      ]) {
+        subscriptions.getEffective.mockResolvedValue(effective({ status }));
+        const error = await thrown(
+          service.assertCountAvailable(tx as never, 'tenant-a', 'agents'),
+        );
+        expect(error.getResponse().code).toBe(code);
+        expect(error.getResponse()).not.toHaveProperty('details');
+      }
+    });
+
+    it('never trusts a stale cache', async () => {
+      plan(3);
+      await service.assertCountAvailable(tx as never, 'tenant-a', 'agents');
+      await service.assertCountAvailable(tx as never, 'tenant-a', 'agents');
+      expect(subscriptions.getEffective).toHaveBeenCalledTimes(2);
+    });
+
+    it('phoneNumbers: Free and Starter (0) never get a number; Pro (5) counts none yet (the table arrives in Phase 5D)', async () => {
+      plan(1, 0);
+      await expect(
+        service.assertCountAvailable(tx as never, 'tenant-a', 'phoneNumbers'),
+      ).rejects.toMatchObject({
+        response: {
+          code: 'PLAN_LIMIT_REACHED',
+          details: { limit: 'phoneNumbers', used: 0, max: 0 },
+        },
+      });
+      plan(3, 5);
+      await expect(
+        service.assertCountAvailable(tx as never, 'tenant-a', 'phoneNumbers'),
+      ).resolves.toBeUndefined();
+      expect(tx.agent.count).not.toHaveBeenCalled();
+    });
+
+    it('check() works for both keys and reports the limit', async () => {
+      plan(3, 5);
+      usage.getUsage.mockResolvedValue(2);
+      await expect(service.check('tenant-a', 'agents')).resolves.toEqual({
+        allowed: true,
+        planCode: 'starter',
+        limit: 3,
+        used: 2,
+      });
+      usage.getUsage.mockResolvedValue(0);
+      await expect(
+        service.check('tenant-a', 'phoneNumbers'),
+      ).resolves.toMatchObject({ allowed: true, limit: 5, used: 0 });
+      plan(1, 0);
+      service.invalidate('tenant-a');
+      await expect(
+        service.check('tenant-a', 'phoneNumbers'),
+      ).resolves.toMatchObject({
+        allowed: false,
+        code: 'PLAN_LIMIT_REACHED',
+      });
     });
   });
 });

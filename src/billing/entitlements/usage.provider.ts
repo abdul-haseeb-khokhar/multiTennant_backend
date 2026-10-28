@@ -35,8 +35,10 @@ export abstract class UsageProvider {
  * from the first day of the current UTC calendar month. Daily granularity means a conversation
  * from earlier on the very day a period started still counts. Call minutes (L6) come from
  * `usage_daily.call_minutes` with the same two windows, chosen by `callMinutePeriod`; the rows are
- * written by `UsageService` (the engine's call usage is ingested in Phase 5E). Knowledge size is
- * still 0 until the knowledge upload (Phase 5F) provides it.
+ * written by `UsageService` (the engine's call usage is ingested in Phase 5E). Agents (L7) are counted
+ * live, disabled ones included. Real phone numbers are 0 until the `phone_numbers` table exists
+ * (Phase 5D: count that tenant's rows here, and in `EntitlementsService.assertCountAvailable`).
+ * Knowledge size is still 0 until the knowledge upload (Phase 5F) provides it.
  */
 @Injectable()
 export class DefaultUsageProvider extends UsageProvider {
@@ -60,6 +62,9 @@ export class DefaultUsageProvider extends UsageProvider {
     }
     if (key === 'callMinutes' && context) {
       return this.countCallMinutes(tenantId, context);
+    }
+    if (key === 'agents') {
+      return this.prisma.agent.count({ where: { tenantId } });
     }
     return 0;
   }

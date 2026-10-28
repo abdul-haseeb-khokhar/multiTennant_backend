@@ -1,6 +1,7 @@
 import { randomInt, randomUUID } from 'node:crypto';
 import { EngineClient } from './engine-client';
 import {
+  AgentConfigSource,
   CONVERSATION_STATUSES,
   ClaimInput,
   ConversationCounts,
@@ -57,7 +58,7 @@ export const MOCK_COMMANDS = {
   /**
    * Simulates one finished phone call (voice-first, L1): the engine saves a request with a
    * reference and reports the call minutes (`record.submitted`, `usage.call_minutes`). The
-   * backend acknowledges these events until Phases 5B and 5E handle them.
+   * backend acknowledges these events until Phases 5B-2 and 5E handle them.
    */
   CALL: '/call',
   /** Simulates the engine changing the details of the latest saved request (`record.updated`). */
@@ -70,11 +71,14 @@ export type MockRecordStatus = 'requested' | 'confirmed' | 'done' | 'cancelled';
 
 /**
  * A request as the mock engine keeps it (the real engine owns the table; the backend's copy and
- * the staff workflow arrive in Phase 5B). `reference` is unique per tenant, like `AP-4K7Q2`.
+ * the staff workflow arrive in Phase 5B-2). `reference` is unique per tenant, like `AP-4K7Q2`.
  */
 export interface MockRecord {
   id: string;
   tenantId: string;
+  /** The agent that took the call (L7); null when the mock ran without an agent source. */
+  agentId: string | null;
+
   reference: string;
   type: MockRecordType;
   status: MockRecordStatus;
@@ -88,10 +92,20 @@ export interface MockRecord {
   createdAt: string;
 }
 
+/** The agent that should take a simulated call is disabled: the real engine plays the "not available" message and saves nothing. */
+export class MockAgentUnavailableError extends Error {
+  constructor(public readonly agentId: string) {
+    super('The agent is disabled and takes no calls');
+    this.name = 'MockAgentUnavailableError';
+  }
+}
+
 export interface MockCallOptions {
   type?: MockRecordType;
   /** Length of the call; the usage event reports seconds (default 185 = 3 minutes 5 seconds). */
   seconds?: number;
+  /** The agent that takes the call; default the tenant's default agent (L7). Its settings are pulled at the start of the call. */
+  agentId?: string;
   /** The caller; default a new random id (the backend creates the end customer from the number in Phase 5D). */
   endCustomerId?: string;
   summary?: string;
@@ -99,6 +113,12 @@ export interface MockCallOptions {
 }
 
 export interface MockCallResult {
+  /** The agent that took the call, or null when no agent source is connected (the mock alone). */
+  agentId: string | null;
+  /** The settings version the call was served with (pulled at the start), or null without an agent. */
+  settingsVersion: number | null;
+  /** The settings document that was pulled, or null without an agent. */
+  config: object | null;
   conversationId: string;
   endCustomerId: string;
   recordId: string;
@@ -162,6 +182,8 @@ const callReply = (reference: string) =>
   `Thank you for calling. I saved your request ${reference}. A colleague will confirm it and get back to you.`;
 const callUpdateReply = (reference: string) =>
   `I updated the details of your request ${reference}. A colleague will confirm it.`;
+const AGENT_UNAVAILABLE_REPLY =
+  'The agent is not available right now, so no call was simulated. Enable the agent first.';
 const NO_CALL_REPLY =
   'There is no saved request to update yet. Send /call first to simulate a call.';
 
@@ -187,6 +209,7 @@ export class MockEngineClient extends EngineClient {
   private readonly idempotent = new Map<string, unknown>();
   private down = false;
   private sink?: EngineEventSink;
+  private agentConfigSource?: AgentConfigSource;
   private delivery: Promise<void> = Promise.resolve();
   /** Every event the mock produced (newest last, bounded): for assertions in tests. */
   readonly emitted: EngineEventEnvelope[] = [];
@@ -209,6 +232,14 @@ export class MockEngineClient extends EngineClient {
   /** Where events are delivered, in order, one at a time (the backend's receiver). */
   setEventSink(sink: EngineEventSink | undefined) {
     this.sink = sink;
+  }
+
+  /**
+   * Where a simulated call pulls its agent's settings from (set by the agents module with the very
+   * service the engine's pull route uses). Without it a call has no agent.
+   */
+  setAgentConfigSource(source: AgentConfigSource | undefined) {
+    this.agentConfigSource = source;
   }
 
   /** Resolves when every event produced so far has been handed to the sink. */
@@ -270,11 +301,24 @@ export class MockEngineClient extends EngineClient {
    * voice conversation, a saved request with a reference (`record.submitted`) and the call length
    * (`usage.call_minutes`, in seconds). Needs no chat session; tests and the frontend prototype
    * call it directly or send `/call` in a mock chat.
+   *
+   * Like the real engine (L7) it first PULLS the settings of the agent that takes the call (the
+   * tenant's default agent unless `options.agentId` names one), and the call events carry that
+   * `agentId`. A disabled agent takes no call: the real engine plays the "not available" message,
+   * the mock throws `MockAgentUnavailableError` before anything is stored. An agent of another tenant
+   * answers like one that does not exist (the pull is scoped to the tenant).
    */
-  simulateCall(
+  async simulateCall(
     tenantId: string,
     options: MockCallOptions = {},
-  ): MockCallResult {
+  ): Promise<MockCallResult> {
+    const pulled = this.agentConfigSource
+      ? await this.agentConfigSource(tenantId, options.agentId)
+      : null;
+    if (pulled && pulled.status === 'disabled') {
+      throw new MockAgentUnavailableError(pulled.agentId);
+    }
+    const agentId = pulled?.agentId ?? null;
     const type = options.type ?? 'appointment';
     const seconds = Math.max(0, Math.trunc(options.seconds ?? 185));
     const endCustomerId = options.endCustomerId ?? randomUUID();
@@ -302,10 +346,12 @@ export class MockEngineClient extends EngineClient {
       conversationId: conversation.id,
       endCustomerId,
       channel: 'voice',
+      agentId,
     });
     const record: MockRecord = {
       id: randomUUID(),
       tenantId,
+      agentId,
       reference: this.newReference(tenantId, type),
       type,
       status: 'requested',
@@ -333,17 +379,22 @@ export class MockEngineClient extends EngineClient {
       conversationId: conversation.id,
       endCustomerId,
       channel: 'voice',
+      agentId,
     });
     this.emit(tenantId, 'usage.call_minutes', {
       conversationId: conversation.id,
       seconds,
       channel: 'voice',
+      agentId,
     });
     // The call is over: closed by the AI, without the chat events of a resolution.
     conversation.status = 'resolved';
     conversation.resolvedAt = new Date().toISOString();
     conversation.resolvedBy = 'ai';
     return {
+      agentId,
+      settingsVersion: pulled?.version ?? null,
+      config: pulled ? clone(pulled.config) : null,
       conversationId: conversation.id,
       endCustomerId,
       recordId: record.id,
@@ -375,6 +426,7 @@ export class MockEngineClient extends EngineClient {
       reference: record.reference,
       type: record.type,
       conversationId: record.conversationId,
+      agentId: record.agentId,
       revision: record.revision,
     });
     return true;
@@ -756,7 +808,12 @@ export class MockEngineClient extends EngineClient {
       text.startsWith(MOCK_COMMANDS.ESCALATE) || HUMAN_REQUEST.test(text);
     let callText: string | null = null;
     if (callStart) {
-      callText = callReply(this.simulateCall(ctx.tenantId).reference);
+      try {
+        callText = callReply((await this.simulateCall(ctx.tenantId)).reference);
+      } catch (error) {
+        if (!(error instanceof MockAgentUnavailableError)) throw error;
+        callText = AGENT_UNAVAILABLE_REPLY;
+      }
     } else if (callUpdate) {
       const latest = this.recordsOf(ctx.tenantId).at(-1);
       callText =

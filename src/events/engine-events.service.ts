@@ -46,7 +46,7 @@ export const HANDLED_EVENT_TYPES = [
 
 /**
  * Voice-first event types the engine reports (M2.4, L4) that no phase handles yet: a request was
- * saved or changed (`record.submitted`, `record.updated`: Phase 5B) and a call ended
+ * saved or changed (`record.submitted`, `record.updated`: Phase 5B-2) and a call ended
  * (`usage.call_minutes`: Phase 5E). They are ACKNOWLEDGED (200 `ignored`) after the usual tenant
  * check, and not written to the inbox, so that once the phase that handles them exists a re-delivery
  * of the engine outbox is still processed instead of being answered `duplicate`.

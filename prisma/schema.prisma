@@ -50,6 +50,7 @@ model Tenant {
   streamTickets        StreamTicket[]
   slugAliases          TenantSlugAlias[]
   upgradeRequests      UpgradeRequest[]
+  agents               Agent[]
 
   @@map("tenants")
   @@schema("tenant_core")
@@ -81,6 +82,57 @@ model UpgradeRequest {
   @@index([tenantId, createdAt(sort: Desc)])
   @@index([status, createdAt(sort: Desc)])
   @@map("upgrade_requests")
+  @@schema("tenant_core")
+}
+
+/// A tenant's agent (L7, Phase 5B-1): the tenant's own setup that the one shared engine uses for a
+/// call (settings, knowledge, hours, greeting, voice, forwarding contacts). NOT a separate AI and NOT
+/// the staff role named `agent`. A tenant has many; every tenant has exactly one default (a partial
+/// unique index in the migration); the name is unique per tenant ignoring case (an expression index
+/// in the migration). Phone numbers (Phase 5D) will each link to exactly one agent. The settings
+/// live in `agent_settings`, one row per version. created_by is a plain column (no foreign key), like
+/// audit_logs.
+model Agent {
+  id        String   @id @default(uuid())
+  tenantId  String   @map("tenant_id")
+  name      String
+  // 'active' | 'disabled' (CHECK in the migration). A disabled agent is still readable and editable
+  // by staff; the engine plays the "not available" message for it.
+  status    String   @default("active")
+  isDefault Boolean  @default(false) @map("is_default")
+  createdBy String?  @map("created_by")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
+
+  tenant   Tenant          @relation(fields: [tenantId], references: [id])
+  settings AgentSettings[]
+
+  // Target of the composite key of agent_settings: a settings row cannot name another tenant's agent.
+  @@unique([tenantId, id])
+  @@index([tenantId, createdAt])
+  @@map("agents")
+  @@schema("tenant_core")
+}
+
+/// One version of an agent's settings document (L7). Append-only: a save inserts version n+1 and
+/// never edits an older row (a trigger in the migration refuses UPDATE); the highest version is the
+/// current one. Rows go away only with their agent (cascade). The document has the ENGINE's shape and
+/// can hold forwarding phone numbers: never log it and never copy it into the audit log.
+model AgentSettings {
+  id        String   @id @default(uuid())
+  tenantId  String   @map("tenant_id")
+  agentId   String   @map("agent_id")
+  version   Int
+  document  Json
+  // The staff user who saved it; null for the system (default agent). Plain column, no foreign key.
+  createdBy String?  @map("created_by")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  agent Agent @relation(fields: [tenantId, agentId], references: [tenantId, id], onDelete: Cascade)
+
+  @@unique([agentId, version])
+  @@index([tenantId])
+  @@map("agent_settings")
   @@schema("tenant_core")
 }
 

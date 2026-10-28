@@ -182,10 +182,15 @@ describe('docs/contracts/engine-internal.openapi.yaml after Phase 5A (what Abdul
   });
 });
 
-describe('docs/contracts/backend-internal.openapi.yaml (DRAFT, nothing implemented)', () => {
-  it('describes exactly the routes planned for Phases 5B and 5D', () => {
+/** The one route of backend-internal.openapi.yaml that is built (Phase 5B-1). */
+const BUILT_BACKEND_ROUTE =
+  '/internal/tenants/{tenantId}/agents/{agentId}/config';
+
+describe('docs/contracts/backend-internal.openapi.yaml (DRAFT, except the agent config route)', () => {
+  it('describes exactly the routes planned for Phases 5B and 5D plus the built agent config route', () => {
     expect(Object.keys(backendInternal.paths).sort()).toEqual([
       '/internal/numbers/{e164}',
+      BUILT_BACKEND_ROUTE,
       '/internal/tenants/{tenantId}/customers/by-phone',
       '/internal/tenants/{tenantId}/requests',
       '/internal/tenants/{tenantId}/requests/{reference}',
@@ -197,6 +202,10 @@ describe('docs/contracts/backend-internal.openapi.yaml (DRAFT, nothing implement
   it('marks every operation as a draft, so nobody mistakes it for a built route', () => {
     for (const [path, methods] of Object.entries(backendInternal.paths)) {
       for (const operation of Object.values(methods)) {
+        if (path === BUILT_BACKEND_ROUTE) {
+          expect(operation.summary).toContain('IMPLEMENTED');
+          continue;
+        }
         expect([path, operation.summary]).toEqual([
           path,
           expect.stringContaining('[DRAFT, not implemented]'),
@@ -212,6 +221,10 @@ describe('docs/contracts/backend-internal.openapi.yaml (DRAFT, nothing implement
     for (const path of Object.keys(backendInternal.paths)) {
       expect(builtInternal).not.toContain(path);
     }
+    // ... and the number lookup is not needed under backend-first routing (L8)
+    expect(
+      backendInternal.paths['/internal/numbers/{e164}'].get.summary,
+    ).toContain('fallback');
   });
 
   it('answers the status check with the reasons Abdullah named', () => {
@@ -227,6 +240,8 @@ describe('docs/contracts/backend-internal.openapi.yaml (DRAFT, nothing implement
       'suspended',
       'unpaid',
       'quota_exceeded',
+      'agent_disabled',
+      'unknown_agent',
       'unknown_tenant',
       null,
     ]);
@@ -278,5 +293,68 @@ describe('docs/contracts/backend-events.openapi.yaml', () => {
       'record.updated',
       'usage.call_minutes',
     ]);
+  });
+});
+
+/** L7 (decided 2026-10-28): every contract carries the agent id. */
+describe('the agent id in the contracts (L7)', () => {
+  it('the engine contract accepts X-Agent-Id on the routes that start work for an agent', () => {
+    const parameters = (
+      contract as unknown as {
+        components: {
+          parameters: Record<string, { name: string; in: string }>;
+        };
+      }
+    ).components.parameters;
+    expect(parameters.AgentId).toMatchObject({
+      name: 'X-Agent-Id',
+      in: 'header',
+    });
+    for (const [path, method] of [
+      ['/internal/conversations', 'post'],
+      ['/internal/conversations/{id}/messages', 'post'],
+    ] as const) {
+      expect(
+        contract.paths[path][method].parameters?.map((p) => p.$ref),
+      ).toContain('#/components/parameters/AgentId');
+    }
+  });
+
+  it('the event data of the voice-first events carries agentId', () => {
+    const properties = events.components.schemas.Events.properties as Record<
+      string,
+      { properties: Record<string, unknown> }
+    >;
+    for (const type of [
+      'record.submitted',
+      'record.updated',
+      'usage.call_minutes',
+      'conversation.created',
+    ]) {
+      expect(Object.keys(properties[type].properties)).toContain('agentId');
+    }
+  });
+
+  it('the backend-internal draft carries agentId on the status check, requests, customer upsert and the config route', () => {
+    const text = readFileSync(
+      join(
+        __dirname,
+        '..',
+        '..',
+        'docs',
+        'contracts',
+        'backend-internal.openapi.yaml',
+      ),
+      'utf8',
+    );
+    const schemas = backendInternal.components.schemas as unknown as Record<
+      string,
+      { properties: Record<string, unknown> }
+    >;
+    expect(Object.keys(schemas.TenantStatus.properties)).toContain('agentId');
+    expect(Object.keys(schemas.CreateRequest.properties)).toContain('agentId');
+    expect(Object.keys(schemas.AgentConfig.properties)).toContain('agentId');
+    expect(text).toContain('/components/parameters/AgentIdQuery');
+    expect(text).toContain('settingsVersion');
   });
 });

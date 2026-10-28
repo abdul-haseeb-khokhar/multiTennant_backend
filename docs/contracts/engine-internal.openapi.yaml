@@ -47,6 +47,13 @@ info:
     * Every call carries `Authorization: Bearer <INTERNAL_API_TOKEN>`, `X-Tenant-Id` and
       `X-Request-Id`. The engine takes the tenant **only** from `X-Tenant-Id`, never from a body,
       a query string or message content. A conversation that belongs to another tenant answers 404.
+    * **Agents (L7, decided 2026-10-28; PROPOSAL until Abdullah confirms Q28).** A tenant has many
+      agents (the tenant's own setup the one engine uses for a call); every call, conversation and
+      request belongs to one. Routes that create or work on a conversation accept `X-Agent-Id`
+      (the backend's id of the agent). The engine checks the agent belongs to `X-Tenant-Id` only by
+      asking the backend (`GET /internal/tenants/{tenantId}/agents/{agentId}/config`, see
+      backend-internal.openapi.yaml), never from a body. Absent = the tenant's default agent, so the
+      engine can become agent-aware step by step (a nullable `agent_id`, null meaning the default).
     * Commands carry `Idempotency-Key`. Repeating a command with the same key returns the original
       result and changes nothing (the backend retries once on a network error).
     * Errors always have the shape `{ statusCode, code, message }` (F5).
@@ -155,6 +162,7 @@ paths:
         backend's `end_customers.id` (B4, B5); the engine never stores contact details.
       parameters:
         - $ref: '#/components/parameters/TenantId'
+        - $ref: '#/components/parameters/AgentId'
         - $ref: '#/components/parameters/RequestId'
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
@@ -254,6 +262,7 @@ paths:
         `token` event, and `done`.
       parameters:
         - $ref: '#/components/parameters/TenantId'
+        - $ref: '#/components/parameters/AgentId'
         - $ref: '#/components/parameters/RequestId'
         - $ref: '#/components/parameters/ConversationId'
         - $ref: '#/components/parameters/IdempotencyKey'
@@ -548,6 +557,14 @@ components:
         The engine's old `/api/*` routes use the header `x-internal-key` instead; the backend only
         calls routes that accept this Bearer form.
   parameters:
+    AgentId:
+      name: X-Agent-Id
+      in: header
+      required: false
+      schema: { type: string }
+      description: >-
+        The agent (the tenant's own setup) the conversation belongs to (L7). Absent means the
+        tenant's default agent. PROPOSAL until the engine confirms it is agent-aware (Q28).
     TenantId:
       name: X-Tenant-Id
       in: header

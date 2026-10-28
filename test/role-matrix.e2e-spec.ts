@@ -66,6 +66,17 @@ const MATRIX: Array<[Method, string, Role[], string?]> = [
   ['post', '/notifications/read-all', ALL],
   ['post', '/notifications/n1/read', ALL],
   ['post', '/events/ticket', ALL],
+  // agents (L7): every role sees name and status, owner/admin change them; the settings hold
+  // forwarding phone numbers, so owner/admin only
+  ['get', '/agents', ALL],
+  ['post', '/agents', OWNER_ADMIN],
+  ['get', '/agents/g1', ALL],
+  ['patch', '/agents/g1', OWNER_ADMIN],
+  ['delete', '/agents/g1', OWNER_ADMIN],
+  ['get', '/agents/g1/settings', OWNER_ADMIN],
+  ['put', '/agents/g1/settings', OWNER_ADMIN],
+  ['get', '/agents/g1/settings/versions', OWNER_ADMIN],
+  ['get', '/agents/g1/settings/versions/v1', OWNER_ADMIN],
 ];
 
 describe('Role matrix (e2e, B2 and J4)', () => {
@@ -132,6 +143,8 @@ describe('Role matrix (e2e, B2 and J4)', () => {
           'dataUseConsent',
           'endCustomer',
           'upgradeRequest',
+          'agent',
+          'agentSettings',
         ] as const) {
           for (const [name, fn] of Object.entries(prisma[model])) {
             if (model === 'tenantUser' && name === 'findUnique') continue;
@@ -183,7 +196,7 @@ describe('Role matrix (e2e, B2 and J4)', () => {
     const known = MATRIX.map(([method, path]) => {
       // the table uses concrete ids; compare by shape
       const shape = path
-        .replace(/\/(u1|i1|k1|c1|x1|n1)(?=\/|$)/g, '/:id')
+        .replace(/\/(u1|i1|k1|c1|x1|n1|g1|v1)(?=\/|$)/g, '/:id')
         .replace(/\/:id/g, '/:id');
       return `${method} ${shape}`;
     });

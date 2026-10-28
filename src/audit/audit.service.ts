@@ -44,6 +44,13 @@ export const AuditAction = {
   CONVERSATION_CLAIMED: 'conversation.claimed',
   CONVERSATION_RELEASED: 'conversation.released',
   CONVERSATION_RESOLVED: 'conversation.resolved',
+  // agents (L7); never settings content, phone numbers or document text
+  AGENT_CREATED: 'agent.created',
+  AGENT_RENAMED: 'agent.renamed',
+  AGENT_DISABLED: 'agent.disabled',
+  AGENT_ENABLED: 'agent.enabled',
+  AGENT_DELETED: 'agent.deleted',
+  AGENT_SETTINGS_UPDATED: 'agent.settings_updated',
 } as const;
 
 export interface AuditEntry {

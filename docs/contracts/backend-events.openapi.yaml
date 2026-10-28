@@ -148,6 +148,7 @@ components:
               example: AP-4K7Q2
               description: Unique per tenant, short enough to read out on the phone.
             type: { type: string, enum: [appointment, callback] }
+            agentId: { type: string, nullable: true, description: 'The agent that took the call (L7); null until the engine is agent-aware (Q28), meaning the default agent.' }
             conversationId: { type: string }
             endCustomerId: { type: string, nullable: true }
             channel: { type: string, enum: [voice, widget] }
@@ -163,6 +164,7 @@ components:
             recordId: { type: string }
             reference: { type: string }
             type: { type: string, enum: [appointment, callback] }
+            agentId: { type: string, nullable: true, description: 'The agent the request belongs to (L7).' }
             conversationId: { type: string }
             revision: { type: integer, description: How many times the details changed. }
         usage.call_minutes:
@@ -176,6 +178,7 @@ components:
           required: [conversationId, seconds]
           properties:
             conversationId: { type: string, description: The call. One call counts once. }
+            agentId: { type: string, nullable: true, description: 'The agent that took the call (L7). Minutes stay pooled per tenant; the agent only allows a per-agent breakdown (Phase 5E).' }
             seconds: { type: integer, minimum: 0 }
             channel: { type: string, enum: [voice, widget] }
         conversation.created:
@@ -185,6 +188,7 @@ components:
             conversationId: { type: string }
             endCustomerId: { type: string, nullable: true }
             channel: { type: string, enum: [widget, whatsapp, voice] }
+            agentId: { type: string, nullable: true, description: 'The agent the conversation belongs to (L7); null for a chat conversation or until the engine is agent-aware.' }
         conversation.escalated:
           description: >-
             The conversation needs a human. All active staff get a notification and the queue refreshes.

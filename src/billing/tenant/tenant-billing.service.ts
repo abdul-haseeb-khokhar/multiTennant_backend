@@ -5,6 +5,7 @@ import { ErrorCode } from '../../common/errors/error-codes';
 import { resolvePage, toPage } from '../../common/pagination/pagination';
 import { PaginationQueryDto } from '../../common/pagination/pagination-query.dto';
 import { PrismaService } from '../../prisma/prisma.service';
+import { UsageProvider } from '../entitlements/usage.provider';
 import { OverageService } from '../overage.service';
 import type { EffectiveSubscription } from '../subscriptions/effective-subscription';
 import { SubscriptionService } from '../subscriptions/subscription.service';
@@ -15,6 +16,7 @@ import {
   toBillingEventView,
   toCallMinuteUsageView,
   toConversationUsageView,
+  toCountUsageView,
   toInvoiceView,
   toSubscriptionSummary,
 } from '../views';
@@ -26,6 +28,7 @@ export class TenantBillingService {
     private readonly prisma: PrismaService,
     private readonly subscriptions: SubscriptionService,
     private readonly overage: OverageService,
+    private readonly usage: UsageProvider,
   ) {}
 
   /** `GET /tenants/:tenantId/billing`: current plan, status, period, entitlements and invoices. */
@@ -104,13 +107,25 @@ export class TenantBillingService {
   }
 
   private async usageView(subscription: EffectiveSubscription) {
-    const [callMinutes, conversations] = await Promise.all([
-      this.overage.callMinuteSummary(subscription),
-      this.overage.conversationSummary(subscription),
-    ]);
+    const context = {
+      periodStart: subscription.currentPeriodStart,
+      conversationPeriod: subscription.entitlements.conversationPeriod,
+    };
+    const [callMinutes, conversations, agents, phoneNumbers] =
+      await Promise.all([
+        this.overage.callMinuteSummary(subscription),
+        this.overage.conversationSummary(subscription),
+        this.usage.getUsage(subscription.tenantId, 'agents', context),
+        this.usage.getUsage(subscription.tenantId, 'phoneNumbers', context),
+      ]);
     return {
       callMinutes: toCallMinuteUsageView(callMinutes),
       conversations: toConversationUsageView(conversations),
+      agents: toCountUsageView(subscription.entitlements.agents, agents),
+      phoneNumbers: toCountUsageView(
+        subscription.entitlements.phoneNumbers,
+        phoneNumbers,
+      ),
     };
   }
 

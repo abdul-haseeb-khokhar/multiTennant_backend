@@ -4,17 +4,27 @@
  * stays the single source of truth that all other code reads; `PlanCatalogSyncService` only applies
  * the variables that are SET on top of it, once at startup.
  *
- * All six are optional, whole numbers written in digits only. Money is in MINOR units of the plan's
- * currency (PKR 25 = 2500), minutes are whole minutes.
+ * All twelve are optional, whole numbers written in digits only. Money is in MINOR units of the plan's
+ * currency (PKR 25 = 2500), minutes are whole minutes, agents and phone numbers are counts (L7,
+ * Phase 5B-1).
  */
 
 /** Minutes and counts: 0 to 1,000,000. */
 export const PLAN_CATALOG_MAX_MINUTES = 1_000_000;
 /** Money: 0 to 2,000,000,000, because the money columns are 32-bit integers. */
 export const PLAN_CATALOG_MAX_MONEY_MINOR = 2_000_000_000;
+/** Agents and phone numbers: 0 to 10,000. */
+export const PLAN_CATALOG_MAX_COUNT = 10_000;
 
 export type PlanCatalogTarget =
-  | { kind: 'entitlement'; key: 'callMinutesPerPeriod' | 'overageMinuteMinor' }
+  | {
+      kind: 'entitlement';
+      key:
+        | 'callMinutesPerPeriod'
+        | 'overageMinuteMinor'
+        | 'agents'
+        | 'phoneNumbers';
+    }
   | { kind: 'column'; column: 'priceMinor' | 'yearlyPriceMinor' };
 
 export interface PlanCatalogVariable {
@@ -25,7 +35,7 @@ export interface PlanCatalogVariable {
   target: PlanCatalogTarget;
   max: number;
   /** What the number means, for messages and docs. */
-  unit: 'minutes' | 'minor units';
+  unit: 'minutes' | 'minor units' | 'count';
 }
 
 export const PLAN_CATALOG_VARIABLES: readonly PlanCatalogVariable[] = [
@@ -70,6 +80,48 @@ export const PLAN_CATALOG_VARIABLES: readonly PlanCatalogVariable[] = [
     target: { kind: 'column', column: 'yearlyPriceMinor' },
     max: PLAN_CATALOG_MAX_MONEY_MINOR,
     unit: 'minor units',
+  },
+  {
+    name: 'PLAN_STARTER_AGENTS',
+    planCode: 'starter',
+    target: { kind: 'entitlement', key: 'agents' },
+    max: PLAN_CATALOG_MAX_COUNT,
+    unit: 'count',
+  },
+  {
+    name: 'PLAN_FREE_AGENTS',
+    planCode: 'free',
+    target: { kind: 'entitlement', key: 'agents' },
+    max: PLAN_CATALOG_MAX_COUNT,
+    unit: 'count',
+  },
+  {
+    name: 'PLAN_PRO_AGENTS',
+    planCode: 'pro',
+    target: { kind: 'entitlement', key: 'agents' },
+    max: PLAN_CATALOG_MAX_COUNT,
+    unit: 'count',
+  },
+  {
+    name: 'PLAN_STARTER_PHONE_NUMBERS',
+    planCode: 'starter',
+    target: { kind: 'entitlement', key: 'phoneNumbers' },
+    max: PLAN_CATALOG_MAX_COUNT,
+    unit: 'count',
+  },
+  {
+    name: 'PLAN_FREE_PHONE_NUMBERS',
+    planCode: 'free',
+    target: { kind: 'entitlement', key: 'phoneNumbers' },
+    max: PLAN_CATALOG_MAX_COUNT,
+    unit: 'count',
+  },
+  {
+    name: 'PLAN_PRO_PHONE_NUMBERS',
+    planCode: 'pro',
+    target: { kind: 'entitlement', key: 'phoneNumbers' },
+    max: PLAN_CATALOG_MAX_COUNT,
+    unit: 'count',
   },
 ];
 

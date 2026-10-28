@@ -15,6 +15,8 @@ const limits = (over = {}) => ({
   poweredByLabel: false,
   callMinutesPerPeriod: 300,
   callMinutePeriod: 'month' as const,
+  agents: 3,
+  phoneNumbers: 5,
   ...over,
 });
 

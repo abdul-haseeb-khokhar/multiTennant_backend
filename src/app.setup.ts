@@ -28,10 +28,16 @@ export function configureApp(app: INestApplication) {
     ).set('trust proxy', trustProxy);
   }
   app.use(requestContextMiddleware);
-  // The only routes outside /v1: the unversioned health checks, and the service-to-service event
-  // receiver the AI engine calls on the private network (not part of the public API).
+  // The only routes outside /v1: the unversioned health checks, and the service-to-service routes
+  // the AI engine calls on the private network (the event receiver, the agent settings pull); they
+  // are not part of the public API.
   app.setGlobalPrefix(API_PREFIX, {
-    exclude: ['health', 'health/ready', 'internal/events'],
+    exclude: [
+      'health',
+      'health/ready',
+      'internal/events',
+      'internal/tenants/:tenantId/agents/:agentId/config',
+    ],
   });
   app.useGlobalPipes(
     new NoNullBytesPipe(),
