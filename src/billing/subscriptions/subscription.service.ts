@@ -317,15 +317,20 @@ export class SubscriptionService {
           'This account is closed',
         );
       }
-      const price = mergeEntitlements(
+      const entitlements = mergeEntitlements(
         row.plan.entitlements,
         row.entitlementsOverride,
-      ).overageConversationMinor;
-      if (typeof price !== 'number' || price <= 0) {
+      );
+      // One switch for both units: it exists when the plan prices extra call minutes or extra conversations.
+      const priced = [
+        entitlements.overageMinuteMinor,
+        entitlements.overageConversationMinor,
+      ].some((price) => typeof price === 'number' && price > 0);
+      if (!priced) {
         throw new ApiException(
           HttpStatus.CONFLICT,
           ErrorCode.OVERAGE_NOT_AVAILABLE,
-          `The ${row.plan.name} plan has no price for extra conversations`,
+          `The ${row.plan.name} plan has no price for extra call minutes or conversations`,
         );
       }
       if (row.overageEnabled === enabled) return false;

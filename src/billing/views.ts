@@ -1,6 +1,9 @@
 import type { BillingEvent, Invoice } from '@prisma/client';
 import { overageSettings } from './overage';
-import type { ConversationUsageSummary } from './overage.service';
+import type {
+  CallMinuteUsageSummary,
+  ConversationUsageSummary,
+} from './overage.service';
 import type { EffectiveSubscription } from './subscriptions/effective-subscription';
 
 /** Mappers from database rows to API shapes (see `entities/billing.entities.ts`). Internal columns stay out. */
@@ -32,6 +35,20 @@ export function toConversationUsageView(u: ConversationUsageSummary) {
     overageCount: u.overage.count,
     overageAmountMinor: u.overage.amountMinor,
     overagePriceMinor: u.overage.priceMinor,
+    currency: u.overage.currency,
+  };
+}
+
+/** The period's call-minute figures for the billing screens (L6). */
+export function toCallMinuteUsageView(u: CallMinuteUsageSummary) {
+  return {
+    period: u.period,
+    periodStart: u.periodStart,
+    included: u.included,
+    used: u.used,
+    overageMinutes: u.overage.minutes,
+    overageAmountMinor: u.overage.amountMinor,
+    overagePriceMinor: u.overage.minutePriceMinor,
     currency: u.overage.currency,
   };
 }

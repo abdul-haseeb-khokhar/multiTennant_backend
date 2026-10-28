@@ -39,19 +39,46 @@ export class EntitlementsView {
   @ApiProperty({ type: [String], example: ['chat', 'whatsapp'] })
   channels: string[];
 
-  @ApiProperty({ description: 'Phone calls included.' })
+  @ApiProperty({
+    description:
+      'Phone calls included. True on every plan since the voice-first decision (L6); the minutes are limited by `callMinutesPerPeriod`.',
+  })
   voice: boolean;
 
   @ApiProperty({ description: 'The widget shows our "powered by" label.' })
   poweredByLabel: boolean;
 
+  @ApiProperty({
+    type: Number,
+    nullable: true,
+    example: 300,
+    description:
+      'Call minutes included per `callMinutePeriod` (L6). null = unlimited (Enterprise). The numbers come from the plans table, which the operator sets from environment variables (`PLAN_*_CALL_MINUTES`).',
+  })
+  callMinutesPerPeriod: number | null;
+
+  @ApiProperty({
+    enum: ['total', 'month'],
+    description:
+      '`total` = since the subscription period began (Starter), `month` = per UTC calendar month.',
+  })
+  callMinutePeriod: 'total' | 'month';
+
   @ApiPropertyOptional({
-    description: 'Price hint: one extra conversation, minor units.',
+    description: 'Price: one extra conversation, minor units (chat, halted).',
   })
   overageConversationMinor?: number;
 
   @ApiPropertyOptional({
-    description: 'Price hint: one voice minute, minor units.',
+    description:
+      'Price: one extra call minute, minor units (PKR 25 = 2500). Present only on plans that bill minutes past the included amount (Pro); the owner can switch that off (PATCH …/billing/settings).',
+  })
+  overageMinuteMinor?: number;
+
+  @ApiPropertyOptional({
+    deprecated: true,
+    description:
+      'Legacy price hint from Phase 2B. Nothing reads it; use `overageMinuteMinor`.',
   })
   voicePerMinuteMinor?: number;
 }
@@ -59,13 +86,13 @@ export class EntitlementsView {
 export class OverageSettingsView {
   @ApiProperty({
     description:
-      'The plan has a price for extra conversations (Pro). Free and Starter do not: they always stop hard at the limit and the dashboard shows no switch.',
+      'The plan has a price for extra call minutes or extra conversations (Pro). Free and Starter do not: they always stop hard at the limit and the dashboard shows no switch. One switch governs both units.',
   })
   available: boolean;
 
   @ApiProperty({
     description:
-      'Past the included conversations the AI keeps answering and each extra one is billed. Always false when `available` is false. Default true on plans that have a price; the owner switches it with PATCH /v1/tenants/:tenantId/billing/settings.',
+      'Past the included call minutes (and conversations) the service keeps going and each extra unit is billed. Always false when `available` is false. Default true on plans that have a price; the owner switches it with PATCH /v1/tenants/:tenantId/billing/settings.',
   })
   enabled: boolean;
 
@@ -74,9 +101,18 @@ export class OverageSettingsView {
     nullable: true,
     example: 1500,
     description:
-      'One extra conversation, minor units of `currency` (PKR 15 = 1500). null when not available.',
+      'One extra conversation, minor units of `currency` (PKR 15 = 1500). null when the plan has no such price.',
   })
   priceMinor: number | null;
+
+  @ApiProperty({
+    type: Number,
+    nullable: true,
+    example: 2500,
+    description:
+      'One extra call minute, minor units of `currency` (PKR 25 = 2500). null when the plan has no such price.',
+  })
+  minutePriceMinor: number | null;
 
   @ApiProperty({ example: 'PKR' })
   currency: string;
@@ -340,8 +376,68 @@ export class ConversationUsageView {
   currency: string;
 }
 
+export class CallMinuteUsageView {
+  @ApiProperty({
+    enum: ['month', 'total'],
+    description:
+      '`month` = the UTC calendar month, `total` = since the subscription period began (Starter).',
+  })
+  period: 'month' | 'total';
+
+  @ApiProperty({
+    type: String,
+    format: 'date-time',
+    description: 'Start of the counting window (a UTC day).',
+  })
+  periodStart: Date;
+
+  @ApiProperty({
+    type: Number,
+    nullable: true,
+    example: 300,
+    description: 'Call minutes included in the plan. null = unlimited.',
+  })
+  included: number | null;
+
+  @ApiProperty({
+    example: 342,
+    description:
+      'Call minutes used in the period (whole minutes, from `usage_daily.call_minutes`; the engine reports them from Phase 5E on).',
+  })
+  used: number;
+
+  @ApiProperty({
+    example: 42,
+    description:
+      'Minutes used past the included amount, billed at `overagePriceMinor`. 0 on plans without a minute price. A call that was already running when the allowance ran out is not cut off, so its extra minutes are counted here even when overage is switched off.',
+  })
+  overageMinutes: number;
+
+  @ApiProperty({
+    example: 105000,
+    description:
+      '`overageMinutes` times `overagePriceMinor`, integer minor units.',
+  })
+  overageAmountMinor: number;
+
+  @ApiProperty({ type: Number, nullable: true, example: 2500 })
+  overagePriceMinor: number | null;
+
+  @ApiProperty({ example: 'PKR' })
+  currency: string;
+}
+
 export class BillingUsageView {
-  @ApiProperty({ type: ConversationUsageView })
+  @ApiProperty({
+    type: CallMinuteUsageView,
+    description: 'Call minutes (L6): the product of the voice-first plans.',
+  })
+  callMinutes: CallMinuteUsageView;
+
+  @ApiProperty({
+    type: ConversationUsageView,
+    description: 'Chat conversations (halted, kept as built).',
+  })
   conversations: ConversationUsageView;
 }
 

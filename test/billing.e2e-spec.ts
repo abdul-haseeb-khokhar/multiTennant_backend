@@ -102,6 +102,58 @@ describe('Billing (e2e)', () => {
         /starter|providerPriceIds|fallback/i,
       );
     });
+
+    it('shows the call minutes of every plan and the price per extra minute (L6): what a pricing page needs', async () => {
+      const res = await http().get('/v1/plans').expect(200);
+      const byCode = Object.fromEntries(
+        res.body.data.map((p: { code: string }) => [p.code, p]),
+      );
+      expect(byCode.free.entitlements).toMatchObject({
+        voice: true,
+        callMinutesPerPeriod: 20,
+        callMinutePeriod: 'month',
+      });
+      expect(byCode.free.entitlements.overageMinuteMinor).toBeUndefined();
+      expect(byCode.pro.entitlements).toMatchObject({
+        voice: true,
+        callMinutesPerPeriod: 300,
+        callMinutePeriod: 'month',
+        overageMinuteMinor: 2500,
+      });
+      // null = unlimited, as for the other limits
+      expect(byCode.enterprise.entitlements.callMinutesPerPeriod).toBeNull();
+      for (const plan of res.body.data) {
+        expect(plan.entitlements.channels).toContain('voice');
+        const price = plan.entitlements.overageMinuteMinor;
+        expect(price === undefined || Number.isInteger(price)).toBe(true);
+      }
+    });
+
+    it('reflects a plan row changed by the operator (the plans table is the source of truth the env variables write to)', async () => {
+      const changed = PLAN_ROWS.map((p) =>
+        p.code === 'pro'
+          ? {
+              ...p,
+              priceMinor: 2_499_900,
+              entitlements: {
+                ...p.entitlements,
+                callMinutesPerPeriod: 500,
+                overageMinuteMinor: 3000,
+              },
+            }
+          : p,
+      );
+      prisma.plan.findMany.mockResolvedValue(
+        changed.filter((p) => p.visibility === 'public'),
+      );
+      const res = await http().get('/v1/plans').expect(200);
+      const pro = res.body.data.find((p: { code: string }) => p.code === 'pro');
+      expect(pro.priceMinor).toBe(2_499_900);
+      expect(pro.entitlements).toMatchObject({
+        callMinutesPerPeriod: 500,
+        overageMinuteMinor: 3000,
+      });
+    });
   });
 
   describe('GET /v1/tenants/:tenantId/billing (owner/admin)', () => {

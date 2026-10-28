@@ -27,6 +27,28 @@ export function addInterval(
   return addMonths(start, interval === 'year' ? 12 : 1);
 }
 
+/** The UTC day (00:00) a date falls on. */
+export function startOfUtcDay(date: Date): Date {
+  return new Date(
+    Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()),
+  );
+}
+
+/**
+ * Where the counting window of a usage allowance starts (conversations and call minutes alike):
+ * `month` = the first day of the current UTC calendar month, `total` = the UTC day the
+ * subscription period began. Daily granularity: `usage_daily` has one row per UTC day.
+ */
+export function usageWindowStart(
+  period: 'month' | 'total',
+  now: Date,
+  periodStart: Date,
+): Date {
+  return period === 'month'
+    ? new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1))
+    : startOfUtcDay(periodStart);
+}
+
 /** Whole days from `now` until `until`, rounded up, never negative. Null when there is no end. */
 export function daysUntil(until: Date | null, now: Date): number | null {
   if (!until) return null;

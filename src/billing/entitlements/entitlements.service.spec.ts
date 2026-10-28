@@ -18,6 +18,8 @@ const entitlements = (over: Partial<Entitlements> = {}): Entitlements => ({
   channels: ['chat'],
   voice: false,
   poweredByLabel: false,
+  callMinutesPerPeriod: 30,
+  callMinutePeriod: 'total',
   ...over,
 });
 
@@ -124,6 +126,7 @@ describe('EntitlementsService', () => {
       expect(usage.getUsage).toHaveBeenCalledWith('tenant-a', 'conversations', {
         periodStart: T0,
         conversationPeriod: 'total',
+        callMinutePeriod: 'total',
       });
     });
 

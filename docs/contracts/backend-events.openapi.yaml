@@ -3,11 +3,25 @@ info:
   title: Backend event receiver (called by the AI engine, Phase 4)
   version: 0.1.0-draft
   description: |
-    The one route of the backend that the AI engine calls (team-alignment D5). **Status: proposed
-    by the backend, to be reviewed by the AI engine owner.** Until the engine implements it, the
-    backend's in-process mock engine (`ENGINE_MODE=mock`) delivers the very same events straight to
-    the same code that handles this route, so the dashboard, the notifications and the widget stream
-    already work end to end.
+    The route of the backend that the AI engine calls to PUSH events (team-alignment D5). The routes
+    the engine calls to ASK or COMMAND the backend (tenant status check, requests, customer upsert,
+    number lookup) are in `backend-internal.openapi.yaml`.
+
+    **Status (Phase 5A, 2026-10-21): proposed by the backend; Abdullah has agreed in principle to
+    signed events from a database outbox with retries under the same event id (M1, Q15 to Q17), but
+    he has not built or confirmed the payloads below.** Which parts are agreed and which are still
+    proposals is marked per event type under `Events`. Until the engine implements it, the backend's
+    in-process mock engine (`ENGINE_MODE=mock`) delivers the very same events straight to the same
+    code that handles this route, so the dashboard, the notifications and the widget stream already
+    work end to end, and a simulated phone call produces the voice-first events (`/call`, see
+    `docs/contracts/README.md`).
+
+    **Voice-first (L1, decided 2026-10-21).** The product is an AI phone receptionist; the engine's
+    real events today are `record.submitted` and `record.updated` (a request was saved or changed,
+    M2.4) and, proposed, `usage.call_minutes`. The backend ACKNOWLEDGES these three (200 `ignored`)
+    and does nothing else with them until Phase 5B (requests) and Phase 5E (call usage). The chat
+    events (`conversation.*`, `message.created`, `usage.recorded`) keep working but chat is halted
+    (L2): no new work. `action.proposed` is **unused** since L3 (approvals dropped).
 
     This route is **outside `/v1`** on purpose: it is service-to-service, not part of the public API
     the frontend consumes (it is not in `docs/openapi.json`), and it must be reachable only on the
@@ -33,7 +47,10 @@ info:
       answers 200 `duplicate` and does nothing. **Retry on any non-2xx answer and on a timeout**
       (the backend commits the event before it answers, so a retry after a lost answer is a no-op).
     * An event type the backend does not know is acknowledged (200 `ignored`) and logged, never
-      refused, so the engine can add event types before the backend learns them.
+      refused, so the engine can add event types before the backend learns them. The same goes for
+      the voice-first types listed under `Events` as "acknowledged until Phase 5B / 5E": they are
+      not stored in the backend's inbox either, so after the phase that handles them exists, an
+      outbox re-delivery is processed instead of answered `duplicate`.
     * Order is not guaranteed across retries; every handler is written so that a late event only
       refreshes state (the dashboard re-reads by id).
     * Message text travels only where a customer may see it: `message.created` of a human or
@@ -106,8 +123,61 @@ components:
       description: |
         Documentation only: the `data` payload of each event type the backend handles.
         Ids are the engine's; `endCustomerId` and every user id are the backend's ids.
+
+        Status of each type: the `conversation.*`, `message.created` and `usage.recorded` payloads
+        are the backend's proposals from Phases 3 and 4 (chat, halted by L2), not confirmed by the
+        engine owner. `record.submitted`, `record.updated` and `usage.call_minutes` are the
+        voice-first events (names from Abdullah's documents, M2.4 / his B8; payload fields are
+        PROPOSED here, ids and references only, never what the caller said).
       type: object
       properties:
+        record.submitted:
+          description: >-
+            ACKNOWLEDGED UNTIL PHASE 5B (200 `ignored`, nothing stored). The AI saved a request (an
+            appointment or a call-back) for a caller; staff confirm it. Phase 5B will create the
+            backend's copy, a notification for the team and a live update on the dashboard stream.
+            Ids and the reference only: the details come through the request routes of
+            `backend-internal.openapi.yaml` (open question for the engine owner: should the event
+            carry the details too?).
+          type: object
+          required: [recordId, reference, type]
+          properties:
+            recordId: { type: string }
+            reference:
+              type: string
+              example: AP-4K7Q2
+              description: Unique per tenant, short enough to read out on the phone.
+            type: { type: string, enum: [appointment, callback] }
+            conversationId: { type: string }
+            endCustomerId: { type: string, nullable: true }
+            channel: { type: string, enum: [voice, widget] }
+        record.updated:
+          description: >-
+            ACKNOWLEDGED UNTIL PHASE 5B (200 `ignored`, nothing stored). The engine changed the
+            details of a request or the caller withdrew it. The engine may do so only while the
+            request is `requested`; once staff confirmed it, the engine's update is refused (409
+            `locked`) and no event is sent.
+          type: object
+          required: [recordId, reference]
+          properties:
+            recordId: { type: string }
+            reference: { type: string }
+            type: { type: string, enum: [appointment, callback] }
+            conversationId: { type: string }
+            revision: { type: integer, description: How many times the details changed. }
+        usage.call_minutes:
+          description: >-
+            ACKNOWLEDGED UNTIL PHASE 5E (200 `ignored`, nothing stored). A call ended: its length in
+            seconds. Phase 5E will count it once per `conversationId` into `usage_daily.call_minutes`
+            through the usage ledger (the shape is Abdullah's proposal from his B8; how seconds
+            become whole billed minutes, proposal: each call rounded UP to the next minute, is
+            decided then).
+          type: object
+          required: [conversationId, seconds]
+          properties:
+            conversationId: { type: string, description: The call. One call counts once. }
+            seconds: { type: integer, minimum: 0 }
+            channel: { type: string, enum: [voice, widget] }
         conversation.created:
           type: object
           required: [conversationId]
@@ -138,6 +208,9 @@ components:
             assignedUserId: { type: string }
             assignedByUserId: { type: string }
         conversation.released:
+          description: >-
+            `to` is only `active` or `escalated`: releasing to `resolved` is the same as resolving and
+            sends `conversation.resolved` (agreed with the engine owner, M1).
           type: object
           required: [conversationId, to]
           properties:
@@ -179,7 +252,10 @@ components:
             tokensOut: { type: integer }
             model: { type: string }
         action.proposed:
-          description: The AI wants to run an action that needs approval. Owners and admins get a notification.
+          description: >-
+            UNUSED since 2026-10-21 (L3: risky-action approvals are dropped and the engine executes no
+            actions). The backend still handles it (owners and admins get a notification) so an
+            engine that sends it is not surprised; do not build on it.
           type: object
           required: [actionId]
           properties:

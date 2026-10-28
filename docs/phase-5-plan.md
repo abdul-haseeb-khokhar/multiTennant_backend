@@ -1,6 +1,10 @@
 # Phase 5 plan: voice-first backend core
 
-Status: **reshaped 2026-10-21, nothing built.** The phases are now 5A to 5F, with Phase 6 telephony go-live, in [backend-roadmap.md](backend-roadmap.md); this file keeps the detail for the blocks below (its 5a to 5e map to roadmap 5B, 5D, 5E, 5F; the alignment step 5A and the integration slice 5C are only in the roadmap). Owner: Abdul Haseeb. This replaces the first version of this file (2026-10-14), which assumed a chat product with integration secrets and action approvals. Sources: [team-alignment.md](team-alignment.md) sections L (the decision) and M (Abdullah's answers), [backend-roadmap.md](backend-roadmap.md) Phase 5, and Abdullah's two files `reply-to-abdul-haseeb.md` and `handoff-to-backend.md`.
+Status: **reshaped 2026-10-21; Phase 5A (alignment: call minutes in the plans, minute overage, plan numbers from environment variables, updated and drafted contracts, a simulated phone call on the mock engine) is built on branch `phase-5a-alignment`; blocks 5a to 5e below (roadmap 5B, 5D, 5E, 5F) are not started.** The phases are now 5A to 5F, with Phase 6 telephony go-live, in [backend-roadmap.md](backend-roadmap.md); this file keeps the detail for the blocks below (its 5a to 5e map to roadmap 5B, 5D, 5E, 5F; the alignment step 5A and the integration slice 5C are only in the roadmap). Owner: Abdul Haseeb. This replaces the first version of this file (2026-10-14), which assumed a chat product with integration secrets and action approvals. Sources: [team-alignment.md](team-alignment.md) sections L (the decision) and M (Abdullah's answers), [backend-roadmap.md](backend-roadmap.md) Phase 5, and Abdullah's two files `reply-to-abdul-haseeb.md` and `handoff-to-backend.md`.
+
+**Update 2026-10-28:** a tenant now has many agents and many numbers, each number linked to one agent (team-alignment L7, L8, L9). Every block below is **per agent** where it concerns settings, knowledge, requests or call history, the roadmap has a new first step 5B-1 (agents foundation) and phone numbers link to agents (5D). The roadmap is the source of truth for the order.
+
+**Decisions of 2026-10-28 (later the same day):** the engine pulls each agent's settings from the backend at call start; the backend receives the Twilio call first; Free and Starter make browser test calls only and real numbers are for Pro and Enterprise; the staff role `agent` is not renamed. The roadmap (Phase 5B to 5F) is the source of truth.
 
 ## 1. What changed and why
 
@@ -25,7 +29,7 @@ Do 5a to 5d first; 5e waits for the decisions below.
 
 ## 3. Block details
 
-**5a Tenant status check (his B1).** Returns `{tenantId, serviceable, reason, plan}`. `reason` is `suspended`, `unpaid`, `quota_exceeded`, `unknown_tenant` or null. Derived from the effective subscription and the entitlements (suspended or closed tenant, `past_due` after the grace period, over the plan's limits). Authenticated with the internal token. The engine caches the answer about 60 seconds and answers its own caller 403, 429 or 404. Tests: each reason, caching headers, no data leak for an unknown tenant.
+**5a Tenant status check (his B1).** *DRAFT contract: `docs/contracts/backend-internal.openapi.yaml`.* Returns `{tenantId, serviceable, reason, plan}`. `reason` is `suspended`, `unpaid`, `quota_exceeded`, `unknown_tenant` or null. Derived from the effective subscription and the entitlements (suspended or closed tenant, `past_due` after the grace period, over the plan's limits). Authenticated with the internal token. The engine caches the answer about 60 seconds and answers its own caller 403, 429 or 404. Tests: each reason, caching headers, no data leak for an unknown tenant.
 
 **5b Requests workflow (his B4).**
 - A request: `reference` (unique per tenant, produced by the engine, for example `AP-4K7Q2`), `type` (`appointment` or `callback`), `status` (`requested`, `confirmed`, `done`, `cancelled`), `channel`, `language`, `data` (already validated by the engine), `summary`, `scheduledLocal` (the business's wall-clock time as a string on purpose), `timezone`, `configVersion`, `conversationId`, `submissionKey`, the end customer, and timestamps.
@@ -40,7 +44,7 @@ Do 5a to 5d first; 5e waits for the decisions below.
 - Ticket: the backend verifies the Twilio signature, maps the number, signs a one-minute single-use ticket, and the telephone provider connects to the engine's voice gateway with it (the gateway needs a public secure WebSocket; everything else stays private).
 - The end customer is upserted from the caller's number.
 
-**5d Call usage and billing (his B8).** Agree the shape first (his proposal: `usage.call_minutes {conversationId, seconds, channel}`, `usage.chat_message`, `usage.record_created`, `usage.embedding_texts`). Add call minutes to the plan entitlements and to `usage_daily`; the owner usage page shows conversations, messages and call minutes (no token counts); the status check returns `quota_exceeded` when the minutes are used up.
+**5d Call usage and billing (his B8).** *Phase 5A already built the plan side: the entitlement keys, `usage_daily.call_minutes` read by `check('callMinutes')`, the minute overage under the owner's switch, the billing summary and the three reminders; what is left is the engine's usage event and its ingestion through `UsageService.recordCallMinutes`.* Agree the shape first (his proposal: `usage.call_minutes {conversationId, seconds, channel}`, `usage.chat_message`, `usage.record_created`, `usage.embedding_texts`). Add call minutes to the plan entitlements and to `usage_daily`; the owner usage page shows conversations, messages and call minutes (no token counts); the status check returns `quota_exceeded` when the minutes are used up.
 
 **5e Agent settings and knowledge (his B2, B3, B5).**
 - Settings: either the backend stores and versions them (his handoff) or only plan-derived values come from the backend while persona and prompts stay in his table (his reply). **Open, Abdul to decide.** The earlier draft [contracts/agent-config.schema.json](contracts/agent-config.schema.json) is **on hold** until then, because his real fields differ (business name, purpose, tone, timezone, hours, escalation, capabilities, voices, and a "what the agent collects" checklist with services and staff lists).
@@ -57,7 +61,7 @@ Do 5a to 5d first; 5e waits for the decisions below.
 
 ## 5. Decisions Abdul still has to make
 
-1. **Agent settings ownership** (M3.4): backend stores them, or hybrid.
+1. ~~Agent settings ownership~~ **Decided 2026-10-28 (L7): the backend stores and versions the settings and the engine receives them at call start.** Remaining: Abdullah's confirmation.
 2. **Storage provider** for knowledge originals (M3.3).
 3. **Who sends the customer confirmation** when staff confirm a request, and by which channel (his B9, L5).
 4. Whether Phase 4's staff chat features also freeze (L2 assumption).

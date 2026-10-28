@@ -1,6 +1,6 @@
 # For Abdullah: what the backend needs from the AI engine
 
-From: Abdul Haseeb (backend core) · Date: 2026-10-11 · Status: **everything below is the backend's proposal; nothing has run against your real engine yet.** *Update 2026-10-21: Abdullah answered (reply of 2026-10-15 and the newer handoff); his answers, the conflicts and our decisions are in team-alignment sections L and M. Q23 is superseded.*
+From: Abdul Haseeb (backend core) · Date: 2026-10-11 · Status: **everything below is the backend's proposal; nothing has run against your real engine yet.** *Update 2026-10-21: Abdullah answered (reply of 2026-10-15 and the newer handoff); his answers, the conflicts and our decisions are in team-alignment sections L and M. Q23 is superseded. Phase 5A (same day) recorded his answers in the contract files, changed the backend's first-token timeout default to 10 s (Q14) and drafted the routes the engine will call on the backend in a NEW file, `backend-internal.openapi.yaml` (status check, requests, customer upsert by phone, number lookup; nothing implemented; its open questions are at the top of the file). Send him that file too.*
 
 You own the AI engine (conversations, messages, retrieval, model calls, actions, voice). I own tenants, users, billing, the widget gateway and the dashboard API. This document is the one place that lists what I need you to confirm or change, in the order that blocks us. Please answer in the table at the end.
 
@@ -82,7 +82,7 @@ ALTER TABLE ai_engine.conversations
 
 **Q13. Escalation reasons.** `customer_requested`, `low_confidence`, `failed_action`, `sentiment`, `topic`, `outside_hours`, `ai_unavailable`, `limit_reached`, `other`. You decide **when** to escalate (from the tenant's agent configuration, Q21); the backend never second-guesses it.
 
-**Q14. Timeouts and retries [D7].** First event within 5 seconds, 30 seconds in total; the backend retries once, only when the connection broke, using the same `Idempotency-Key`. Is that realistic for your model and retrieval?
+**Q14. Timeouts and retries [D7].** *(Answered: 10 seconds to the first event until a faster model; the backend default is 10 s since Phase 5A.)* First event within 5 seconds, 30 seconds in total; the backend retries once, only when the connection broke, using the same `Idempotency-Key`. Is that realistic for your model and retrieval?
 
 ### C. Events from your engine to the backend
 
@@ -174,3 +174,22 @@ Please copy this table into your reply.
 | Q27 | | |
 
 When the blocking items (Q1 to Q20) are answered, I switch the backend from the mock to your engine (`ENGINE_MODE=http`, `ENGINE_BASE_URL`, `INTERNAL_API_TOKEN`) and we run the same walkthroughs against it together.
+
+## 8. Addendum 2026-10-28: agents, Twilio routing, usage and build order
+
+After reading your repository and your two answer files, Abdul decided how agents and numbers work and what the backend wants first. Everything here is a proposal for you to confirm or change. Answer in the same style (Agree, Change: …, Cannot).
+
+**Q28. Agents (the tenant's setups) and the settings.** You have one engine, the one shared brain, and it answers every call. An **agent** is the tenant's own setup that the brain uses: its knowledge, hours, greeting, voice, language, what it collects, and who it forwards calls to. (Not a separate AI: one engine, many agents.) A tenant has many agents and many phone numbers; each number is linked to exactly one agent; an agent can have many numbers. Minutes and billing stay pooled per tenant. **Abdul's decision: the backend owns each agent's settings and sends them to the engine at the start of every call**, so the engine does not keep per-agent settings. Proposal: the call ticket carries tenant id, agent id and the settings version; your `getAgentConfig()` seam fetches `GET /internal/tenants/{tenantId}/agents/{agentId}/config` at call start (cached up to 60 s, versioned), because the settings include forwarding phone numbers that should not travel in a ticket or URL. The field list stays yours (your catalogue and validation; the backend stores the JSON and validates on save through you; please offer the validation route you mentioned). **Knowledge cannot travel with a call**, so it stays in your database but per agent: `agent_id` on `knowledge_sources` and `knowledge_chunks`, retrieval filtered by tenant and agent; `conversations`, `call_logs` and `records` carry `agent_id`; your routes accept `X-Agent-Id`; events carry `agentId`; the number lookup returns `{tenantId, agentId}`. Launch with one default agent per tenant. Questions: how large is that change for you? Can `agent_id` be nullable at first, meaning "the tenant's default agent", until the backend supplies the ids? Abdul decided on **pull** (the settings fetch above); please confirm. A browser test call from the dashboard also uses this fetch.
+
+**Q29. Twilio routing.** Your code and handoff say the engine verifies the Twilio webhook signature and asks us for the number lookup; your reply agreed that the backend verifies it and signs a ticket. Abdul **decided** on the second, the backend first: the backend receives the webhook on a public HTTPS address, verifies the signature (it holds the Twilio account credentials), finds (tenant, agent), checks the tenant and agent may be served, and tells Twilio to connect the audio to your voice gateway with a one-minute single-use ticket carrying tenant and agent, exactly like your browser tickets today. Questions: (a) can the Twilio transport read that ticket from the stream's start message (a custom parameter) and verify it as now? (b) **Call forwarding needs Twilio access** to redirect a live call: do you prefer a separate revocable Twilio API key for the engine used only for transfers, or that the engine asks the backend to place the transfer? (c) The voice gateway needs a public secure WebSocket address; what will it be? (d) The same ticket route will also serve a staff "test call" from the dashboard (your console does this today). It is the **only** call path for Free and Starter tenants, who get no real phone number; Pro and Enterprise get numbers.
+
+**Q30. Requests and usage.** (a) `reference` is drawn by the engine; the backend must keep it unique per tenant, so a clash answers 409 `reference_taken` and the engine draws another one (you already retry four times). (b) The finished-call event: `usage.call_minutes {callId, conversationId, agentId, seconds}` sent once when the call ends; the backend proposes to round each call **up** to whole billed minutes; a call that is running when the allowance ends is not cut off. (c) Requests carry `agentId`; customers stay per tenant (found by phone) because one caller may call several agents.
+
+**Q31. Which routes first** (your open question). The backend's answer, since message operations (chat widget, staff chat queue, conversation claim and release) are halted: (1) the Bearer guard and the tenant and agent from headers (`X-Tenant-Id`, `X-Agent-Id`) on every route the backend calls; (2) the signed events from the outbox: `record.submitted`, `record.updated`, `handoff.*`, `usage.call_minutes`; (3) the agent-aware settings, collect checklist, knowledge upload and call-history routes the backend will call, moved to those headers; (4) the `agent_id` migration; (5) the conversation, claim and release routes of `engine-internal.openapi.yaml` **last** (they are chat-only and halted). Your `/api/chat` test surface can stay as it is.
+
+| Q | Answer (Agree / Change: … / Cannot) | Note |
+|---|---|---|
+| Q28 | | |
+| Q29 | | |
+| Q30 | | |
+| Q31 | | |

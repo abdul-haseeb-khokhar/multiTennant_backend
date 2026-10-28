@@ -153,7 +153,8 @@ describe('validateEnv', () => {
       const env = validateEnv(valid);
       expect(env.ENGINE_MODE).toBeUndefined();
       expect(env).toMatchObject({
-        ENGINE_FIRST_TOKEN_TIMEOUT_MS: 5000,
+        // 10 s since Phase 5A (M1, Q14): the engine's free-tier model needs 3.5 to 10 s to start
+        ENGINE_FIRST_TOKEN_TIMEOUT_MS: 10000,
         ENGINE_TOTAL_TIMEOUT_MS: 30000,
         ENGINE_REQUEST_TIMEOUT_MS: 10000,
       });
@@ -384,5 +385,97 @@ describe('validateEnv mail provider (H3, Phase 4C)', () => {
         validateEnv({ ...prod, ...mailProd, RESEND_API_URL: 'http://x.test' }),
       ).toThrow(/RESEND_API_URL is not allowed/);
     });
+  });
+});
+
+describe('validateEnv: the plan numbers and prices (L6, Phase 5A)', () => {
+  const NAMES = [
+    'PLAN_STARTER_CALL_MINUTES',
+    'PLAN_FREE_CALL_MINUTES',
+    'PLAN_PRO_CALL_MINUTES',
+    'PLAN_PRO_OVERAGE_MINUTE_MINOR',
+    'PLAN_PRO_PRICE_MONTH_MINOR',
+    'PLAN_PRO_PRICE_YEAR_MINOR',
+  ];
+
+  it('are all optional: the minimum configuration needs none of them', () => {
+    expect(() => validateEnv(valid)).not.toThrow();
+  });
+
+  it('accepts whole numbers in digits, including 0 and the upper bounds', () => {
+    const env = validateEnv({
+      ...valid,
+      PLAN_STARTER_CALL_MINUTES: '30',
+      PLAN_FREE_CALL_MINUTES: '0',
+      PLAN_PRO_CALL_MINUTES: '1000000',
+      PLAN_PRO_OVERAGE_MINUTE_MINOR: '2500',
+      PLAN_PRO_PRICE_MONTH_MINOR: '1999900',
+      PLAN_PRO_PRICE_YEAR_MINOR: '2000000000',
+    });
+    expect((env as Record<string, unknown>).PLAN_PRO_CALL_MINUTES).toBe(
+      '1000000',
+    );
+  });
+
+  it.each(NAMES)('treats an empty %s as not set, never as 0', (name) => {
+    expect(() => validateEnv({ ...valid, [name]: '' })).not.toThrow();
+    expect(() => validateEnv({ ...valid, [name]: '   ' })).not.toThrow();
+  });
+
+  it.each(NAMES)(
+    'refuses a bad %s and names the variable, not the value',
+    (name) => {
+      for (const bad of [
+        'abc',
+        '-5',
+        '1.5',
+        '10.0',
+        '1e3',
+        '0x10',
+        '+7',
+        '1,000',
+        '१२',
+      ]) {
+        let message = '';
+        try {
+          validateEnv({ ...valid, [name]: bad });
+        } catch (error) {
+          message = (error as Error).message;
+        }
+        expect([name, bad, message.includes(name)]).toEqual([name, bad, true]);
+      }
+      // The error names the rule, never the value that was typed.
+      expect(() =>
+        validateEnv({ ...valid, [name]: 'secret-looking-text' }),
+      ).toThrow(
+        expect.not.objectContaining({
+          message: expect.stringContaining('secret-looking-text'),
+        }),
+      );
+    },
+  );
+
+  it('refuses a number over its bound: 1,000,000 minutes, 2,000,000,000 minor units (32-bit money columns)', () => {
+    expect(() =>
+      validateEnv({ ...valid, PLAN_PRO_CALL_MINUTES: '1000001' }),
+    ).toThrow(/PLAN_PRO_CALL_MINUTES/);
+    expect(() =>
+      validateEnv({ ...valid, PLAN_PRO_PRICE_MONTH_MINOR: '2000000001' }),
+    ).toThrow(/PLAN_PRO_PRICE_MONTH_MINOR/);
+    expect(() =>
+      validateEnv({ ...valid, PLAN_PRO_OVERAGE_MINUTE_MINOR: '99999999999' }),
+    ).toThrow(/PLAN_PRO_OVERAGE_MINUTE_MINOR/);
+  });
+
+  it('lists every bad variable at once and still refuses to start', () => {
+    expect(() =>
+      validateEnv({
+        ...valid,
+        PLAN_PRO_CALL_MINUTES: 'x',
+        PLAN_FREE_CALL_MINUTES: '-1',
+      }),
+    ).toThrow(
+      /PLAN_FREE_CALL_MINUTES.*PLAN_PRO_CALL_MINUTES|PLAN_PRO_CALL_MINUTES.*PLAN_FREE_CALL_MINUTES/,
+    );
   });
 });

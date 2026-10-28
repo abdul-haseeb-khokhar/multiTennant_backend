@@ -13,6 +13,7 @@ import {
   MinLength,
   validateSync,
 } from 'class-validator';
+import { planCatalogProblems } from '../billing/plan-catalog/plan-catalog.env';
 import { parseTrustProxy } from './trust-proxy';
 
 export class EnvironmentVariables {
@@ -178,13 +179,16 @@ export class EnvironmentVariables {
   })
   INTERNAL_API_TOKEN?: string;
 
-  /** D7: time allowed until the first answer event of a reply stream. */
+  /**
+   * D7: time allowed until the first answer event of a reply stream. Default 10 s (M1, Q14): the
+   * engine's free-tier model takes 3.5 to 10 s to start; lower it once a faster model is in use.
+   */
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(100)
   @Max(60_000)
-  ENGINE_FIRST_TOKEN_TIMEOUT_MS: number = 5000;
+  ENGINE_FIRST_TOKEN_TIMEOUT_MS: number = 10_000;
 
   /** D7: time allowed for a whole reply stream. */
   @IsOptional()
@@ -242,7 +246,10 @@ export function validateEnv(rawConfig: Record<string, unknown>) {
     throw new Error(`Invalid environment configuration (${problems})`);
   }
 
-  const problems: string[] = [];
+  // The plan numbers and prices (L6): optional whole numbers, applied to the plans table at startup
+  // by PlanCatalogSyncService. They are read from the raw config, not declared as class fields,
+  // so that an empty value stays "not set" instead of becoming 0 (see plan-catalog.env.ts).
+  const problems: string[] = planCatalogProblems(config);
   try {
     parseTrustProxy(validated.TRUST_PROXY);
   } catch (error) {

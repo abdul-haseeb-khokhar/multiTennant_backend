@@ -218,7 +218,8 @@ describe('Gateway flows (real database, mock engine)', () => {
         prisma.usageEvent.create({
           data: {
             tenantId: t.tenantId,
-            kind: 'call',
+            // 'call' is allowed since Phase 5A (call minutes); anything else still is not
+            kind: 'sms',
             refId: 'x',
             day: new Date(),
           },

@@ -1,6 +1,6 @@
 # multiTennant_backend
 
-Backend core of a multi-tenant **AI customer-support platform**. Businesses and call centres put an AI agent in front of their customers; the agent answers from the tenant's own knowledge base and hands over to a human when it should. This repository is the **backend core** (NestJS + Prisma + PostgreSQL). The AI engine and the frontend are separate projects that talk to it through documented contracts.
+Backend core of a multi-tenant **AI customer-support platform**. Businesses and call centres put an AI agent in front of their customers; the agent answers from the tenant's own knowledge base and hands over to a human when it should. Since 2026-10-21 the product is **voice-first**: an AI phone receptionist that saves appointment and call-back requests for staff to confirm, with plans measured in call minutes. The chat widget and the staff chat queue are halted (they keep working, with no new work). This repository is the **backend core** (NestJS + Prisma + PostgreSQL). The AI engine and the frontend are separate projects that talk to it through documented contracts.
 
 ## Status
 
@@ -15,7 +15,8 @@ Backend core of a multi-tenant **AI customer-support platform**. Businesses and 
 | 4B | Pro overage setting (the owner chooses between PKR 15 per extra conversation and a hard stop), overage figures, overage reminder | merged (PR #6); the optional spending cap is undecided |
 | 4C | Real email through Resend (test mode), HTML and plain-text templates in English and Urdu, `delivery` in API answers, mail health | merged (PR #6); real delivery in test mode was confirmed by the owner on 2026-10-11 (see Email below) |
 | 3C | Account decisions: logout that ends all sessions, email-first login with a workspace picker (and login throttling), owner self-service with slug rename and time zone, nobody can disable, demote or delete themselves, upgrade requests to the platform team | built on branch `phase-3c-account`, not yet merged; see the frontend list in [docs/team-alignment.md](docs/team-alignment.md) J1 to J5 |
-| 5A to 5F, 6 and later | Voice-first plan: alignment with call minutes, tenant status check and requests workflow, real-engine integration, phone numbers, call usage and billing, agent settings and knowledge; then telephony go-live and hardening. Message operations are halted and WhatsApp is deferred | planned, see [docs/backend-roadmap.md](docs/backend-roadmap.md) and team-alignment L |
+| 5A | Voice-first alignment: call minutes in every plan (Starter, Free, Pro, Enterprise), minute overage under the owner's existing switch, 80% and 100% minute reminders, plan numbers and prices from environment variables, updated engine contracts, a simulated phone call on the mock engine | built on branch `phase-5a-alignment`, not yet merged; see [docs/backend-roadmap.md](docs/backend-roadmap.md) and "Plan numbers and prices" below |
+| 5B to 5F, 6 and later | Voice-first plan: agents (many per tenant, each number linked to one agent), tenant status check and requests workflow, real-engine integration, phone numbers, call usage and billing, agent settings and knowledge; then telephony go-live and hardening. Message operations are halted and WhatsApp is deferred | planned, see [docs/backend-roadmap.md](docs/backend-roadmap.md) and team-alignment L |
 
 ## Documentation
 
@@ -42,7 +43,9 @@ npx prisma generate
 npm run start:dev           # http://localhost:3000, API under /v1, docs at /docs
 ```
 
-For local development MAIL_MODE=link returns invite, reset and verification links in the API responses (the app refuses to start with it when NODE_ENV=production). Emails are only logged until you configure a mail provider (see Email below). The engine defaults to the in-process mock (`ENGINE_MODE=mock`); see [docs/contracts/README.md](docs/contracts/README.md) for a curl walkthrough, or run `npm run widget:walkthrough` / `npm run handoff:walkthrough` against the running server.
+For local development MAIL_MODE=link returns invite, reset and verification links in the API responses (the app refuses to start with it when NODE_ENV=production). Emails are only logged until you configure a mail provider (see Email below). The engine defaults to the in-process mock (`ENGINE_MODE=mock`); see [docs/contracts/README.md](docs/contracts/README.md) for a curl walkthrough, or run `npm run widget:walkthrough` / `npm run handoff:walkthrough` against the running server. The mock can also play a phone call (a saved request with a reference, its update and the call minutes): see "Simulate a phone call" in the same file.
+
+**Two things to know when the engine runs beside the backend.** (1) Both projects default to port **3000**: start one of them on another port (`PORT` here, `ENGINE_BASE_URL` for where this backend looks for the engine). (2) The engine's newer routes accept `Authorization: Bearer <INTERNAL_API_TOKEN>` plus `X-Tenant-Id`, which is what this backend sends; its OLDER `/api/*` routes use the header `x-internal-key` (his `INTERNAL_API_KEY`) and `?tenantId=`, and he is converting only the ones this backend will call. The first-token timeout towards the engine is 10 seconds by default since Phase 5A (`ENGINE_FIRST_TOKEN_TIMEOUT_MS`).
 
 Optional: `PLATFORM_ADMIN_NOTIFY_EMAIL` in `.env` is the address that gets an email when a workspace owner asks for a plan upgrade (the request is stored either way). In the Resend test stage `MAIL_REDIRECT_TO` still sends it to the redirect address.
 
@@ -51,6 +54,30 @@ Create a platform admin (needed for `/v1/admin/...`):
 ```bash
 PLATFORM_ADMIN_EMAIL=you@example.com PLATFORM_ADMIN_PASSWORD='a long password' npm run platform-admin:create
 ```
+
+## Plan numbers and prices (environment variables)
+
+The call minutes of each plan, the price of an extra minute and the Pro prices come from **environment variables**, not from code. All six are optional. Whole numbers in digits only (no decimals, signs or `1e3`); an empty value counts as "not set"; a bad value stops the backend from starting and the error names the variable (never its value). Money is in **minor units** (PKR 25 = `2500`); minutes are whole minutes. Bounds: minutes 0 to 1,000,000, money 0 to 2,000,000,000.
+
+| Variable | What it sets | Placeholder the database starts with |
+|---|---|---|
+| `PLAN_STARTER_CALL_MINUTES` | call minutes of Starter, counted in total over its 15 days | 30 |
+| `PLAN_FREE_CALL_MINUTES` | call minutes of Free per month | 20 |
+| `PLAN_PRO_CALL_MINUTES` | call minutes of Pro per month | 300 |
+| `PLAN_PRO_OVERAGE_MINUTE_MINOR` | price of one extra minute on Pro | 2500 (PKR 25) |
+| `PLAN_PRO_PRICE_MONTH_MINOR` | Pro price per month | 1999900 (PKR 19,999) |
+| `PLAN_PRO_PRICE_YEAR_MINOR` | Pro price per year | 19999000 (PKR 199,990) |
+
+The placeholders are the data the Phase 5A migration put into the `plans` table; they are to be confirmed against real call costs. Enterprise has unlimited minutes and a custom price (set per tenant by a platform admin).
+
+**How it works.** The `plans` table stays the single source of truth that all other code reads. At startup the backend writes the variables that are **set** into the matching plan rows (once, in one transaction under a Postgres advisory lock, so several instances starting together do not fight) and logs one line per change (`plan`, `field`, `from`, `to`); a variable that is **unset** leaves the value already in the table, and nothing is logged when nothing changes. The public price list (`GET /v1/plans`), `GET /v1/me`, the billing screens, the limits and the reminders all read the table, so they follow.
+
+**Before you change one:**
+- Changing a variable and restarting changes the limits or prices of **every tenant on that plan, immediately** (other running instances see it within 30 seconds). Tenants with their own number (a platform admin's `entitlementsOverride`) keep it.
+- Invoices already recorded are never touched.
+- Every instance must run with the **same values**; the one that starts last wins.
+- While a variable is set, a hand edit of that one field in the table is undone at the next start. Unset the variable to take manual control of that field.
+- Changing a price here does not invoice anybody; payments are still recorded by a platform admin.
 
 ## Email
 

@@ -1,9 +1,10 @@
-# Contracts: the AI engine and the widget gateway
+# Contracts: the AI engine, the widget gateway and the voice-first calls
 
 | File | What it is | Status |
 |---|---|---|
-| [engine-internal.openapi.yaml](engine-internal.openapi.yaml) | The part of the engine's internal API the backend calls: run a chat (create conversation, send a message and stream the reply, read a conversation, escalate, health) and, since Phase 4, the staff side (list, counts, claim, release, resolve, human messages) | **Proposed by the backend (Phases 3 and 4), to be reviewed by the AI engine owner.** Everything that is not in team-alignment Appendix A yet is marked "proposed addition" in the file. |
-| [backend-events.openapi.yaml](backend-events.openapi.yaml) | The one route of the backend that the engine calls: `POST /internal/events` (signature, envelope, event types and payloads, delivery rules) | **Proposed by the backend (Phase 4), to be reviewed by the AI engine owner.** Outside `/v1`, not in the public OpenAPI. |
+| [engine-internal.openapi.yaml](engine-internal.openapi.yaml) | The part of the engine's internal API the backend calls: run a chat (create conversation, send a message and stream the reply, read a conversation, escalate, health) and, since Phase 4, the staff side (list, counts, claim, release, resolve, human messages) | **Proposed by the backend (Phases 3 and 4); Phase 5A recorded what Abdullah agreed (M1: message fields `contentKey`, `provider`, token counts and latency, idempotent claim answers 200, 10 s to the first token, 2,000 characters, `conversation.released.to` only `active` or `escalated`).** Nothing is built on his side yet. Everything that is not in team-alignment Appendix A yet is marked "proposed addition" in the file. Chat is halted (L2): no new work. |
+| [backend-events.openapi.yaml](backend-events.openapi.yaml) | The route the engine calls to PUSH events: `POST /internal/events` (signature, envelope, event types and payloads, delivery rules). Since Phase 5A it also lists the voice-first events `record.submitted`, `record.updated` and `usage.call_minutes` | **Proposed by the backend (Phase 4), to be reviewed by the AI engine owner.** The three voice-first events are only acknowledged (200 `ignored`) until Phases 5B and 5E; `action.proposed` is unused (L3). Outside `/v1`, not in the public OpenAPI. |
+| [backend-internal.openapi.yaml](backend-internal.openapi.yaml) | The routes the engine will call to ASK or COMMAND the backend: tenant status check, requests (create, update, withdraw), customer upsert by phone, number lookup | **DRAFT written in Phase 5A. Nothing is implemented in the backend (Phases 5B and 5D) and Abdullah has not seen it.** Every operation is marked `[DRAFT, not implemented]`; its open questions are at the top of the file. |
 | [../openapi.json](../openapi.json) | The public API of the backend, including `/v1/widget/*` and `/v1/tenants/:tenantId/api-keys` | Generated: `npm run openapi:export` |
 
 The backend talks to the engine only through `EngineClient` (`src/engine/`). `ENGINE_MODE` chooses the implementation:
@@ -12,6 +13,12 @@ The backend talks to the engine only through `EngineClient` (`src/engine/`). `EN
 |---|---|---|
 | `mock` (default outside production) | An in-process mock engine that follows the contract, keeps conversations in memory and streams a canned reply token by token | Development, tests, the frontend prototype |
 | `http` | The real engine at `ENGINE_BASE_URL`, with `Authorization: Bearer $INTERNAL_API_TOKEN`, `X-Tenant-Id`, `X-Request-Id`, `Idempotency-Key` | Staging and production. **Production refuses to start in any other mode.** |
+
+### Running the backend beside the real engine (port and header)
+
+* **Port clash.** The backend (`PORT`) and the engine both default to port **3000**. On one machine give one of them another port: `PORT=3100` for the backend, and `ENGINE_BASE_URL` is where the backend looks for the engine.
+* **Authentication header.** The backend sends `Authorization: Bearer <INTERNAL_API_TOKEN>` and `X-Tenant-Id` on every engine call. The engine's NEW `/internal/*` routes accept that (agreed, team-alignment M1 Q10). Its OLDER `/api/*` routes use `?tenantId=` and the header `x-internal-key` (his `INTERNAL_API_KEY`); he converts only the routes this backend calls. The backend never sends `x-internal-key`.
+* **The same token signs the events** the engine pushes to `POST /internal/events` (HMAC, the token itself is never sent).
 
 The mock is tested with the very same behaviour suite as the HTTP client (`src/engine/engine-client.contract.spec.ts`), and the HTTP client is tested against a real socket server that speaks the contract (`test/utils/fake-engine-server.ts`), so the mock is a faithful stand-in as long as that suite passes.
 
@@ -76,12 +83,29 @@ The mock reacts to the customer message. With the real engine these are ordinary
 |---|---|---|
 | `/escalate`, or any message asking for a human ("I want an agent", "مجھے انسان سے بات کرنی ہے") | Replies with a handover text and escalates (`customer_requested`) | `token…`, `escalated`, `done` (`conversationStatus: "escalated"`); later messages: `escalated`, `done` with `aiReply:false` |
 | `/fail` | The engine is unreachable (nothing is stored) | `fallback` with `reason: "ai_unavailable"`, the conversation is escalated by the gateway |
-| `/slow` | The model never answers: the 5 s first-token timeout fires | `accepted`, then after ~5 s `fallback` `ai_unavailable` |
+| `/slow` | The model never answers: the first-token timeout fires (`ENGINE_FIRST_TOKEN_TIMEOUT_MS`, 10 s by default since Phase 5A) | `accepted`, then after the timeout `fallback` `ai_unavailable` |
 | `/broken` | A few words, then the stream fails | `token`, then `fallback` `ai_unavailable` |
-| `/action` | The AI answers and proposes an action that needs approval: the engine emits `action.proposed` (owners and admins get a notification) | `token…`, `done`; no change for the customer |
+| `/action` | The AI answers and proposes an action that needs approval: the engine emits `action.proposed` (owners and admins get a notification). **Unused by the product since L3** (approvals dropped); kept for the receiver tests | `token…`, `done`; no change for the customer |
+| `/call` | **Voice-first (Phase 5A).** Simulates one finished phone call of this tenant: the engine saves a request with a reference such as `AP-4K7Q2` and reports the call length | `token…` naming the reference, `done`; the events `conversation.created` (channel `voice`), `record.submitted` and `usage.call_minutes` (185 seconds) go to the receiver |
+| `/call-update` | Simulates the engine changing the details of the latest saved request while it is still `requested` | `token…` naming the reference, `done`; the event `record.updated`; after a person confirmed the request (`lockRecord` in a test) the mock explains and changes nothing, like the real `locked` answer |
 | anything with "hours", "delivery", "price" | A canned answer | `token…`, `done` |
 
 Since Phase 4 the mock also plays the staff side and pushes the events of D5 (`conversation.created|escalated|assigned|released|resolved`, `message.created`, `usage.recorded`, `action.proposed`) to the backend's receiver in process, exactly as the real engine will with `POST /internal/events`. So the dashboard, the notifications and the widget's live stream can be driven without the engine, see "Run the human hand-off" below.
+
+### Simulate a phone call (voice-first, Phase 5A)
+
+The product is an AI phone receptionist (L1): a caller talks to the engine, the engine saves a **request** (an appointment or a call-back) with a short reference, and staff confirm it. None of that exists in the real engine yet, so the mock plays it, for the frontend prototype and for Phases 5B and 5E:
+
+```bash
+# in any mock chat (the widget walkthrough above): send /call, then /call-update
+curl -N $API/v1/widget/messages -H "Origin: $ORIGIN" -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' -d '{"content":"/call"}'
+#   event: token  data: {"text":"Thank you for calling. I saved your request AP-4K7Q2. …"}
+```
+
+In a test (or a script that builds the app) call the mock directly: `engine.simulateCall(tenantId, { type: 'appointment' | 'callback', seconds })` returns `{ conversationId, recordId, reference, seconds }`; `engine.simulateRequestUpdate(tenantId, reference, { summary })`; `engine.lockRecord(tenantId, reference, 'confirmed')` plays "a person confirmed it" (the engine may no longer change it: the update answers `false` and sends nothing, as the real route will answer 409 `locked`); `engine.recordsOf(tenantId)` and `engine.inspectRecord(tenantId, reference)` read what the engine holds (another tenant's reference does not exist for you).
+
+What the mock sends to the backend's receiver, in this order: `conversation.created` (channel `voice`), `record.submitted` `{recordId, reference, type, conversationId, endCustomerId, channel}`, `usage.call_minutes` `{conversationId, seconds, channel}`; later `record.updated` `{recordId, reference, type, conversationId, revision}`. **The backend acknowledges the three voice-first types (200 `ignored`) and does nothing else with them until Phase 5B (requests, staff screen) and Phase 5E (the minutes are counted).** Until then the minutes of a tenant can only be written by tests, through `UsageService.recordCallMinutes`. The payload fields are proposals (ids and the reference only, never what the caller said); the event names come from Abdullah's documents.
 
 The blocked and limit paths do not need the mock; they come from the tenant itself:
 
@@ -158,7 +182,7 @@ Every data event has an `id`: send the last one as `Last-Event-ID` when reconnec
 ## What the gateway promises about the engine
 
 * The engine receives `X-Tenant-Id` from the verified widget token only, never from the browser's body, URL or message text. A conversation id from another tenant answers 404 (tested with two tenants and two visitors).
-* Engine calls carry `X-Request-Id` (the request's id) and an `Idempotency-Key`; plain calls retry **once**, only when the connection broke; a reply stream waits 5 s for the first token and 30 s in total (`ENGINE_FIRST_TOKEN_TIMEOUT_MS`, `ENGINE_TOTAL_TIMEOUT_MS`); then the customer gets the `ai_unavailable` fallback and the gateway asks the engine to escalate (`POST …/escalate`, reason `ai_unavailable`). If the engine cannot be reached for that either, the escalation is remembered (`gateway_conversations.escalation_pending`) for a later phase to deliver.
+* Engine calls carry `X-Request-Id` (the request's id) and an `Idempotency-Key`; plain calls retry **once**, only when the connection broke; a reply stream waits 10 s for the first token (5 s until Phase 5A; the engine owner asked for 10 s while he uses a free-tier model that needs 3.5 to 10 s to start) and 30 s in total (`ENGINE_FIRST_TOKEN_TIMEOUT_MS`, `ENGINE_TOTAL_TIMEOUT_MS`); then the customer gets the `ai_unavailable` fallback and the gateway asks the engine to escalate (`POST …/escalate`, reason `ai_unavailable`). If the engine cannot be reached for that either, the escalation is remembered (`gateway_conversations.escalation_pending`) for a later phase to deliver.
 * Over the plan limit the gateway stores the message with `aiReply: false` and escalates with `limit_reached`; **the model is not called**. A suspended or closed tenant makes no engine call at all.
 * Message text is never logged. Engine error details never reach a customer.
 
@@ -175,9 +199,11 @@ Every data event has an `id`: send the last one as `Last-Event-ID` when reconnec
 | `conversation.resolved` | `conversation.resolved` for the dashboard, `status: resolved` for the customer |
 | `message.created` | `message.created` (ids) for the dashboard; for the customer only a `human` message (with `content`) or a `system` line (with `contentKey`) |
 | `usage.recorded` | counted once per message id in `usage_daily` (the gateway may have counted it from the reply stream already) |
-| `action.proposed` | notification for owners and admins, `action.proposed` on the dashboard stream |
+| `action.proposed` | notification for owners and admins, `action.proposed` on the dashboard stream. **Unused since 2026-10-21** (L3: approvals dropped, the engine executes no actions) |
+| `record.submitted`, `record.updated` (voice-first, Phase 5A) | **acknowledged only** (200 `ignored`, not stored) until Phase 5B creates the requests, the team notification and the live update |
+| `usage.call_minutes` (voice-first, Phase 5A) | **acknowledged only** until Phase 5E counts the minutes into `usage_daily.call_minutes` |
 
-Message text travels in `message.created` only for `human` and `system` messages. Later: `action.executed`, `call.ended`, `ingestion.completed`, `ingestion.failed` (acknowledged and ignored today).
+Message text travels in `message.created` only for `human` and `system` messages. Later: `action.executed`, `call.ended`, `ingestion.completed`, `ingestion.failed` (acknowledged and ignored today). The routes the engine will call to ask or command the backend are the DRAFT in [backend-internal.openapi.yaml](backend-internal.openapi.yaml).
 
 ## Run the human hand-off (Phase 4)
 

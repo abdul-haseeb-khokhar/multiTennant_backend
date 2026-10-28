@@ -1,0 +1,450 @@
+openapi: 3.0.3
+info:
+  title: Backend internal API (called by the AI engine, voice-first) - DRAFT
+  version: 0.1.0-draft
+  description: |
+    The routes of the backend core that the AI engine calls to ASK or COMMAND (the other direction
+    of [engine-internal.openapi.yaml](engine-internal.openapi.yaml)), for the voice-first product
+    (team-alignment L4, M1; Abdullah's duties B1, B4 and B11). The events the engine PUSHES are in
+    [backend-events.openapi.yaml](backend-events.openapi.yaml) (`record.submitted`,
+    `record.updated`, `usage.call_minutes` are acknowledged and ignored until the phases below).
+
+    **Status: DRAFT written in Phase 5A (2026-10-21). NOTHING in this file is implemented in the
+    backend, and Abdullah has not seen it.** Every operation says so in its summary. The shapes
+    follow what he described in his handoff (his names where known: `serviceable`, `reason`,
+    `submissionKey`, `locked`) and are PROPOSALS where he did not say. Build order: the status
+    check and the requests in Phase 5B, the number lookup in Phase 5D. Questions for him are
+    collected under "Open questions" at the end of this description.
+
+    Rules (the same as the engine contract, reversed):
+    * **Private network only.** Never routed to the internet; the public API is `/v1`.
+    * `Authorization: Bearer <INTERNAL_API_TOKEN>` (one long random secret per environment, the same
+      one that signs the events), `X-Request-Id` for correlation. Wrong or missing token: 401. No
+      token configured on the backend: 503.
+    * **The tenant is in the path** (`/internal/tenants/{tenantId}/...`), because the engine learns it
+      from the backend (`GET /internal/numbers/{e164}`) and states it on every call. The backend
+      checks that the tenant exists and scopes every query to it; an id of another tenant in a body
+      is never a way to reach that tenant's rows (a reference or an id of another tenant answers
+      404).
+    * Commands carry `Idempotency-Key` where a repeat must be harmless; a request has its own
+      `submissionKey` for that.
+    * Errors have the shape `{ statusCode, code, message }`; codes are stable upper-case words.
+    * Ids are text UUIDs, timestamps ISO-8601 UTC, money integer minor units.
+    * Nothing here carries what a caller said beyond the fields named below, and the backend never
+      logs request details or phone numbers.
+
+    **Open questions for the engine owner (all proposals):**
+    1. The status check: which `reason` should a tenant get whose plan has no voice (only possible
+       through an override) or whose payment is overdue (`past_due` keeps serving within the plan,
+       like chat, I5)? Today: `quota_exceeded` only when the call minutes are used up and the owner
+       turned overage off; `unpaid` is reserved and never answered.
+    2. The status is cached by the engine for about 60 seconds, so calls that start inside that
+       window can overshoot the minute allowance a little. Acceptable (a soft limit)?
+    3. The request body: is `data` free-form JSON validated by the engine only? Should
+       `record.submitted` carry the details, or ids and the reference only (proposed)?
+    4. A caller's phone number as the identity of an end customer (privacy rules, F1): the backend
+       proposes to store it as the end customer's external id and show staff the number.
+    5. Who calls the daily retention purge route of the engine (the backend's hourly job, proposed).
+tags:
+  - name: status
+  - name: requests
+  - name: customers
+  - name: numbers
+servers:
+  - url: http://backend.internal:3000
+    description: Private address of the backend. Both services default to port 3000 - run one of them elsewhere.
+security:
+  - internalToken: []
+paths:
+  /internal/tenants/{tenantId}/status:
+    get:
+      tags: [status]
+      summary: '[DRAFT, not implemented] May this business be served right now? (his B1; Phase 5B)'
+      description: |
+        Asked by the engine before it serves a call for the tenant; it caches the answer for about
+        60 seconds and answers its own caller accordingly (403, 429 or 404). Derived by the backend
+        from the EFFECTIVE subscription and the entitlements (`callMinutes`, `voice`):
+
+        | `reason` | When |
+        |---|---|
+        | `suspended` | the tenant is suspended or its account is closed |
+        | `quota_exceeded` | the plan's included call minutes are used up and overage does not apply (the plan has no minute price, the owner switched overage off, or a payment is overdue) |
+        | `unpaid` | reserved; never answered today (a tenant that does not renew falls to Free after the grace period, and during the grace period it is served within its plan) |
+        | `unknown_tenant` | no such tenant |
+        | `null` | `serviceable: true` |
+
+        An unknown tenant is a normal **200** with `reason: unknown_tenant` and `plan: null`: the
+        answer leaks nothing about other tenants and the engine can cache it like any other.
+        Whether one more minute may be served is `EntitlementsService.check(tenant, 'callMinutes')`:
+        a tenant that used exactly its included minutes is no longer serviceable (or, with overage
+        on, still serviceable and billed per extra minute).
+      parameters:
+        - $ref: '#/components/parameters/TenantId'
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '200':
+          description: The answer (also for an unknown tenant)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TenantStatus'
+              examples:
+                serviceable:
+                  value: { tenantId: 2f1c0c3e-6f0b-4a35-9c58-1f3c8c1d0001, serviceable: true, reason: null, plan: pro }
+                outOfMinutes:
+                  value: { tenantId: 2f1c0c3e-6f0b-4a35-9c58-1f3c8c1d0001, serviceable: false, reason: quota_exceeded, plan: free }
+                unknown:
+                  value: { tenantId: 00000000-0000-0000-0000-000000000000, serviceable: false, reason: unknown_tenant, plan: null }
+        '401':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+  /internal/tenants/{tenantId}/requests:
+    post:
+      tags: [requests]
+      summary: '[DRAFT, not implemented] Save a request the agent took on a call (his B4; Phase 5B)'
+      description: |
+        The AI never books, confirms or cancels anything (L1): it saves a request as `requested`
+        and a person confirms it on the staff screen.
+
+        Idempotent by `(tenant, submissionKey)`: the first call answers **201** with `created: true`;
+        a repeat with the same key answers **200** with `created: false` and the stored request
+        (nothing is changed or duplicated). The `reference` (for example `AP-4K7Q2`) is made by the
+        engine, unique per tenant; a different request with a reference that is taken answers 409
+        `REQUEST_REFERENCE_TAKEN`. The caller is an end customer of this tenant (`endCustomerId`
+        from the customer upsert); one of another tenant answers 404 `CUSTOMER_NOT_FOUND`.
+        On success the backend creates a notification for the team and a live update on the
+        dashboard stream (Phase 5B); the engine also sends `record.submitted`.
+      parameters:
+        - $ref: '#/components/parameters/TenantId'
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateRequest'
+      responses:
+        '201':
+          description: Saved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RequestResult'
+        '200':
+          description: The same `submissionKey` was saved before; the original request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RequestResult'
+        '400':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+  /internal/tenants/{tenantId}/requests/{reference}:
+    patch:
+      tags: [requests]
+      summary: '[DRAFT, not implemented] Change the details of a saved request (his B4; Phase 5B)'
+      description: |
+        The engine may change a request ONLY while it is `requested`. Once a person confirmed,
+        completed or cancelled it, the answer is **409 `REQUEST_LOCKED`** (his word: `locked`) and
+        nothing changes. The check is a conditional update on the status that was read, so a
+        confirmation that happens at the same moment wins and the engine's update is refused.
+        Emits `record.updated` (from the engine's side). A reference of another tenant answers 404.
+      parameters:
+        - $ref: '#/components/parameters/TenantId'
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/Reference'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateRequestDetails'
+      responses:
+        '200':
+          description: The request after the change
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RequestResult'
+        '400':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+  /internal/tenants/{tenantId}/requests/{reference}/withdraw:
+    post:
+      tags: [requests]
+      summary: '[DRAFT, not implemented] The caller withdraws a request (his B4; Phase 5B)'
+      description: |
+        Moves a `requested` request to `cancelled` (marked as withdrawn by the caller). Same
+        locking rule as the update: 409 `REQUEST_LOCKED` once a person acted on it. Repeating it on
+        a request that is already withdrawn answers 200 (idempotent).
+      parameters:
+        - $ref: '#/components/parameters/TenantId'
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/Reference'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+                  maxLength: 200
+                  description: Short tag for the staff screen, not the caller's words.
+      responses:
+        '200':
+          description: The request after withdrawing
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RequestResult'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+  /internal/tenants/{tenantId}/customers/by-phone:
+    put:
+      tags: [customers]
+      summary: '[DRAFT, not implemented] Find or create the end customer for a caller number (his B4, L4.3; Phase 5B)'
+      description: |
+        The backend creates end customers (L4.3, M3.7). Upsert by the caller's number within the
+        tenant: the first call creates the customer, later calls return the same `endCustomerId`.
+        The name and language are only filled in when the customer has none yet. The number is
+        personal data (F1): it is stored as the customer's external id, shown to staff, never
+        logged and never put in a URL (it is in the body).
+      parameters:
+        - $ref: '#/components/parameters/TenantId'
+        - $ref: '#/components/parameters/RequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [phone]
+              properties:
+                phone:
+                  type: string
+                  pattern: '^\+[1-9][0-9]{6,14}$'
+                  example: '+923001234567'
+                  description: E.164.
+                name:
+                  type: string
+                  maxLength: 200
+                locale:
+                  type: string
+                  example: ur
+      responses:
+        '200':
+          description: The customer (existing)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomerResult'
+        '201':
+          description: The customer (created now)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomerResult'
+        '400':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+  /internal/numbers/{e164}:
+    get:
+      tags: [numbers]
+      summary: '[DRAFT, not implemented] Which business owns this phone number? (his B11, our Q26; Phase 5D)'
+      description: |
+        Asked by the engine after it verified the telephone provider's webhook signature (or after
+        it accepted the backend's call ticket), so the tenant is never taken from what a caller
+        supplies. The `+` of the number must be sent as `%2B` in the path. An unknown or inactive
+        number answers 404 `NUMBER_NOT_FOUND` and reveals nothing else.
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+        - name: e164
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^\+[1-9][0-9]{6,14}$'
+          example: '%2B923001234567'
+      responses:
+        '200':
+          description: The tenant that owns the number
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [tenantId]
+                properties:
+                  tenantId: { type: string }
+        '404':
+          $ref: '#/components/responses/Error'
+components:
+  securitySchemes:
+    internalToken:
+      type: http
+      scheme: bearer
+      description: INTERNAL_API_TOKEN, one long random secret per environment, shared by backend and engine.
+  parameters:
+    TenantId:
+      name: tenantId
+      in: path
+      required: true
+      schema: { type: string }
+      description: The tenant the call is about (an id the backend gave the engine).
+    Reference:
+      name: reference
+      in: path
+      required: true
+      schema: { type: string, example: AP-4K7Q2 }
+      description: The request's reference, unique per tenant.
+    RequestId:
+      name: X-Request-Id
+      in: header
+      required: false
+      schema: { type: string }
+      description: Correlation id; include it in every log line.
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      schema: { type: string, maxLength: 200 }
+      description: Makes a command safe to repeat. Scoped to the tenant.
+  responses:
+    Error:
+      description: Error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+  schemas:
+    Error:
+      type: object
+      required: [statusCode, code, message]
+      properties:
+        statusCode: { type: integer }
+        code:
+          type: string
+          example: REQUEST_LOCKED
+        message: { type: string }
+    TenantStatus:
+      type: object
+      required: [tenantId, serviceable, reason, plan]
+      properties:
+        tenantId: { type: string }
+        serviceable: { type: boolean }
+        reason:
+          type: string
+          nullable: true
+          enum: [suspended, unpaid, quota_exceeded, unknown_tenant, null]
+        plan:
+          type: string
+          nullable: true
+          example: pro
+          description: The plan code (`starter`, `free`, `pro`, `enterprise`); null for an unknown tenant.
+    RequestType:
+      type: string
+      enum: [appointment, callback]
+    RequestStatus:
+      type: string
+      description: The workflow of Phase 5B. The engine only ever creates `requested`.
+      enum: [requested, confirmed, done, cancelled]
+    CreateRequest:
+      type: object
+      required: [reference, type, submissionKey, endCustomerId, summary]
+      properties:
+        reference:
+          type: string
+          maxLength: 40
+          example: AP-4K7Q2
+          description: Made by the engine, unique per tenant, short enough to read out on the phone.
+        type:
+          $ref: '#/components/schemas/RequestType'
+        submissionKey:
+          type: string
+          maxLength: 200
+          description: Idempotency of the save, unique per tenant.
+        endCustomerId:
+          type: string
+          description: From the customer upsert. Must be a customer of this tenant.
+        conversationId:
+          type: string
+          description: The engine's id of the call.
+        channel:
+          type: string
+          enum: [voice, widget]
+          default: voice
+        language:
+          type: string
+          example: ur
+        summary:
+          type: string
+          maxLength: 1000
+          description: One or two lines for the staff screen.
+        scheduledLocal:
+          type: string
+          nullable: true
+          example: '2026-11-03 15:30'
+          description: The business's wall-clock time as a string, on purpose (the engine does no time-zone arithmetic).
+        timezone:
+          type: string
+          example: Asia/Karachi
+        configVersion:
+          type: integer
+          description: The version of the agent settings the engine used.
+        data:
+          type: object
+          additionalProperties: true
+          description: What the agent collected (name, service, notes ...), already validated by the engine; the backend stores it and does not interpret it.
+    UpdateRequestDetails:
+      type: object
+      properties:
+        summary: { type: string, maxLength: 1000 }
+        scheduledLocal: { type: string, nullable: true }
+        data: { type: object, additionalProperties: true }
+    RequestResult:
+      type: object
+      required: [id, reference, type, status, created]
+      properties:
+        id: { type: string }
+        reference: { type: string }
+        type:
+          $ref: '#/components/schemas/RequestType'
+        status:
+          $ref: '#/components/schemas/RequestStatus'
+        created:
+          type: boolean
+          description: true for the call that saved it, false for a repeat of the same `submissionKey`.
+    CustomerResult:
+      type: object
+      required: [endCustomerId, created]
+      properties:
+        endCustomerId: { type: string }
+        created: { type: boolean }
+    ErrorCodes:
+      description: |
+        Proposed stable codes of this file (documentation only). They need en and ur texts in the
+        backend when they are built.
+      type: string
+      enum:
+        - TENANT_NOT_FOUND
+        - CUSTOMER_NOT_FOUND
+        - REQUEST_NOT_FOUND
+        - REQUEST_LOCKED
+        - REQUEST_REFERENCE_TAKEN
+        - NUMBER_NOT_FOUND
+        - VALIDATION_ERROR
+        - UNAUTHORIZED

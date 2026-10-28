@@ -72,4 +72,66 @@ describe('DefaultUsageProvider (conversations come from usage_daily)', () => {
       provider.getUsage('tenant-a', 'knowledgeMb', undefined),
     ).resolves.toBe(0);
   });
+
+  describe('call minutes (L6)', () => {
+    beforeEach(() => {
+      prisma.usageDaily.aggregate.mockResolvedValue({
+        _sum: { callMinutes: 77 },
+      });
+    });
+
+    it('a monthly allowance sums call_minutes of the current UTC calendar month, this tenant only', async () => {
+      await expect(
+        provider.getUsage('tenant-a', 'callMinutes', {
+          periodStart: new Date('2026-10-02T00:00:00.000Z'),
+          conversationPeriod: 'total',
+          callMinutePeriod: 'month',
+        }),
+      ).resolves.toBe(77);
+      expect(prisma.usageDaily.aggregate).toHaveBeenCalledWith({
+        where: {
+          tenantId: 'tenant-a',
+          day: { gte: new Date('2026-10-01T00:00:00.000Z') },
+        },
+        _sum: { callMinutes: true },
+      });
+    });
+
+    it('a total allowance (Starter) counts from the UTC day the period began, whatever the conversation window is', async () => {
+      await provider.getUsage('tenant-a', 'callMinutes', {
+        periodStart: new Date('2026-10-07T13:30:00.000Z'),
+        conversationPeriod: 'month',
+        callMinutePeriod: 'total',
+      });
+      expect(prisma.usageDaily.aggregate.mock.calls[0][0].where).toEqual({
+        tenantId: 'tenant-a',
+        day: { gte: new Date('2026-10-07T00:00:00.000Z') },
+      });
+    });
+
+    it('defaults to the month when the context does not say', async () => {
+      await provider.getUsage('tenant-a', 'callMinutes', {
+        periodStart: new Date('2026-10-07T13:30:00.000Z'),
+        conversationPeriod: 'total',
+      });
+      expect(prisma.usageDaily.aggregate.mock.calls[0][0].where.day).toEqual({
+        gte: new Date('2026-10-01T00:00:00.000Z'),
+      });
+    });
+
+    it('is 0 for a tenant without any usage row, and without a context', async () => {
+      prisma.usageDaily.aggregate.mockResolvedValue({
+        _sum: { callMinutes: null },
+      });
+      await expect(
+        provider.getUsage('tenant-a', 'callMinutes', {
+          periodStart: new Date('2026-10-01T00:00:00.000Z'),
+          conversationPeriod: 'month',
+        }),
+      ).resolves.toBe(0);
+      await expect(
+        provider.getUsage('tenant-a', 'callMinutes', undefined),
+      ).resolves.toBe(0);
+    });
+  });
 });

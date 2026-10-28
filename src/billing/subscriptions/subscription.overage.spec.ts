@@ -163,6 +163,39 @@ describe('SubscriptionService.setOverageEnabled (J6)', () => {
     expect(audit.record).not.toHaveBeenCalled();
   });
 
+  it('a price for call minutes alone (L6) makes the one switch available', async () => {
+    prisma.subscription.findUnique.mockResolvedValue(
+      row(FREE, {
+        overageEnabled: true,
+        entitlementsOverride: { overageMinuteMinor: 2500 },
+      }),
+    );
+    await expect(
+      service.setOverageEnabled('tenant-a', false, owner),
+    ).resolves.toEqual({ changed: true });
+    expect(prisma.subscription.update).toHaveBeenCalledWith({
+      where: { id: 'sub-1', tenantId: 'tenant-a' },
+      data: { overageEnabled: false },
+    });
+  });
+
+  it('a zero minute price and a zero conversation price are no price', async () => {
+    prisma.subscription.findUnique.mockResolvedValue(
+      row(FREE, {
+        entitlementsOverride: {
+          overageMinuteMinor: 0,
+          overageConversationMinor: 0,
+        },
+      }),
+    );
+    await expect(
+      service.setOverageEnabled('tenant-a', false, owner),
+    ).rejects.toMatchObject({
+      status: 409,
+      response: { code: 'OVERAGE_NOT_AVAILABLE' },
+    });
+  });
+
   it('a price granted through the tenant override makes the setting available', async () => {
     prisma.subscription.findUnique.mockResolvedValue(
       row(FREE, { entitlementsOverride: { overageConversationMinor: 1200 } }),

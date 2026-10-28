@@ -1,13 +1,18 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { Clock } from './clock';
-import type { ConversationPeriod } from './entitlements/entitlements';
+import type {
+  CallMinutePeriod,
+  ConversationPeriod,
+} from './entitlements/entitlements';
 import { UsageProvider } from './entitlements/usage.provider';
 import {
   OverageSettings,
   overageAmountMinor,
+  overagePrice,
   overageSettings,
 } from './overage';
+import { usageWindowStart } from './periods';
 import type { EffectiveSubscription } from './subscriptions/effective-subscription';
 
 /** What the billing screens show about conversations: the allowance, the use and the overage of the current period. */
@@ -27,13 +32,38 @@ export interface ConversationUsageSummary {
   };
 }
 
+/** The same for call minutes (L6): the allowance, the use and the overage of the current period. */
+export interface CallMinuteUsageSummary {
+  /** `month` = UTC calendar month, `total` = since the subscription period began (same windows as the limit check). */
+  period: CallMinutePeriod;
+  periodStart: Date;
+  /** Included call minutes (null = unlimited). */
+  included: number | null;
+  /** Call minutes used in the period, from `usage_daily.call_minutes`. */
+  used: number;
+  overage: OverageSettings & {
+    /** Minutes used past the included amount (billed at the plan's minute price). */
+    minutes: number;
+    /** `minutes` times the price, minor units. */
+    amountMinor: number;
+  };
+}
+
 /**
- * The overage figures of J6. The count is derived, never stored:
- * `max(0, used - included - held for a human)`, where `used` is the same `usage_daily` figure the
- * limit check uses and "held for a human" are the conversations of this period that were started
- * over the limit while overage was off (`gateway_conversations.ai_blocked`): they are counted as
- * used but the AI never answered them, so they are not billed. Plans without an overage price
- * always report 0.
+ * The overage figures of J6 (conversations) and L6 (call minutes). Both are derived, never stored.
+ *
+ * Conversations: `max(0, used - included - held for a human)`, where `used` is the same
+ * `usage_daily` figure the limit check uses and "held for a human" are the conversations of this
+ * period that were started over the limit while overage was off
+ * (`gateway_conversations.ai_blocked`): they are counted as used but the AI never answered them, so
+ * they are not billed.
+ *
+ * Call minutes: `max(0, used - included)` from `usage_daily.call_minutes`. There is no "held"
+ * concept: with overage off the status check stops the service at the limit, so what lies past it
+ * is a call that was already running (it is not cut off) or minutes served while overage was on;
+ * both were served and are counted.
+ *
+ * A plan without a price for the unit always reports 0.
  */
 @Injectable()
 export class OverageService {
@@ -48,15 +78,20 @@ export class OverageService {
   ): Promise<ConversationUsageSummary> {
     const { tenantId, entitlements } = subscription;
     const period = entitlements.conversationPeriod;
-    const since = this.windowStart(subscription, period);
+    const since = usageWindowStart(
+      period,
+      this.clock.now(),
+      subscription.currentPeriodStart,
+    );
     const used = await this.usage.getUsage(tenantId, 'conversations', {
       periodStart: subscription.currentPeriodStart,
       conversationPeriod: period,
     });
     const settings = overageSettings(subscription);
+    const priceMinor = overagePrice(settings, 'conversations');
     const included = entitlements.conversationsPerPeriod;
     let count = 0;
-    if (settings.available && included !== null && used > included) {
+    if (priceMinor !== null && included !== null && used > included) {
       const heldForHuman = await this.prisma.gatewayConversation.count({
         where: { tenantId, aiBlocked: true, createdAt: { gte: since } },
       });
@@ -70,26 +105,42 @@ export class OverageService {
       overage: {
         ...settings,
         count,
-        amountMinor: overageAmountMinor(count, settings.priceMinor),
+        amountMinor: overageAmountMinor(count, priceMinor),
       },
     };
   }
 
-  private windowStart(
+  async callMinuteSummary(
     subscription: EffectiveSubscription,
-    period: ConversationPeriod,
-  ): Date {
-    // The same day boundaries as DefaultUsageProvider.countConversations.
-    const base =
-      period === 'month' ? this.clock.now() : subscription.currentPeriodStart;
-    return period === 'month'
-      ? new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth(), 1))
-      : new Date(
-          Date.UTC(
-            base.getUTCFullYear(),
-            base.getUTCMonth(),
-            base.getUTCDate(),
-          ),
-        );
+  ): Promise<CallMinuteUsageSummary> {
+    const { tenantId, entitlements } = subscription;
+    const period = entitlements.callMinutePeriod;
+    const used = await this.usage.getUsage(tenantId, 'callMinutes', {
+      periodStart: subscription.currentPeriodStart,
+      conversationPeriod: entitlements.conversationPeriod,
+      callMinutePeriod: period,
+    });
+    const settings = overageSettings(subscription);
+    const priceMinor = overagePrice(settings, 'callMinutes');
+    const included = entitlements.callMinutesPerPeriod;
+    const minutes =
+      priceMinor !== null && included !== null
+        ? Math.max(0, used - included)
+        : 0;
+    return {
+      period,
+      periodStart: usageWindowStart(
+        period,
+        this.clock.now(),
+        subscription.currentPeriodStart,
+      ),
+      included,
+      used,
+      overage: {
+        ...settings,
+        minutes,
+        amountMinor: overageAmountMinor(minutes, priceMinor),
+      },
+    };
   }
 }
