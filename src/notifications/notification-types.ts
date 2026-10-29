@@ -10,6 +10,8 @@ export const NotificationType = {
   CONVERSATION_ESCALATED: 'conversation.escalated',
   CONVERSATION_ASSIGNED: 'conversation.assigned',
   ACTION_PROPOSED: 'action.proposed',
+  // Voice-first (Phase 5B-2): the AI took a request on a call.
+  REQUEST_SUBMITTED: 'request.submitted',
   BILLING_TRIAL_ENDING: 'billing.trial_ending',
   BILLING_PERIOD_ENDING: 'billing.period_ending',
   BILLING_GRACE_STARTED: 'billing.grace_started',
@@ -70,6 +72,19 @@ export const NOTIFICATION_TYPES: Record<
       customer: 'as in conversation.escalated (may be absent)',
     },
     link: '/conversations/<conversationId> when known, else null',
+  },
+  [NotificationType.REQUEST_SUBMITTED]: {
+    recipients:
+      'every active staff member (the staff role "agent" included: everyone works the requests); one per request',
+    params: {
+      requestId: 'id of the request',
+      reference: 'the reference the caller was given, for example AP-4K7Q2',
+      requestType: 'appointment | callback',
+      agentId:
+        'id of the tenant agent (the setup, not a person) that took the call',
+      agentName: 'name of that agent',
+    },
+    link: '/requests/<requestId>',
   },
   [NotificationType.BILLING_TRIAL_ENDING]: {
     recipients: 'active owners and admins; at 7, 3 and 1 days left',

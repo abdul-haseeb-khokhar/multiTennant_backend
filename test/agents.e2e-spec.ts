@@ -831,6 +831,11 @@ describe('Agents (e2e, L7)', () => {
   });
 
   describe('the mock engine pulls the settings at the start of a call', () => {
+    // This suite proves the settings pull in isolation (no subscription fixtures here), so the mock
+    // runs without the backend bridge; the whole call flow with the status check is in
+    // requests.e2e-spec.ts and the database suite.
+    beforeAll(() => engine.setBackend(undefined));
+
     it('a simulated call uses the default agent, its current settings version, and puts the agent id on the events', async () => {
       const first = await engine.simulateCall('tenant-a');
       expect(first).toMatchObject({

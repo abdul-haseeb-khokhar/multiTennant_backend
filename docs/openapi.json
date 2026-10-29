@@ -3384,7 +3384,7 @@
         ]
       },
       "delete": {
-        "description": "The default agent cannot be deleted (409 CANNOT_DELETE_DEFAULT_AGENT) and neither can an agent that has phone numbers (409 AGENT_HAS_NUMBERS). The deleted agent is returned.",
+        "description": "The default agent cannot be deleted (409 CANNOT_DELETE_DEFAULT_AGENT) and neither can an agent that has phone numbers (409 AGENT_HAS_NUMBERS) or requests from callers (409 AGENT_HAS_REQUESTS; disable it instead). The deleted agent is returned.",
         "operationId": "AgentsController_remove",
         "parameters": [
           {
@@ -3663,6 +3663,298 @@
         "summary": "One past version of the settings (owner/admin)",
         "tags": [
           "Agents"
+        ]
+      }
+    },
+    "/v1/tenants/{tenantId}/requests": {
+      "get": {
+        "description": "Newest first. Filters: `status`, `type`, `agentId` (the tenant's agent that took the call), a date range on when the request was saved (`from`, `to`) and `q` (part of the reference, the customer's name or their phone number). The list leaves out `details`; open one request to read what the caller said. Everyone works the requests: the staff role `agent` too.",
+        "operationId": "RequestsController_findAll",
+        "parameters": [
+          {
+            "name": "tenantId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "skip",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 0,
+              "default": 0,
+              "type": "number"
+            }
+          },
+          {
+            "name": "take",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "requested",
+                "confirmed",
+                "done",
+                "cancelled"
+              ]
+            }
+          },
+          {
+            "name": "type",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "appointment",
+                "callback"
+              ]
+            }
+          },
+          {
+            "name": "agentId",
+            "required": false,
+            "in": "query",
+            "description": "Only requests taken by this agent (the tenant's agent, not a staff member).",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "required": false,
+            "in": "query",
+            "description": "Only requests saved at or after this moment (ISO-8601).",
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "required": false,
+            "in": "query",
+            "description": "Only requests saved at or before this moment (ISO-8601).",
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "name": "q",
+            "required": false,
+            "in": "query",
+            "description": "Part of the reference (AP-4K7Q2), of the customer's name or of their phone number.",
+            "schema": {
+              "maxLength": 100,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data",
+                    "total",
+                    "skip",
+                    "take"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ServiceRequest"
+                      }
+                    },
+                    "total": {
+                      "type": "integer"
+                    },
+                    "skip": {
+                      "type": "integer"
+                    },
+                    "take": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "List the requests the AI took on calls (every role)",
+        "tags": [
+          "Requests"
+        ]
+      }
+    },
+    "/v1/tenants/{tenantId}/requests/counts": {
+      "get": {
+        "description": "For a badge such as \"3 waiting\". Optionally only for one agent (`agentId`).",
+        "operationId": "RequestsController_counts",
+        "parameters": [
+          {
+            "name": "tenantId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "agentId",
+            "required": false,
+            "in": "query",
+            "description": "Count only the requests of this agent.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RequestCounts"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "How many requests are in each status (every role)",
+        "tags": [
+          "Requests"
+        ]
+      }
+    },
+    "/v1/tenants/{tenantId}/requests/{requestId}": {
+      "get": {
+        "description": "Includes `details`, the document the AI collected (its field list is the engine's). A request of another workspace is a 404 REQUEST_NOT_FOUND.",
+        "operationId": "RequestsController_findOne",
+        "parameters": [
+          {
+            "name": "tenantId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "requestId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceRequest"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "One request with what the caller said (every role)",
+        "tags": [
+          "Requests"
+        ]
+      }
+    },
+    "/v1/tenants/{tenantId}/requests/{requestId}/status": {
+      "patch": {
+        "description": "The workflow: `requested` -> `confirmed` or `cancelled`; `confirmed` -> `done`, `cancelled` or back to `requested`; `done` -> `confirmed`; `cancelled` -> `requested`. Once a person confirmed it, the AI can no longer change it. 409 REQUEST_TRANSITION_NOT_ALLOWED for a move the workflow does not have; 409 REQUEST_STATUS_CONFLICT (with `details.currentStatus`) when a colleague moved it first, when it is already in that status, or when `expectedStatus` is stale: reload and decide again. Audited as `request.confirmed|done|cancelled|reopened` with ids and statuses only.",
+        "operationId": "RequestsController_changeStatus",
+        "parameters": [
+          {
+            "name": "tenantId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "requestId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangeRequestStatusDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceRequest"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Confirm, complete, cancel or reopen a request (every role)",
+        "tags": [
+          "Requests"
         ]
       }
     },
@@ -7514,6 +7806,253 @@
           "createdBy"
         ]
       },
+      "RequestAgent": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string",
+            "example": "Evening reception"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ]
+      },
+      "RequestCustomer": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string",
+            "nullable": true
+          },
+          "phone": {
+            "type": "string",
+            "nullable": true,
+            "example": "+923001234567",
+            "description": "E.164; null when the customer did not reach us by telephone."
+          },
+          "locale": {
+            "type": "string",
+            "nullable": true,
+            "example": "ur"
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "ServiceRequest": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "reference": {
+            "type": "string",
+            "example": "AP-4K7Q2",
+            "description": "What the caller was told; unique within the workspace."
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "appointment",
+              "callback"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "requested",
+              "confirmed",
+              "done",
+              "cancelled"
+            ]
+          },
+          "allowedStatuses": {
+            "type": "array",
+            "description": "The statuses a person may move this request to now (the workflow, so the screen needs no copy of it).",
+            "items": {
+              "type": "string",
+              "enum": [
+                "requested",
+                "confirmed",
+                "done",
+                "cancelled"
+              ]
+            }
+          },
+          "agent": {
+            "$ref": "#/components/schemas/RequestAgent"
+          },
+          "customer": {
+            "nullable": true,
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RequestCustomer"
+              }
+            ]
+          },
+          "channel": {
+            "type": "string",
+            "enum": [
+              "voice",
+              "chat"
+            ]
+          },
+          "language": {
+            "type": "string",
+            "nullable": true,
+            "example": "ur"
+          },
+          "summary": {
+            "type": "string",
+            "description": "One or two lines written by the AI."
+          },
+          "scheduledLocal": {
+            "type": "string",
+            "nullable": true,
+            "example": "2026-11-03 15:30",
+            "description": "The business's wall-clock time as text, on purpose: read it in `timezone`."
+          },
+          "timezone": {
+            "type": "string",
+            "nullable": true,
+            "example": "Asia/Karachi"
+          },
+          "configVersion": {
+            "type": "number",
+            "nullable": true,
+            "description": "The version of the agent settings the call was served with."
+          },
+          "conversationId": {
+            "type": "string",
+            "nullable": true,
+            "description": "The engine's id of the call."
+          },
+          "details": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "What the agent collected (name, service, notes ...). The engine owns the field list; show what is there. Personal data: only in the detail view, not in the list."
+          },
+          "note": {
+            "type": "string",
+            "nullable": true,
+            "description": "The latest note a colleague left with a status change."
+          },
+          "cancelledBy": {
+            "type": "string",
+            "enum": [
+              "caller",
+              "staff"
+            ],
+            "nullable": true,
+            "description": "Who cancelled it: the caller (withdrew it on the phone) or a person on the staff screen."
+          },
+          "statusChangedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "statusChangedBy": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true,
+            "description": "The staff member who made the last status change; null when no person did."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "reference",
+          "type",
+          "status",
+          "allowedStatuses",
+          "agent",
+          "channel",
+          "summary",
+          "createdAt",
+          "updatedAt"
+        ]
+      },
+      "RequestCounts": {
+        "type": "object",
+        "properties": {
+          "requested": {
+            "type": "number"
+          },
+          "confirmed": {
+            "type": "number"
+          },
+          "done": {
+            "type": "number"
+          },
+          "cancelled": {
+            "type": "number"
+          },
+          "total": {
+            "type": "number",
+            "description": "All requests, whatever their status."
+          }
+        },
+        "required": [
+          "requested",
+          "confirmed",
+          "done",
+          "cancelled",
+          "total"
+        ]
+      },
+      "ChangeRequestStatusDto": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "requested",
+              "confirmed",
+              "done",
+              "cancelled"
+            ],
+            "description": "The status to move to. Confirm = `confirmed`, mark done = `done`, cancel = `cancelled`, reopen = `requested` (from `confirmed` or `cancelled`) or `confirmed` (from `done`). The moves a request may make now are in its `allowedStatuses`."
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 500,
+            "description": "A short note for the colleagues; it replaces the previous note. Personal data: it is not copied into the audit log."
+          },
+          "expectedStatus": {
+            "type": "string",
+            "enum": [
+              "requested",
+              "confirmed",
+              "done",
+              "cancelled"
+            ],
+            "description": "The status the screen showed. When the request is somewhere else by now, the answer is 409 REQUEST_STATUS_CONFLICT with the current status and nothing changes."
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
       "StreamTicketResponse": {
         "type": "object",
         "properties": {
@@ -7544,6 +8083,7 @@
               "conversation.escalated",
               "conversation.assigned",
               "action.proposed",
+              "request.submitted",
               "billing.trial_ending",
               "billing.period_ending",
               "billing.grace_started",

@@ -9,6 +9,7 @@ import { isPrismaError } from '../common/errors/prisma-errors';
 import { resolvePage, toPage } from '../common/pagination/pagination';
 import { PrismaService } from '../prisma/prisma.service';
 import { AgentNumbersCheck } from './agent-numbers.check';
+import { AgentRequestsCheck } from './agent-requests.check';
 import {
   AGENT_OMIT,
   AgentProvisioningService,
@@ -30,6 +31,7 @@ export class AgentsService {
     private readonly entitlements: EntitlementsService,
     private readonly provisioning: AgentProvisioningService,
     private readonly numbers: AgentNumbersCheck,
+    private readonly requests: AgentRequestsCheck,
   ) {}
 
   async create(tenantId: string, dto: CreateAgentDto, actor: AuthUser) {
@@ -171,6 +173,7 @@ export class AgentsService {
           );
         }
         await this.assertNoNumbers(tenantId, id, tx);
+        await this.assertNoRequests(tenantId, id, tx);
         // The settings versions go with the agent (cascade).
         const result = await tx.agent.deleteMany({
           where: { id, tenantId, isDefault: false },
@@ -190,9 +193,12 @@ export class AgentsService {
         return agent;
       });
     } catch (error) {
-      // Something that references the agent (phone numbers, from Phase 5D) still exists.
+      // Something that references the agent (a request saved at this very moment, or phone numbers
+      // from Phase 5D) appeared after the check: say which.
       if (isPrismaError(error, 'P2003')) {
-        throw this.hasNumbers();
+        throw (await this.requests.countForAgent(tenantId, id)) > 0
+          ? this.hasRequests()
+          : this.hasNumbers();
       }
       throw error;
     }
@@ -208,6 +214,24 @@ export class AgentsService {
     if ((await this.numbers.countForAgent(tenantId, agentId, tx)) > 0) {
       throw this.hasNumbers();
     }
+  }
+
+  private async assertNoRequests(
+    tenantId: string,
+    agentId: string,
+    tx: Prisma.TransactionClient,
+  ) {
+    if ((await this.requests.countForAgent(tenantId, agentId, tx)) > 0) {
+      throw this.hasRequests();
+    }
+  }
+
+  private hasRequests() {
+    return new ApiException(
+      HttpStatus.CONFLICT,
+      ErrorCode.AGENT_HAS_REQUESTS,
+      'This agent has requests from callers; disable it instead of deleting it',
+    );
   }
 
   private hasNumbers() {

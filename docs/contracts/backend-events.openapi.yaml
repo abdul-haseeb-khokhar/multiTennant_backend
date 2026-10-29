@@ -18,8 +18,11 @@ info:
 
     **Voice-first (L1, decided 2026-10-21).** The product is an AI phone receptionist; the engine's
     real events today are `record.submitted` and `record.updated` (a request was saved or changed,
-    M2.4) and, proposed, `usage.call_minutes`. The backend ACKNOWLEDGES these three (200 `ignored`)
-    and does nothing else with them until Phase 5B (requests) and Phase 5E (call usage). The chat
+    M2.4) and, proposed, `usage.call_minutes`. Since Phase 5B-2 the backend HANDLES `record.submitted`
+    and `record.updated` (stored once in the inbox, idempotent by event id; the request itself arrives
+    through the routes of `backend-internal.openapi.yaml`, so the event only makes sure the team was
+    told) and still ACKNOWLEDGES `usage.call_minutes` (200 `ignored`, nothing stored) until Phase 5E
+    (call usage). None of this is confirmed by the engine owner. The chat
     events (`conversation.*`, `message.created`, `usage.recorded`) keep working but chat is halted
     (L2): no new work. `action.proposed` is **unused** since L3 (approvals dropped).
 
@@ -128,17 +131,24 @@ components:
         are the backend's proposals from Phases 3 and 4 (chat, halted by L2), not confirmed by the
         engine owner. `record.submitted`, `record.updated` and `usage.call_minutes` are the
         voice-first events (names from Abdullah's documents, M2.4 / his B8; payload fields are
-        PROPOSED here, ids and references only, never what the caller said).
+        PROPOSED here, ids and references only, never what the caller said). The two `record.*`
+        events are handled since Phase 5B-2, `usage.call_minutes` is acknowledged until Phase 5E.
       type: object
       properties:
         record.submitted:
           description: >-
-            ACKNOWLEDGED UNTIL PHASE 5B (200 `ignored`, nothing stored). The AI saved a request (an
-            appointment or a call-back) for a caller; staff confirm it. Phase 5B will create the
-            backend's copy, a notification for the team and a live update on the dashboard stream.
-            Ids and the reference only: the details come through the request routes of
-            `backend-internal.openapi.yaml` (open question for the engine owner: should the event
-            carry the details too?).
+            HANDLED since Phase 5B-2 (recorded in the inbox, idempotent by event id). The AI saved a
+            request (an appointment or a call-back) for a caller; staff confirm it. The request
+            ITSELF is created by the engine's call to `POST /internal/tenants/{tenantId}/requests`
+            (the source of truth, it carries the details); this event never creates a request. The
+            backend looks the request up under the ENVELOPE's tenant, by `recordId` (the id the
+            create call returned) or else by `reference`, and makes sure the team has been told:
+            one `request.submitted` notification per active staff member and one `request.created`
+            live update, both once-only through dedupe keys, so the route and the event never double
+            up. An event for a request the backend does not have, or one of another tenant, is
+            processed without any effect (logged without the reference). A missing `recordId` and
+            `reference` is a 400. Ids and the reference only (open question for the engine owner:
+            should the event carry the details too?).
           type: object
           required: [recordId, reference, type]
           properties:
@@ -151,13 +161,16 @@ components:
             agentId: { type: string, nullable: true, description: 'The agent that took the call (L7); null until the engine is agent-aware (Q28), meaning the default agent.' }
             conversationId: { type: string }
             endCustomerId: { type: string, nullable: true }
-            channel: { type: string, enum: [voice, widget] }
+            channel: { type: string, enum: [voice, chat] }
         record.updated:
           description: >-
-            ACKNOWLEDGED UNTIL PHASE 5B (200 `ignored`, nothing stored). The engine changed the
-            details of a request or the caller withdrew it. The engine may do so only while the
-            request is `requested`; once staff confirmed it, the engine's update is refused (409
-            `locked`) and no event is sent.
+            HANDLED since Phase 5B-2 (recorded in the inbox). The engine changed the details of a
+            request or the caller withdrew it (the change itself was made by the engine's call to
+            `PATCH …/requests/{reference}` or `POST …/withdraw`). The engine may do so only while
+            the request is `requested`; once staff confirmed it, the engine's update is refused
+            (409 `REQUEST_LOCKED`) and no event is sent. The backend only publishes a live update
+            `request.updated` to the tenant's dashboard stream (the backend's own current status,
+            not the one in the event); no notification. Lookup as for `record.submitted`.
           type: object
           required: [recordId, reference]
           properties:

@@ -77,6 +77,11 @@ const MATRIX: Array<[Method, string, Role[], string?]> = [
   ['put', '/agents/g1/settings', OWNER_ADMIN],
   ['get', '/agents/g1/settings/versions', OWNER_ADMIN],
   ['get', '/agents/g1/settings/versions/v1', OWNER_ADMIN],
+  // requests the AI took on calls (Phase 5B-2): everyone works them, the staff role agent included
+  ['get', '/requests', ALL],
+  ['get', '/requests/counts', ALL],
+  ['get', '/requests/q1', ALL],
+  ['patch', '/requests/q1/status', ALL],
 ];
 
 describe('Role matrix (e2e, B2 and J4)', () => {
@@ -145,6 +150,7 @@ describe('Role matrix (e2e, B2 and J4)', () => {
           'upgradeRequest',
           'agent',
           'agentSettings',
+          'customerRequest',
         ] as const) {
           for (const [name, fn] of Object.entries(prisma[model])) {
             if (model === 'tenantUser' && name === 'findUnique') continue;
@@ -196,7 +202,7 @@ describe('Role matrix (e2e, B2 and J4)', () => {
     const known = MATRIX.map(([method, path]) => {
       // the table uses concrete ids; compare by shape
       const shape = path
-        .replace(/\/(u1|i1|k1|c1|x1|n1|g1|v1)(?=\/|$)/g, '/:id')
+        .replace(/\/(u1|i1|k1|c1|x1|n1|g1|v1|q1)(?=\/|$)/g, '/:id')
         .replace(/\/:id/g, '/:id');
       return `${method} ${shape}`;
     });

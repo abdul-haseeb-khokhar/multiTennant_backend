@@ -28,6 +28,9 @@ export const StaffEvent = {
   MESSAGE_CREATED: 'message.created',
   NOTIFICATION_CREATED: 'notification.created',
   ACTION_PROPOSED: 'action.proposed',
+  // Requests (Phase 5B-2): ids and the status only, never the caller's details; the UI refetches.
+  REQUEST_CREATED: 'request.created',
+  REQUEST_UPDATED: 'request.updated',
 } as const;
 
 /** Widget event names. */

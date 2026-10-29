@@ -153,13 +153,8 @@ describe('EngineEventsService', () => {
       expect(notifications.create).not.toHaveBeenCalled();
     });
 
-    describe('voice-first events nobody handles yet (record.*, usage.call_minutes)', () => {
+    describe('voice-first events nobody handles yet (usage.call_minutes)', () => {
       it.each([
-        [
-          'record.submitted',
-          { recordId: 'r1', reference: 'AP-4K7Q2', type: 'appointment' },
-        ],
-        ['record.updated', { recordId: 'r1', reference: 'AP-4K7Q2' }],
         [
           'usage.call_minutes',
           { conversationId: 'c1', seconds: 185, channel: 'voice' },
@@ -191,7 +186,7 @@ describe('EngineEventsService', () => {
       });
 
       it('is not stored, so the same delivery is acknowledged again after a later phase handles it', async () => {
-        const event = envelope('record.submitted', { reference: 'AP-4K7Q2' });
+        const event = envelope('usage.call_minutes', { conversationId: 'c1' });
         await service.ingest(event);
         await expect(service.ingest(event)).resolves.toEqual({
           status: 'ignored',
@@ -207,6 +202,138 @@ describe('EngineEventsService', () => {
       await expect(
         service.ingest(envelope('message.created', { conversationId: 'c1' })),
       ).rejects.toMatchObject({ status: 400 });
+    });
+  });
+
+  describe('record.submitted and record.updated (Phase 5B-2)', () => {
+    const row = (over: Record<string, unknown> = {}) => ({
+      id: 'r1',
+      reference: 'AP-4K7Q2',
+      type: 'appointment',
+      status: 'requested',
+      agentId: 'ag1',
+      updatedAt: new Date('2026-10-29T10:00:00Z'),
+      agent: { name: 'Front desk' },
+      ...over,
+    });
+    beforeEach(() => {
+      prisma.customerRequest.findFirst.mockResolvedValue(row());
+      notifications.create.mockResolvedValue([
+        { id: 'n1', type: 'request.submitted', userId: 'u1' },
+      ]);
+    });
+
+    it('record.submitted: looks the request up under the ENVELOPE tenant, notifies every active staff member once and tells the dashboard (ids only)', async () => {
+      await expect(
+        service.ingest(
+          envelope('record.submitted', {
+            recordId: 'r1',
+            reference: 'AP-4K7Q2',
+            customerName: 'IGNORED, never read',
+          }),
+        ),
+      ).resolves.toEqual({ status: 'processed' });
+      expect(prisma.customerRequest.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { tenantId: 'tenant-a', id: 'r1' } }),
+      );
+      expect(notifications.activeStaffIds).toHaveBeenCalledWith(
+        'tenant-a',
+        undefined,
+        prisma,
+      );
+      expect(notifications.create).toHaveBeenCalledWith(
+        'tenant-a',
+        ['u1', 'u2'],
+        expect.objectContaining({
+          type: 'request.submitted',
+          dedupeKey: 'request:r1:submitted',
+          link: '/requests/r1',
+          params: {
+            requestId: 'r1',
+            reference: 'AP-4K7Q2',
+            requestType: 'appointment',
+            agentId: 'ag1',
+            agentName: 'Front desk',
+          },
+        }),
+        prisma,
+      );
+      expect(notifications.announce).toHaveBeenCalled();
+      expect(published).toEqual([
+        {
+          channel: staffChannel('tenant-a'),
+          event: 'request.created',
+          data: { requestId: 'r1', status: 'requested', agentId: 'ag1' },
+        },
+      ]);
+      // It is recorded in the inbox like the other events (idempotent by event id).
+      expect(prisma.engineEvent.createMany).toHaveBeenCalled();
+    });
+
+    it('record.submitted without a recordId finds the request by its reference, in upper case, under the tenant', async () => {
+      await service.ingest(
+        envelope('record.submitted', { reference: 'ap-4k7q2' }),
+      );
+      expect(prisma.customerRequest.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { tenantId: 'tenant-a', reference: 'AP-4K7Q2' },
+        }),
+      );
+    });
+
+    it('record.updated: only a live update with the status, no notification', async () => {
+      prisma.customerRequest.findFirst.mockResolvedValue(
+        row({ status: 'confirmed' }),
+      );
+      await service.ingest(
+        envelope('record.updated', { recordId: 'r1', status: 'cancelled' }),
+      );
+      expect(notifications.create).not.toHaveBeenCalled();
+      expect(published).toEqual([
+        {
+          channel: staffChannel('tenant-a'),
+          event: 'request.updated',
+          // The backend's own status, not the one the event claims.
+          data: { requestId: 'r1', status: 'confirmed' },
+        },
+      ]);
+    });
+
+    it('an event for a request this backend does not have is processed without any effect', async () => {
+      prisma.customerRequest.findFirst.mockResolvedValue(null);
+      await expect(
+        service.ingest(envelope('record.submitted', { recordId: 'nope' })),
+      ).resolves.toEqual({ status: 'processed' });
+      expect(notifications.create).not.toHaveBeenCalled();
+      expect(published).toEqual([]);
+    });
+
+    it('a request id of another tenant is not found (the lookup carries the envelope tenant)', async () => {
+      prisma.customerRequest.findFirst.mockResolvedValue(null);
+      await service.ingest(
+        envelope('record.updated', { recordId: 'r-of-tenant-b' }),
+      );
+      expect(prisma.customerRequest.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { tenantId: 'tenant-a', id: 'r-of-tenant-b' },
+        }),
+      );
+      expect(published).toEqual([]);
+    });
+
+    it('needs a recordId or a reference: 400 and nothing stored', async () => {
+      await expect(
+        service.ingest(envelope('record.submitted', {})),
+      ).rejects.toMatchObject({ status: 400 });
+    });
+
+    it('a repeated delivery is a duplicate and does nothing', async () => {
+      prisma.engineEvent.createMany.mockResolvedValue({ count: 0 });
+      await expect(
+        service.ingest(envelope('record.submitted', { recordId: 'r1' })),
+      ).resolves.toEqual({ status: 'duplicate' });
+      expect(prisma.customerRequest.findFirst).not.toHaveBeenCalled();
+      expect(published).toEqual([]);
     });
   });
 

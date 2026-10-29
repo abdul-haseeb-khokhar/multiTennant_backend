@@ -7,6 +7,7 @@ import {
   prismaError,
 } from '../../test/utils/prisma-mock';
 import { AgentNumbersCheck } from './agent-numbers.check';
+import { AgentRequestsCheck } from './agent-requests.check';
 import { AgentsService } from './agents.service';
 
 const actor = { userId: 'u1', tenantId: 't1', role: 'owner' } as never;
@@ -40,6 +41,7 @@ describe('AgentsService', () => {
   let entitlements: { assertCountAvailable: jest.Mock };
   let provisioning: { provision: jest.Mock };
   let numbers: { countForAgent: jest.Mock };
+  let requests: { countForAgent: jest.Mock };
   let service: AgentsService;
 
   beforeEach(() => {
@@ -55,12 +57,14 @@ describe('AgentsService', () => {
       ),
     };
     numbers = { countForAgent: jest.fn().mockResolvedValue(0) };
+    requests = { countForAgent: jest.fn().mockResolvedValue(0) };
     service = new AgentsService(
       prisma as never,
       audit as never,
       entitlements as never,
       provisioning as never,
       numbers as unknown as AgentNumbersCheck,
+      requests as unknown as AgentRequestsCheck,
     );
   });
 
@@ -355,6 +359,62 @@ describe('AgentsService', () => {
         'AGENT_HAS_NUMBERS',
       ]);
       expect(prisma.agent.deleteMany).not.toHaveBeenCalled();
+    });
+
+    it('refuses an agent that has requests (AGENT_HAS_REQUESTS) and deletes nothing', async () => {
+      prisma.agent.findFirst.mockResolvedValue(agentRow());
+      requests.countForAgent.mockResolvedValue(3);
+      expect(await codeOf(service.remove('t1', 'a1', actor))).toEqual([
+        409,
+        'AGENT_HAS_REQUESTS',
+      ]);
+      // Tenant AND agent, inside the delete transaction.
+      expect(requests.countForAgent).toHaveBeenCalledWith('t1', 'a1', prisma);
+      expect(prisma.agent.deleteMany).not.toHaveBeenCalled();
+      expect(audit.record).not.toHaveBeenCalled();
+    });
+
+    it('a default agent with requests still says CANNOT_DELETE_DEFAULT_AGENT first', async () => {
+      prisma.agent.findFirst.mockResolvedValue(agentRow({ isDefault: true }));
+      requests.countForAgent.mockResolvedValue(3);
+      expect(await codeOf(service.remove('t1', 'a1', actor))).toEqual([
+        409,
+        'CANNOT_DELETE_DEFAULT_AGENT',
+      ]);
+      expect(requests.countForAgent).not.toHaveBeenCalled();
+    });
+
+    it('numbers are reported before requests when an agent has both', async () => {
+      prisma.agent.findFirst.mockResolvedValue(agentRow());
+      numbers.countForAgent.mockResolvedValue(1);
+      requests.countForAgent.mockResolvedValue(3);
+      expect(await codeOf(service.remove('t1', 'a1', actor))).toEqual([
+        409,
+        'AGENT_HAS_NUMBERS',
+      ]);
+    });
+
+    it('an agent that only has requests can be DISABLED (the requests stay readable)', async () => {
+      prisma.agent.findFirst.mockResolvedValue(agentRow());
+      requests.countForAgent.mockResolvedValue(3);
+      prisma.agent.updateMany.mockResolvedValue({ count: 1 });
+      prisma.agent.findFirstOrThrow.mockResolvedValue(
+        agentRow({ status: 'disabled' }),
+      );
+      await expect(
+        service.update('t1', 'a1', { status: 'disabled' }, actor),
+      ).resolves.toMatchObject({ status: 'disabled' });
+    });
+
+    it('maps a foreign-key refusal for a request saved at the same moment to AGENT_HAS_REQUESTS', async () => {
+      prisma.agent.findFirst.mockResolvedValue(agentRow());
+      prisma.agent.deleteMany.mockRejectedValue(prismaError('P2003'));
+      // The check inside the transaction saw none; by the time of the refusal there is one.
+      requests.countForAgent.mockResolvedValueOnce(0).mockResolvedValue(1);
+      expect(await codeOf(service.remove('t1', 'a1', actor))).toEqual([
+        409,
+        'AGENT_HAS_REQUESTS',
+      ]);
     });
 
     it('maps a foreign-key refusal (a number assigned at the same moment) to AGENT_HAS_NUMBERS', async () => {

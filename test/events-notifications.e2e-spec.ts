@@ -202,11 +202,7 @@ describe('Engine events, notifications and OpenAPI (e2e, mocked database)', () =
       expect(h.notifications).toHaveLength(0);
     });
 
-    it.each([
-      ['record.submitted', { recordId: 'r1', reference: 'AP-4K7Q2' }],
-      ['record.updated', { recordId: 'r1', reference: 'AP-4K7Q2' }],
-      ['usage.call_minutes', { conversationId: 'c1', seconds: 185 }],
-    ])(
+    it.each([['usage.call_minutes', { conversationId: 'c1', seconds: 185 }]])(
       'the voice-first event %s is acknowledged and ignored until its phase exists (nothing stored, counted or notified)',
       async (type, data) => {
         const res = await deliver(envelope(type, data)).expect(200);

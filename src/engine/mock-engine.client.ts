@@ -9,6 +9,7 @@ import {
   CreateConversationInput,
   EngineCallContext,
   EngineConversation,
+  EngineBackendPort,
   EngineConversationPage,
   EngineError,
   EngineEventEnvelope,
@@ -100,13 +101,29 @@ export class MockAgentUnavailableError extends Error {
   }
 }
 
+/**
+ * The backend's status check said the call cannot be served (suspended, out of minutes, unknown
+ * agent, ...): the real engine answers its caller 403 or 429 and saves nothing. `reason` is the
+ * status check's word.
+ */
+export class MockCallRefusedError extends Error {
+  constructor(public readonly reason: string) {
+    super(`The backend refused the call: ${reason}`);
+    this.name = 'MockCallRefusedError';
+  }
+}
+
 export interface MockCallOptions {
   type?: MockRecordType;
   /** Length of the call; the usage event reports seconds (default 185 = 3 minutes 5 seconds). */
   seconds?: number;
   /** The agent that takes the call; default the tenant's default agent (L7). Its settings are pulled at the start of the call. */
   agentId?: string;
-  /** The caller; default a new random id (the backend creates the end customer from the number in Phase 5D). */
+  /** The caller's number (E.164); default a new random one. With the backend connected the mock upserts the end customer by it, like the real engine will. */
+  phone?: string;
+  /** The caller's name, passed to the customer upsert. */
+  name?: string;
+  /** An existing end customer instead of the phone upsert (the backend refuses another tenant's). Without the backend: a random id. */
   endCustomerId?: string;
   summary?: string;
   scheduledLocal?: string | null;
@@ -184,6 +201,8 @@ const callUpdateReply = (reference: string) =>
   `I updated the details of your request ${reference}. A colleague will confirm it.`;
 const AGENT_UNAVAILABLE_REPLY =
   'The agent is not available right now, so no call was simulated. Enable the agent first.';
+const callRefusedReply = (reason: string) =>
+  `No call was simulated: the business cannot be served right now (${reason}).`;
 const NO_CALL_REPLY =
   'There is no saved request to update yet. Send /call first to simulate a call.';
 
@@ -210,6 +229,7 @@ export class MockEngineClient extends EngineClient {
   private down = false;
   private sink?: EngineEventSink;
   private agentConfigSource?: AgentConfigSource;
+  private backend?: EngineBackendPort;
   private delivery: Promise<void> = Promise.resolve();
   /** Every event the mock produced (newest last, bounded): for assertions in tests. */
   readonly emitted: EngineEventEnvelope[] = [];
@@ -240,6 +260,16 @@ export class MockEngineClient extends EngineClient {
    */
   setAgentConfigSource(source: AgentConfigSource | undefined) {
     this.agentConfigSource = source;
+  }
+
+  /**
+   * The backend's routes as the engine calls them (status check, customer upsert, requests), wired by
+   * the requests module to the very services the internal routes run. With it a simulated call asks
+   * whether it may be served first and saves its request in the BACKEND; without it the mock keeps its
+   * own copy only (Phase 5B-2).
+   */
+  setBackend(backend: EngineBackendPort | undefined) {
+    this.backend = backend;
   }
 
   /** Resolves when every event produced so far has been handed to the sink. */
@@ -312,16 +342,40 @@ export class MockEngineClient extends EngineClient {
     tenantId: string,
     options: MockCallOptions = {},
   ): Promise<MockCallResult> {
+    // The real engine asks the backend first (his B1) and answers its caller 403 or 429 when the
+    // business cannot be served; it then pulls the agent's settings (L7).
+    let statusAgentId: string | null = null;
+    if (this.backend) {
+      const status = await this.backend.tenantStatus(tenantId, options.agentId);
+      statusAgentId = status.agentId;
+      if (!status.serviceable) {
+        if (status.reason === 'agent_disabled' && status.agentId) {
+          throw new MockAgentUnavailableError(status.agentId);
+        }
+        throw new MockCallRefusedError(status.reason ?? 'unavailable');
+      }
+    }
     const pulled = this.agentConfigSource
       ? await this.agentConfigSource(tenantId, options.agentId)
       : null;
     if (pulled && pulled.status === 'disabled') {
       throw new MockAgentUnavailableError(pulled.agentId);
     }
-    const agentId = pulled?.agentId ?? null;
+    let agentId = pulled?.agentId ?? statusAgentId;
     const type = options.type ?? 'appointment';
     const seconds = Math.max(0, Math.trunc(options.seconds ?? 185));
-    const endCustomerId = options.endCustomerId ?? randomUUID();
+    // The caller becomes an end customer of the tenant, found by their number.
+    const endCustomerId =
+      options.endCustomerId ??
+      (this.backend
+        ? (
+            await this.backend.upsertCustomer(tenantId, {
+              ...(agentId && { agentId }),
+              phone: options.phone ?? randomPhone(),
+              ...(options.name && { name: options.name }),
+            })
+          ).endCustomerId
+        : randomUUID());
     const now = new Date().toISOString();
     const conversation: EngineConversation = {
       id: randomUUID(),
@@ -371,6 +425,36 @@ export class MockEngineClient extends EngineClient {
       revision: 0,
       createdAt: now,
     };
+    if (this.backend) {
+      // Saved in the backend under a reference the engine draws; a collision (409
+      // REQUEST_REFERENCE_TAKEN, in the backend's table) means "draw another one".
+      for (let attempt = 0; ; attempt += 1) {
+        const saved = await this.backend.createRequest(tenantId, {
+          ...(agentId && { agentId }),
+          reference: record.reference,
+          type,
+          submissionKey: `mock-call-${conversation.id}`,
+          endCustomerId,
+          conversationId: conversation.id,
+          channel: 'voice',
+          summary: record.summary,
+          scheduledLocal: record.scheduledLocal,
+          timezone: 'Asia/Karachi',
+          ...(pulled && { configVersion: pulled.version }),
+        });
+        if (saved.ok) {
+          record.id = saved.id;
+          record.reference = saved.reference;
+          record.agentId = saved.agentId;
+          agentId = saved.agentId;
+          break;
+        }
+        if (attempt >= 5) {
+          throw new Error('The mock could not draw a free reference');
+        }
+        record.reference = this.newReference(tenantId, type);
+      }
+    }
     this.records.set(key(tenantId, record.reference), record);
     this.emit(tenantId, 'record.submitted', {
       recordId: record.id,
@@ -409,13 +493,22 @@ export class MockEngineClient extends EngineClient {
    * engine it may do so only while the request is `requested`; afterwards the request is locked
    * and this answers `false` without emitting anything (the real route answers 409 `locked`).
    */
-  simulateRequestUpdate(
+  async simulateRequestUpdate(
     tenantId: string,
     reference: string,
     change: { summary?: string; scheduledLocal?: string | null } = {},
-  ): boolean {
+  ): Promise<boolean> {
     const record = this.records.get(key(tenantId, reference));
     if (!record || record.status !== 'requested') return false;
+    if (this.backend) {
+      // The backend decides: a person who confirmed it in the meantime makes this `locked`.
+      const updated = await this.backend.updateRequest(
+        tenantId,
+        reference,
+        change,
+      );
+      if (!updated.ok) return false;
+    }
     record.revision += 1;
     if (change.summary !== undefined) record.summary = change.summary;
     if (change.scheduledLocal !== undefined) {
@@ -432,7 +525,38 @@ export class MockEngineClient extends EngineClient {
     return true;
   }
 
-  /** Test control: a person confirmed (or otherwise moved) the request on the backend side; the engine may no longer change it. */
+  /**
+   * Simulates the caller withdrawing their own request ("forget it"): cancelled, but only while it is
+   * still `requested` (the real route answers 409 `locked` otherwise). Emits `record.updated`.
+   */
+  async simulateRequestWithdraw(
+    tenantId: string,
+    reference: string,
+  ): Promise<boolean> {
+    const record = this.records.get(key(tenantId, reference));
+    if (!record || record.status !== 'requested') return false;
+    if (this.backend) {
+      const withdrawn = await this.backend.withdrawRequest(tenantId, reference);
+      if (!withdrawn.ok) return false;
+    }
+    record.status = 'cancelled';
+    record.revision += 1;
+    this.emit(tenantId, 'record.updated', {
+      recordId: record.id,
+      reference: record.reference,
+      type: record.type,
+      conversationId: record.conversationId,
+      agentId: record.agentId,
+      status: 'cancelled',
+      revision: record.revision,
+    });
+    return true;
+  }
+
+  /**
+   * Test control for the mock WITHOUT the backend: a person confirmed (or otherwise moved) the
+   * request; the engine may no longer change it. With the backend connected the staff confirm it there.
+   */
   lockRecord(tenantId: string, reference: string, status: MockRecordStatus) {
     const record = this.records.get(key(tenantId, reference));
     if (record) record.status = status;
@@ -811,16 +935,21 @@ export class MockEngineClient extends EngineClient {
       try {
         callText = callReply((await this.simulateCall(ctx.tenantId)).reference);
       } catch (error) {
-        if (!(error instanceof MockAgentUnavailableError)) throw error;
-        callText = AGENT_UNAVAILABLE_REPLY;
+        if (error instanceof MockAgentUnavailableError) {
+          callText = AGENT_UNAVAILABLE_REPLY;
+        } else if (error instanceof MockCallRefusedError) {
+          callText = callRefusedReply(error.reason);
+        } else {
+          throw error;
+        }
       }
     } else if (callUpdate) {
       const latest = this.recordsOf(ctx.tenantId).at(-1);
       callText =
         latest &&
-        this.simulateRequestUpdate(ctx.tenantId, latest.reference, {
+        (await this.simulateRequestUpdate(ctx.tenantId, latest.reference, {
           summary: 'The caller changed the details of the request.',
-        })
+        }))
           ? callUpdateReply(latest.reference)
           : NO_CALL_REPLY;
     }
@@ -1066,6 +1195,13 @@ export class MockEngineClient extends EngineClient {
     this.idempotent.set(k, created);
     return clone(created);
   }
+}
+
+/** A made-up international number for a simulated caller (never a real one). */
+function randomPhone(): string {
+  let digits = '';
+  for (let i = 0; i < 10; i += 1) digits += String(randomInt(10));
+  return `+92${digits}`;
 }
 
 function key(tenantId: string, id: string) {
