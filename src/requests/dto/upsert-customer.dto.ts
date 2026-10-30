@@ -16,12 +16,17 @@ export class UpsertCustomerByPhoneDto {
   @MaxLength(100)
   agentId?: string;
 
+  /**
+   * Optional since Phase 5B-3: the engine's own rule lets a request be saved with no number (an email-only
+   * request); such a caller becomes a customer of their own, never merged with anyone.
+   */
   @Transform(trim)
+  @IsOptional()
   @IsString()
   @Matches(E164_PATTERN, {
     message: 'phone must be in international form, for example +923001234567',
   })
-  phone: string;
+  phone?: string;
 
   /** Only filled in when the customer has no name yet. */
   @Transform(trim)

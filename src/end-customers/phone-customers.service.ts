@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { HttpStatus, Injectable } from '@nestjs/common';
 import { ApiException } from '../common/errors/api.exception';
 import { ErrorCode } from '../common/errors/error-codes';
@@ -6,6 +7,13 @@ import { PrismaService } from '../prisma/prisma.service';
 
 /** `external_id` of an end customer who reached us by telephone: `phone_<E.164>` (like `web_<visitorId>` for the widget). */
 export const PHONE_EXTERNAL_ID_PREFIX = 'phone_';
+
+/**
+ * `external_id` of an end customer who reached us by telephone but gave no number at all (an email-only
+ * request, the engine's own rule: "a request with no phone number makes a row of its own, an address is not
+ * reliable enough to merge two people on"): `call_<uuid>`. Never merged with anyone.
+ */
+export const CALL_EXTERNAL_ID_PREFIX = 'call_';
 
 /** International form: `+`, a non-zero first digit, 7 to 15 digits in all. */
 export const E164_PATTERN = /^\+[1-9][0-9]{6,14}$/;
@@ -22,8 +30,8 @@ export function phoneOfExternalId(externalId: string): string | null {
 }
 
 export interface PhoneCustomerInput {
-  /** E.164, already validated. */
-  phone: string;
+  /** E.164, already validated. Without it the caller becomes a customer of their own (`call_<uuid>`), never merged. */
+  phone?: string;
   name?: string;
   locale?: string;
 }
@@ -79,6 +87,7 @@ export class PhoneCustomersService {
     tenantId: string,
     input: PhoneCustomerInput,
   ): Promise<{ endCustomerId: string; created: boolean }> {
+    if (!input.phone) return this.createAnonymous(tenantId, input);
     const externalId = phoneExternalId(input.phone);
     const existing = await this.find(tenantId, externalId);
     if (existing) {
@@ -104,6 +113,23 @@ export class PhoneCustomersService {
       await this.fillMissing(tenantId, winner.id, input);
       return { endCustomerId: winner.id, created: false };
     }
+  }
+
+  /** A caller who gave no number: a new customer every time (nothing reliable to find them again by). */
+  private async createAnonymous(
+    tenantId: string,
+    input: PhoneCustomerInput,
+  ): Promise<{ endCustomerId: string; created: boolean }> {
+    const created = await this.prisma.endCustomer.create({
+      data: {
+        tenantId,
+        externalId: `${CALL_EXTERNAL_ID_PREFIX}${randomUUID()}`,
+        name: input.name ?? null,
+        locale: input.locale ?? null,
+      },
+      select: { id: true },
+    });
+    return { endCustomerId: created.id, created: true };
   }
 
   private find(tenantId: string, externalId: string) {

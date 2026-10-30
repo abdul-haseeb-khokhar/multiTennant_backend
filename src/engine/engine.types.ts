@@ -203,7 +203,7 @@ export interface BackendTenantStatus {
 export interface BackendRequestInput {
   agentId?: string;
   reference: string;
-  type: 'appointment' | 'callback';
+  type: 'appointment' | 'callback' | 'order';
   submissionKey: string;
   endCustomerId: string;
   conversationId?: string;
@@ -229,7 +229,7 @@ export interface EngineBackendPort {
   ): Promise<BackendTenantStatus>;
   upsertCustomer(
     tenantId: string,
-    input: { agentId?: string; phone: string; name?: string; locale?: string },
+    input: { agentId?: string; phone?: string; name?: string; locale?: string },
   ): Promise<{ endCustomerId: string; created: boolean }>;
   /** `reference_taken`: the engine draws another reference and tries again. */
   createRequest(

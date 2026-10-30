@@ -17,7 +17,13 @@ export const REQUEST_STATUSES = [
 ] as const;
 export type RequestStatus = (typeof REQUEST_STATUSES)[number];
 
-export const REQUEST_TYPES = ['appointment', 'callback'] as const;
+/**
+ * What the AI can take on a call. `order` (a restaurant order: dishes from the owner's menu, pickup or
+ * delivery) was added in Phase 5B-3 when the engine built it; the workflow below is the same for every
+ * type, and the type-specific content lives in the engine's own `data` document (prices are not in it:
+ * the team confirms them with the caller).
+ */
+export const REQUEST_TYPES = ['appointment', 'callback', 'order'] as const;
 export type RequestType = (typeof REQUEST_TYPES)[number];
 
 /** Who is making the move: the AI engine (through the internal routes) or a staff member. */

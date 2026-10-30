@@ -42,7 +42,7 @@
   "ingestion.failed.title": "A knowledge source failed",
   "invite.accepted.body": "{name} accepted the invitation and joined the team.",
   "invite.accepted.title": "A new team member joined",
-  "request.submitted.body": "{requestType, select, appointment {An appointment request} callback {A call-back request} other {A request}} ({reference}) was taken by {agentName}. Open it to confirm or decline.",
+  "request.submitted.body": "{requestType, select, appointment {An appointment request} callback {A call-back request} order {An order request} other {A request}} ({reference}) was taken by {agentName}. Open it to confirm or decline.",
   "request.submitted.title": "New request from a caller",
   "usage.limit_reached.body": "You have used all {limit} conversations included in your plan. New conversations go to your team until the next period or an upgrade.",
   "usage.limit_reached.title": "Plan limit reached",

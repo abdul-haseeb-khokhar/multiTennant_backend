@@ -259,6 +259,23 @@ describe('Requests and the status check (real database, Phase 5B-2)', () => {
       expect(message).toMatch(/check constraint|violates/i);
     });
 
+    it.each([
+      ['appointment', 'AP-4K7Q2'],
+      ['callback', 'CB-MN3P9'],
+      ['order', 'OR-7HW2X'],
+    ])(
+      'accepts a %s with the engine reference %s (type CHECK widened in Phase 5B-3)',
+      async (type, reference) => {
+        expect(
+          await insert(a, a.agentId, customerA, {
+            type,
+            reference:
+              reference + '-' + randomBytes(2).toString('hex').toUpperCase(),
+          }),
+        ).toBeNull();
+      },
+    );
+
     it('accepts cancelled_by while the request is cancelled', async () => {
       expect(
         await insert(a, a.agentId, customerA, {
@@ -1185,6 +1202,72 @@ describe('Requests and the status check (real database, Phase 5B-2)', () => {
           })
         ).summary,
       ).toBe('Friday please');
+    });
+
+    it('a caller with no number (an email-only request) becomes a customer of their own and the request is saved and listed without a phone', async () => {
+      const t = await signup('NoPhone');
+      const first = await putCustomer(t, { name: 'Sara' }).expect(201);
+      const second = await putCustomer(t, { name: 'Sara' }).expect(201);
+      expect(second.body.endCustomerId).not.toBe(first.body.endCustomerId);
+      const saved = await http()
+        .post(`/internal/tenants/${t.tenantId}/requests`)
+        .set('Authorization', service())
+        .send({
+          reference: 'CB-NOPH2',
+          type: 'callback',
+          submissionKey: `nophone-${run}`,
+          endCustomerId: first.body.endCustomerId,
+          summary: 'Call-back by email',
+          data: { email: 'sara@example.test' },
+        })
+        .expect(201);
+      const detail = await http()
+        .get(`${staffUrl(t)}/${saved.body.id}`)
+        .set('Authorization', bearer(t.token))
+        .expect(200);
+      expect(detail.body.customer).toMatchObject({
+        name: 'Sara',
+        phone: null,
+      });
+    });
+
+    it('an order call: the mock saves type order with an OR- reference and its dishes in details; staff find it by type, confirm it, and the engine is locked out', async () => {
+      const t = await signup('FlowOrder');
+      const call = await engine.simulateCall(t.tenantId, {
+        type: 'order',
+        phone: phone(),
+        name: 'Bilal Raza',
+      });
+      await engine.flushEvents();
+      expect(call.reference).toMatch(/^OR-/);
+
+      const byType = await http()
+        .get(`${staffUrl(t)}?type=order`)
+        .set('Authorization', bearer(t.token))
+        .expect(200);
+      expect(byType.body.data.map((r: { id: string }) => r.id)).toEqual([
+        call.recordId,
+      ]);
+      const detail = await http()
+        .get(`${staffUrl(t)}/${call.recordId}`)
+        .set('Authorization', bearer(t.token))
+        .expect(200);
+      expect(detail.body).toMatchObject({
+        type: 'order',
+        details: { order_type: 'pickup', order_items: [{ qty: 2 }] },
+      });
+      expect(
+        await prisma.notification.findFirstOrThrow({
+          where: { tenantId: t.tenantId, type: 'request.submitted' },
+        }),
+      ).toMatchObject({ params: { requestType: 'order' } });
+
+      await move(t, call.recordId, 'confirmed').expect(200);
+      await expect(
+        engine.simulateRequestUpdate(t.tenantId, call.reference, {
+          summary: 'too late',
+        }),
+      ).resolves.toBe(false);
     });
 
     it('a tenant out of minutes takes no call and saves nothing', async () => {

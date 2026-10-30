@@ -79,7 +79,7 @@ export const NOTIFICATION_TYPES: Record<
     params: {
       requestId: 'id of the request',
       reference: 'the reference the caller was given, for example AP-4K7Q2',
-      requestType: 'appointment | callback',
+      requestType: 'appointment | callback | order',
       agentId:
         'id of the tenant agent (the setup, not a person) that took the call',
       agentName: 'name of that agent',

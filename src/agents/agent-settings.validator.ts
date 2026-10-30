@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { canonicalTimeZone } from '../common/validation/timezone';
 import {
   AGENT_LANGUAGES,
+  AGENT_OPTIONAL_KEYS,
   AGENT_SETTINGS_KEYS,
   AGENT_TONES,
   AgentEscalation,
@@ -9,7 +10,9 @@ import {
   AgentSettingsDocument,
   BUSINESS_NAME_MAX,
   EscalationContact,
+  LocalizedText,
   OUTSIDE_HOURS,
+  ProfileSummarySource,
   WEEKDAYS,
 } from './agent-settings.defaults';
 
@@ -23,6 +26,16 @@ export const TOPIC_MAX = 40;
 export const RANGES_PER_DAY_MAX = 5;
 export const AFTER_MISSES_MIN = 1;
 export const AFTER_MISSES_MAX = 4;
+/** The engine's own limits for the texts it added (its `greeting`, `announce` and `profileSummary` rules); the engine checks the rest. */
+export const GREETING_MAX = 400;
+export const ANNOUNCE_MAX = 200;
+export const PROFILE_SUMMARY_MAX = 1200;
+export const PROFILE_SUMMARY_SOURCES_MAX = 10;
+export const END_CALL_DELAY_MIN = 2;
+export const END_CALL_DELAY_MAX = 10;
+const SOURCE_ID_MAX = 100;
+const SOURCE_TITLE_MAX = 300;
+const SOURCE_HASH_MAX = 200;
 const CAPABILITIES_MAX = 50;
 const VOICES_MAX = 10;
 const KEY_MAX = 60;
@@ -71,7 +84,10 @@ export type SettingsValidation =
  * international form, a contact id filled in), or every problem found.
  *
  * The backend only checks the structure. The engine owns the field list in depth: the checklist of
- * what the agent collects, the catalogue of capabilities and the voice ids. Hook for that: provide
+ * what the agent collects, the catalogue of capabilities and the voice ids. A key the backend does not
+ * know (at the top of the document, or inside `escalation`) is never refused: it is kept exactly as it
+ * was sent, inside the size cap, so a field the engine adds tomorrow is not a bug here today
+ * (Phase 5B-3). Hook for the engine's own checks: provide
  * another implementation of this class in `AgentsCoreModule` that calls the engine's validation
  * route once Abdullah offers it (Q28) and falls back to `StructuralAgentSettingsValidator` when the
  * engine is unreachable. No such route is called today.
@@ -101,10 +117,6 @@ export class StructuralAgentSettingsValidator extends AgentSettingsValidator {
       };
     }
     const problems: Problems = [];
-    const known = new Set<string>(AGENT_SETTINGS_KEYS);
-    for (const key of Object.keys(input)) {
-      if (!known.has(key)) problems.push({ field: key, code: 'unknown_field' });
-    }
     // JSON.stringify can throw on a pathological structure; the opaque parts are measured below.
     const document: Partial<AgentSettingsDocument> = {};
 
@@ -138,6 +150,14 @@ export class StructuralAgentSettingsValidator extends AgentSettingsValidator {
     document.capabilities = this.capabilities(input, problems);
     document.voices = this.voices(input, problems);
     document.collect = this.collect(input, problems);
+    this.optionalFields(input, document, problems);
+    this.keepUnknown(
+      input,
+      [...AGENT_SETTINGS_KEYS, ...AGENT_OPTIONAL_KEYS],
+      document as Record<string, unknown>,
+      '',
+      problems,
+    );
 
     if (problems.length === 0) {
       const size = Buffer.byteLength(JSON.stringify(document), 'utf8');
@@ -312,19 +332,6 @@ export class StructuralAgentSettingsValidator extends AgentSettingsValidator {
       problems.push({ field: 'escalation', code: 'invalid_type' });
       return empty;
     }
-    const known = new Set([
-      'enabled',
-      'contacts',
-      'whenCallerAsks',
-      'afterMisses',
-      'topics',
-      'outsideHours',
-    ]);
-    for (const key of Object.keys(value)) {
-      if (!known.has(key)) {
-        problems.push({ field: `escalation.${key}`, code: 'unknown_field' });
-      }
-    }
     const out: AgentEscalation = { ...empty };
 
     for (const flag of ['enabled', 'whenCallerAsks'] as const) {
@@ -371,6 +378,28 @@ export class StructuralAgentSettingsValidator extends AgentSettingsValidator {
 
     out.topics = this.topics(value.topics, problems);
     out.contacts = this.contacts(value.contacts, problems);
+    const announce = this.localizedText(
+      value.announce,
+      'escalation.announce',
+      ANNOUNCE_MAX,
+      problems,
+    );
+    if (announce !== undefined) out.announce = announce;
+    this.keepUnknown(
+      value,
+      [
+        'enabled',
+        'contacts',
+        'whenCallerAsks',
+        'afterMisses',
+        'topics',
+        'outsideHours',
+        'announce',
+      ],
+      out,
+      'escalation.',
+      problems,
+    );
     if (out.enabled && out.contacts.length === 0) {
       problems.push({
         field: 'escalation.contacts',
@@ -488,6 +517,173 @@ export class StructuralAgentSettingsValidator extends AgentSettingsValidator {
       out.push({ id, role, name, phone });
     });
     return out;
+  }
+
+  // ---- what the engine added later (optional) and what it may add tomorrow -------------------
+
+  /** The optional fields: checked when present, left out of the document when absent. */
+  private optionalFields(
+    source: Record<string, unknown>,
+    document: Partial<AgentSettingsDocument>,
+    problems: Problems,
+  ) {
+    const greeting = this.localizedText(
+      source.greeting,
+      'greeting',
+      GREETING_MAX,
+      problems,
+    );
+    if (greeting !== undefined) document.greeting = greeting;
+
+    for (const flag of ['recordCalls', 'autoEndCalls'] as const) {
+      const value = source[flag];
+      if (value === undefined) continue;
+      if (typeof value === 'boolean') document[flag] = value;
+      else problems.push({ field: flag, code: 'invalid_type' });
+    }
+
+    const delay = source.endCallDelaySeconds;
+    if (delay !== undefined) {
+      if (typeof delay !== 'number') {
+        problems.push({ field: 'endCallDelaySeconds', code: 'invalid_type' });
+      } else if (
+        !Number.isInteger(delay) ||
+        delay < END_CALL_DELAY_MIN ||
+        delay > END_CALL_DELAY_MAX
+      ) {
+        problems.push({
+          field: 'endCallDelaySeconds',
+          code: 'out_of_range',
+          params: { min: END_CALL_DELAY_MIN, max: END_CALL_DELAY_MAX },
+        });
+      } else {
+        document.endCallDelaySeconds = delay;
+      }
+    }
+
+    const summary = source.profileSummary;
+    if (summary !== undefined) {
+      if (summary === null) {
+        document.profileSummary = null;
+      } else if (typeof summary !== 'string') {
+        problems.push({ field: 'profileSummary', code: 'invalid_type' });
+      } else if (summary.trim().length > PROFILE_SUMMARY_MAX) {
+        problems.push({
+          field: 'profileSummary',
+          code: 'too_long',
+          params: { max: PROFILE_SUMMARY_MAX },
+        });
+      } else {
+        document.profileSummary = summary.trim() || null;
+      }
+    }
+
+    const sources = this.summarySources(source.profileSummarySources, problems);
+    if (sources !== undefined) document.profileSummarySources = sources;
+  }
+
+  /** `{ en?, ur? }`: strings trimmed, an empty or null one left out (the engine's built-in wording applies). */
+  private localizedText(
+    value: unknown,
+    field: string,
+    max: number,
+    problems: Problems,
+  ): LocalizedText | undefined {
+    if (value === undefined) return undefined;
+    if (!isPlainObject(value)) {
+      problems.push({ field, code: 'invalid_type' });
+      return undefined;
+    }
+    const out: LocalizedText = {};
+    for (const [language, text] of Object.entries(value)) {
+      const at = `${field}.${language}`;
+      if (!(AGENT_LANGUAGES as readonly string[]).includes(language)) {
+        problems.push({ field: at, code: 'unknown_field' });
+      } else if (text === null || text === undefined) {
+        continue;
+      } else if (typeof text !== 'string') {
+        problems.push({ field: at, code: 'invalid_type' });
+      } else if (text.trim().length > max) {
+        problems.push({ field: at, code: 'too_long', params: { max } });
+      } else if (text.trim()) {
+        out[language as keyof LocalizedText] = text.trim();
+      }
+    }
+    return out;
+  }
+
+  private summarySources(
+    value: unknown,
+    problems: Problems,
+  ): ProfileSummarySource[] | undefined {
+    const field = 'profileSummarySources';
+    if (value === undefined) return undefined;
+    if (!Array.isArray(value)) {
+      problems.push({ field, code: 'invalid_type' });
+      return undefined;
+    }
+    if (value.length > PROFILE_SUMMARY_SOURCES_MAX) {
+      problems.push({
+        field,
+        code: 'too_many',
+        params: { max: PROFILE_SUMMARY_SOURCES_MAX },
+      });
+      return undefined;
+    }
+    const limits = {
+      id: SOURCE_ID_MAX,
+      title: SOURCE_TITLE_MAX,
+      hash: SOURCE_HASH_MAX,
+    } as const;
+    const out: ProfileSummarySource[] = [];
+    value.forEach((entry: unknown, index) => {
+      const at = `${field}[${index}]`;
+      if (!isPlainObject(entry)) {
+        problems.push({ field: at, code: 'invalid_type' });
+        return;
+      }
+      for (const key of ['id', 'title', 'hash'] as const) {
+        const part = entry[key];
+        if (typeof part !== 'string') {
+          problems.push({
+            field: `${at}.${key}`,
+            code: part === undefined ? 'required' : 'invalid_type',
+          });
+        } else if (part.length > limits[key]) {
+          problems.push({
+            field: `${at}.${key}`,
+            code: 'too_long',
+            params: { max: limits[key] },
+          });
+        }
+      }
+      out.push(entry as unknown as ProfileSummarySource);
+    });
+    return out;
+  }
+
+  /**
+   * Copies every key the backend does not know into `target`, as it was sent. The engine owns the
+   * field list, so such a key is never refused; only its depth and size are bounded (and the whole
+   * document by the byte cap). `defineProperty`, so even a key named `__proto__` stays plain data.
+   */
+  private keepUnknown(
+    source: Record<string, unknown>,
+    known: readonly string[],
+    target: Record<string, unknown>,
+    prefix: string,
+    problems: Problems,
+  ) {
+    for (const [key, value] of Object.entries(source)) {
+      if (known.includes(key)) continue;
+      this.measure(value, `${prefix}${key}`, problems);
+      Object.defineProperty(target, key, {
+        value,
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      });
+    }
   }
 
   // ---- parts the engine owns in depth --------------------------------------------------------

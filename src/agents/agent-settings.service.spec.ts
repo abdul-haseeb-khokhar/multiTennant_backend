@@ -279,18 +279,55 @@ describe('AgentSettingsService', () => {
       expect(prisma.agentSettings.create).not.toHaveBeenCalled();
     });
 
-    it('an unknown key is refused, not silently stored', async () => {
-      const failed = await failure(
-        service.update(
-          't1',
-          'a1',
-          { expectedVersion: 1, settings: { greetingText: 'hi' } },
-          actor,
-        ),
+    it('an unknown key is kept as sent in the next version, never refused', async () => {
+      const saved = await service.update(
+        't1',
+        'a1',
+        {
+          expectedVersion: 1,
+          settings: { greetingText: 'hi', collectVersion: 7 },
+        },
+        actor,
       );
-      expect(failed.body.details).toEqual([
-        { field: 'greetingText', code: 'unknown_field' },
-      ]);
+      expect(saved.version).toBe(2);
+      expect(saved.document).toMatchObject({
+        greetingText: 'hi',
+        collectVersion: 7,
+      });
+      expect(prisma.agentSettings.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          document: expect.objectContaining({
+            greetingText: 'hi',
+            collectVersion: 7,
+          }),
+        }),
+      });
+    });
+
+    it('sending the very same unknown key or engine field again changes nothing: no version, no audit entry', async () => {
+      const stored = {
+        ...doc(),
+        collectVersion: 7,
+        greeting: { en: 'Hello from {business}.' },
+        endCallDelaySeconds: 4,
+      };
+      prisma.agentSettings.findFirst.mockResolvedValue(row(1, stored));
+      const same = await service.update(
+        't1',
+        'a1',
+        {
+          expectedVersion: 1,
+          settings: {
+            collectVersion: 7,
+            greeting: { en: '  Hello from {business}.  ', ur: '' },
+            endCallDelaySeconds: 4,
+          },
+        },
+        actor,
+      );
+      expect(same.version).toBe(1);
+      expect(prisma.agentSettings.create).not.toHaveBeenCalled();
+      expect(audit.record).not.toHaveBeenCalled();
     });
 
     it('a save that changes nothing adds no version and no audit entry', async () => {

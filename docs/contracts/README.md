@@ -4,7 +4,7 @@
 |---|---|---|
 | [engine-internal.openapi.yaml](engine-internal.openapi.yaml) | The part of the engine's internal API the backend calls: run a chat (create conversation, send a message and stream the reply, read a conversation, escalate, health) and, since Phase 4, the staff side (list, counts, claim, release, resolve, human messages) | **Proposed by the backend (Phases 3 and 4); Phase 5A recorded what Abdullah agreed (M1: message fields `contentKey`, `provider`, token counts and latency, idempotent claim answers 200, 10 s to the first token, 2,000 characters, `conversation.released.to` only `active` or `escalated`).** Nothing is built on his side yet. Everything that is not in team-alignment Appendix A yet is marked "proposed addition" in the file. Chat is halted (L2): no new work. |
 | [backend-events.openapi.yaml](backend-events.openapi.yaml) | The route the engine calls to PUSH events: `POST /internal/events` (signature, envelope, event types and payloads, delivery rules). Since Phase 5A it also lists the voice-first events `record.submitted`, `record.updated` and `usage.call_minutes` (all with `agentId` since Phase 5B-1) | **Proposed by the backend (Phase 4), to be reviewed by the AI engine owner.** `record.submitted` and `record.updated` are HANDLED since Phase 5B-2 (the team notification and the live update, once-only; the request itself arrives through the routes of the next file); `usage.call_minutes` is only acknowledged (200 `ignored`) until
-| [backend-internal.openapi.yaml](backend-internal.openapi.yaml) | The routes the engine will call to ASK or COMMAND the backend: tenant status check, requests (create, update, withdraw), customer upsert by phone, number lookup | **DRAFT written in Phase 5A; since Phase 5B-1 it also has the agent settings route, the only one that is built (`GET /internal/tenants/{tenantId}/agents/{agentId}/config`). Everything else is a proposal (status check and requests: Phase 5B-2; number lookup, now only a fallback: 5D) and Abdullah has not seen the file.** Every operation that is not built is marked `[DRAFT, not implemented]`; its open questions are at the top of the file. |
+| [backend-internal.openapi.yaml](backend-internal.openapi.yaml) | The routes the engine calls to ASK or COMMAND the backend: agent list and settings pull, tenant status check, requests (create, update, withdraw), customer upsert by phone, number lookup | **BUILT except the number lookup (agent config 5B-1, status check and requests 5B-2, agent list and the `order` type 5B-3; the lookup is Phase 5D and is the route the engine calls on every inbound call, engine first). Everything is a proposal that Abdullah has not seen; the table "What Abdullah must adapt to" below compares every field with his hand-off.** The number lookup is marked NOT BUILT; the open questions are at the top of the file. |
 | [../openapi.json](../openapi.json) | The public API of the backend, including `/v1/widget/*` and `/v1/tenants/:tenantId/api-keys` | Generated: `npm run openapi:export` |
 
 The backend talks to the engine only through `EngineClient` (`src/engine/`). `ENGINE_MODE` chooses the implementation:
@@ -88,6 +88,7 @@ The mock reacts to the customer message. With the real engine these are ordinary
 | `/action` | The AI answers and proposes an action that needs approval: the engine emits `action.proposed` (owners and admins get a notification). **Unused by the product since L3** (approvals dropped); kept for the receiver tests | `token…`, `done`; no change for the customer |
 | `/call` | **Voice-first (Phase 5A).** Simulates one finished phone call of this tenant: the engine saves a request with a reference such as `AP-4K7Q2` and reports the call length | `token…` naming the reference, `done`; the events `conversation.created` (channel `voice`), `record.submitted` and `usage.call_minutes` (185 seconds) go to the receiver |
 | `/call-update` | Simulates the engine changing the details of the latest saved request while it is still `requested` | `token…` naming the reference, `done`; the event `record.updated`; after a person confirmed the request (on the staff screen, or `lockRecord` in a test of the bare mock) the mock explains and changes nothing, like the real `locked` answer |
+| `/order` | **Phase 5B-3.** Like `/call`, but the saved request is an **order**: reference `OR-…`, the dishes and pickup in `data` (no prices); everything else (notification, staff screen, `locked`) is the same | `token…` naming the reference, `done`; `record.submitted` carries `type: order` |
 | anything with "hours", "delivery", "price" | A canned answer | `token…`, `done` |
 
 Since Phase 4 the mock also plays the staff side and pushes the events of D5 (`conversation.created|escalated|assigned|released|resolved`, `message.created`, `usage.recorded`, `action.proposed`) to the backend's receiver in process, exactly as the real engine will with `POST /internal/events`. So the dashboard, the notifications and the widget's live stream can be driven without the engine, see "Run the human hand-off" below.
@@ -100,11 +101,12 @@ A call belongs to an **agent** (the tenant's own setup; team-alignment L7). `sim
 curl -i $API/internal/tenants/$TENANT/agents/$AGENT/config -H "Authorization: Bearer $INTERNAL_API_TOKEN"
 #   200  ETag: "…"  Cache-Control: private, max-age=60  {"tenantId":…,"agentId":…,"version":1,"status":"active","config":{…}}
 curl -i $API/internal/tenants/$TENANT/agents/$AGENT/config -H "Authorization: Bearer $INTERNAL_API_TOKEN" -H 'If-None-Match: "…"'   # 304
+curl -i $API/internal/tenants/$TENANT/agents -H "Authorization: Bearer $INTERNAL_API_TOKEN"   # 200 {"agents":[{"agentId":…,"name":…,"status":"active","isDefault":true}]}, default first (Phase 5B-3)
 ```
 
 ### Simulate a phone call (voice-first, Phase 5A)
 
-The product is an AI phone receptionist (L1): a caller talks to the engine, the engine saves a **request** (an appointment or a call-back) with a short reference, and staff confirm it. None of that exists in the real engine yet, so the mock plays it, for the frontend prototype and for Phases 5B and 5E:
+The product is an AI phone receptionist (L1): a caller talks to the engine, the engine saves a **request** (an appointment, a call-back or, since Phase 5B-3, an order) with a short reference, and staff confirm it. None of that exists in the real engine yet, so the mock plays it, for the frontend prototype and for Phases 5B and 5E:
 
 ```bash
 # in any mock chat (the widget walkthrough above): send /call, then /call-update
@@ -113,7 +115,7 @@ curl -N $API/v1/widget/messages -H "Origin: $ORIGIN" -H "Authorization: Bearer $
 #   event: token  data: {"text":"Thank you for calling. I saved your request AP-4K7Q2. …"}
 ```
 
-In a test (or a script that builds the app) call the mock directly: `engine.simulateCall(tenantId, { type: 'appointment' | 'callback', seconds, phone?, name? })` returns `{ conversationId, recordId, endCustomerId, reference, seconds, … }`; `await engine.simulateRequestUpdate(tenantId, reference, { summary })` and `await engine.simulateRequestWithdraw(tenantId, reference)` (both `async` since Phase 5B-2, `true` when the backend accepted the change, `false` for `locked`: a person confirmed it, the update changes nothing and sends nothing, exactly as the real route answers 409 `REQUEST_LOCKED`); `engine.recordsOf(tenantId)` and `engine.inspectRecord(tenantId, reference)` read what the engine holds (another tenant's reference does not exist for you). **Since Phase 5B-2 the application wires the mock to the backend** (`engine.setBackend`, done by `MockEngineBackendBridge`): a simulated call first asks the tenant status check (a suspended tenant, one out of minutes, a disabled or foreign agent take no call: `MockCallRefusedError` / `MockAgentUnavailableError`), then upserts the caller by `phone` (a made-up `+92…` number when none is given) as an end customer of the tenant and saves the request IN THE BACKEND through the same services as the internal routes, so the request is on the staff screen (`GET /v1/tenants/:tenantId/requests`), the team is notified and the engine's later update is refused once staff confirmed it. A bare `new MockEngineClient()` (the unit tests of the mock) keeps its own in-memory requests and `engine.lockRecord(tenantId, reference, 'confirmed')` plays "a person confirmed it" there.
+In a test (or a script that builds the app) call the mock directly: `engine.simulateCall(tenantId, { type: 'appointment' | 'callback' | 'order', seconds, phone?, name?, data? })` returns `{ conversationId, recordId, endCustomerId, reference, seconds, … }`; `await engine.simulateRequestUpdate(tenantId, reference, { summary })` and `await engine.simulateRequestWithdraw(tenantId, reference)` (both `async` since Phase 5B-2, `true` when the backend accepted the change, `false` for `locked`: a person confirmed it, the update changes nothing and sends nothing, exactly as the real route answers 409 `REQUEST_LOCKED`); `engine.recordsOf(tenantId)` and `engine.inspectRecord(tenantId, reference)` read what the engine holds (another tenant's reference does not exist for you). **Since Phase 5B-2 the application wires the mock to the backend** (`engine.setBackend`, done by `MockEngineBackendBridge`): a simulated call first asks the tenant status check (a suspended tenant, one out of minutes, a disabled or foreign agent take no call: `MockCallRefusedError` / `MockAgentUnavailableError`), then upserts the caller by `phone` (a made-up `+92…` number when none is given) as an end customer of the tenant and saves the request IN THE BACKEND through the same services as the internal routes, so the request is on the staff screen (`GET /v1/tenants/:tenantId/requests`), the team is notified and the engine's later update is refused once staff confirmed it. A bare `new MockEngineClient()` (the unit tests of the mock) keeps its own in-memory requests and `engine.lockRecord(tenantId, reference, 'confirmed')` plays "a person confirmed it" there.
 
 What the mock sends to the backend's receiver, in this order: `conversation.created` (channel `voice`), `record.submitted` `{recordId, reference, type, conversationId, endCustomerId, channel}`, `usage.call_minutes` `{conversationId, seconds, channel}`; later `record.updated` `{recordId, reference, type, conversationId, revision}`. **Since Phase 5B-2 the backend handles `record.submitted` and `record.updated` (it makes sure the team was told; the request already arrived through the routes) and still acknowledges `usage.call_minutes` (200 `ignored`) until Phase 5E counts the minutes.** Until then the minutes of a tenant can only be written by tests, through `UsageService.recordCallMinutes`. `record.updated` also carries `status: "cancelled"` when the caller withdrew the request. The payload fields are proposals (ids and the reference only, never what the caller said); the event names come from Abdullah's documents.
 
@@ -212,9 +214,134 @@ Every data event has an `id`: send the last one as `Last-Event-ID` when reconnec
 | `action.proposed` | notification for owners and admins, `action.proposed` on the dashboard stream. **Unused since 2026-10-21** (L3: approvals dropped, the engine executes no actions) |
 | `record.submitted` (voice-first) | **handled since Phase 5B-2**: the request is found under the ENVELOPE tenant by `recordId` (the id the create call returned) or `reference`; every active staff member gets one `request.submitted` notification and the dashboard one `request.created` message (both once-only, so the route and the event never double up). Never creates a request; an unknown request is processed without effect; neither id nor reference is a 400 |
 | `record.updated` (voice-first) | **handled since Phase 5B-2**: a live `request.updated` (the backend's own status) on the dashboard stream; no notification |
+| `handoff.requested`, `handoff.unavailable` (voice-first) | **acknowledged and ignored** (200 `ignored`, nothing notified; stored once in the inbox, logged by type and tenant only). No new feature in Phase 5B-3 |
 | `usage.call_minutes` (voice-first, Phase 5A) | **acknowledged only** until Phase 5E counts the minutes into `usage_daily.call_minutes` |
 
 Message text travels in `message.created` only for `human` and `system` messages. Later: `action.executed`, `call.ended`, `ingestion.completed`, `ingestion.failed` (acknowledged and ignored today). The routes the engine calls to ask or command the backend are in [backend-internal.openapi.yaml](backend-internal.openapi.yaml): all built (agent config 5B-1, status check, requests, customer upsert 5B-2) except the number lookup, none confirmed by the engine owner.
+
+## What Abdullah must adapt to (Phase 5B-3, 2026-10-29)
+
+Every field in his hand-off (`docs/handoff-to-backend.md` in his repository, B1, B2, B4, B7, B11 and section 4) and in his code (`standins/records.js`, `customers.js`, `tenant/config.js`, `handoff/config.js`, `voice/greeting.js`, `voice/closing.js`, `agent-config/route.js`, `telephony/routing.js`) was compared with the three contract files and with what the backend really accepts. **Nothing here is confirmed by him; the shapes of our side are proposals (team-alignment N2.2: where his hand-off says its own shapes are "my proposal and yours to correct", ours stand).** Four kinds of difference:
+
+* **OK**: he sends it as it is and the backend accepts it.
+* **Fixed in 5B-3**: the backend would have refused or silently dropped what he sends; our side was changed (capability gap).
+* **He adapts**: a difference of shape or name that N2.2 settles in our favour; the backend builds no compatibility route.
+* **Open**: not built or not decided.
+
+### 1. Conventions of every route
+
+| Topic | His hand-off and code | Backend (built) | Verdict |
+|---|---|---|---|
+| Authentication | header `x-internal-key` (`INTERNAL_API_KEY`) | `Authorization: Bearer <INTERNAL_API_TOKEN>` (constant-time; 401 wrong, 503 not configured) | He adapts (N2.2; his Q10 answer already agreed Bearer for the new routes) |
+| Tenant | `?tenantId=` in the query, or a `tenantId` field in a body | In the path: `/internal/tenants/{tenantId}/…`. A `tenantId` in a body is ignored; the tenant is never taken from content | He adapts |
+| Errors | `{ "error": "<translated text>" }` | `{ statusCode, code, message }` with stable upper-case codes. His `locked` is 409 `REQUEST_LOCKED`; his `reference_taken` is 409 `REQUEST_REFERENCE_TAKEN`; misses are 404 `…_NOT_FOUND`; limits 429 with `Retry-After` | He adapts (reads status and `code`; `message` is never shown to a caller) |
+| Success bodies | update and withdraw answer `{ "ok": true }`; the customer upsert `{ "id" }`; create `{ id, reference, created }` | create/update/withdraw answer `{ id, agentId, reference, type, status, created }` (create is a superset of his); the customer upsert `{ endCustomerId, created }`; there is no `ok` field | He adapts (status code is the signal) |
+| Request address | `PATCH /internal/records/{id}`, `POST …/{id}/withdraw` by the engine's own record id | by **reference** (`…/requests/{reference}`), any letter case; the `id` our create returns is the id in his events | He adapts |
+| Agent ids | his `agent_configs.id` | the backend's `agentId` (from `GET …/agents`); an id of the other side is a 404 `AGENT_NOT_FOUND` | He adapts |
+| Idempotency | `submissionKey` on create | same; `Idempotency-Key` on update and withdraw is accepted and ignored (both are idempotent by nature) | OK |
+| Ports | his console 3000, voice gateway 3001 | backend default 3000 | Run one elsewhere (`PORT`, `ENGINE_BASE_URL`) |
+
+### 2. Requests: `POST /internal/tenants/{tenantId}/requests` (his B4 `POST /internal/records`)
+
+| Field he sends | Backend | Verdict |
+|---|---|---|
+| `reference` (`AP-`, `CB-`, `OR-`, five characters of `ABCDEFGHJKMNPQRSTUVWXYZ23456789`; `RQ-` fallback) | required, 3 to 40 letters, digits and hyphens, stored upper case, unique per tenant (the database CHECK accepts all his prefixes) | OK |
+| `type` `appointment`, `callback`, `order` | all three | **Fixed in 5B-3** (`order` was refused) |
+| `status` | not accepted: a request is always created `requested` (L1) | OK (he does not send it) |
+| `channel` `chat`, `voice`, "`whatsapp` later" | `voice` and `chat`; `whatsapp` is refused with 400 until he sends it and the database allows it | Open (a later migration) |
+| `language` | string up to 16 characters, null allowed | OK |
+| `data` (the collected values; an order: `order_items`, `order_type`, `address`, `notes`, no prices) | any JSON object up to 16 KB, stored as it is, never logged, not searchable | OK |
+| `summary` | required string up to 1,000 characters (an empty string is fine) | OK |
+| `scheduledLocal` (`2026-10-22T17:00`) | string up to 64 or null; kept as a string, no zone arithmetic | OK |
+| `timezone`, `configVersion`, `conversationId` | up to 64 characters, integer 0 or more, up to 200 characters; null allowed for all | OK |
+| `submissionKey` (his draft id) | 1 to 200 characters, idempotent per tenant, also under parallel calls | OK |
+| `agentId` (null = default agent) | optional, null or absent = the tenant's default agent | OK |
+| `tenantId` in the body | ignored (the path decides) | OK |
+| (his record points at his own customer row) | needs **`endCustomerId`** from the customer upsert below | He adapts: upsert first, then create |
+
+`PATCH …/requests/{reference}` takes `data`, `summary`, `scheduledLocal` as he sends them (at least one; `scheduledLocal: null` clears it); `POST …/requests/{reference}/withdraw` takes an optional `reason`. Both are 409 `REQUEST_LOCKED` once a person acted, a conditional write that a staff confirmation at the same moment wins.
+
+### 3. Customer: `PUT /internal/tenants/{tenantId}/customers/by-phone` (his `PUT /internal/customers/by-phone/{phone}`)
+
+| Field | Backend | Verdict |
+|---|---|---|
+| `phone` (in his path) | in the **body**, E.164, never in a URL (personal data); optional | **Fixed in 5B-3**: with no number (his email-only request) the caller becomes a customer of their own (`call_<uuid>`), 201 every time, never merged |
+| `name` | filled in only when the customer has none yet (a staff member may have corrected it); his rule is "the newest name wins" | He adapts (difference on purpose) |
+| `email` | accepted and ignored: an end customer has no email column; the address stays in the request's `data` | Open (does the product want a customer email? question for Abdul) |
+| (not in his body) `locale`, `agentId` | optional: language (only when empty) and the agent whose call it is | OK |
+| answer | `{ endCustomerId, created }`, 201 or 200 | He adapts |
+
+### 4. Tenant status check: `GET /internal/tenants/{tenantId}/status?agentId=` (his B1)
+
+| Topic | His | Backend | Verdict |
+|---|---|---|---|
+| Answer | `{ tenantId, serviceable, reason, plan }` | the same four plus `agentId` and `overage` | OK (a superset) |
+| `reason` | `suspended`, `unpaid`, `quota_exceeded`, `unknown_tenant` | those, plus `agent_disabled` and `unknown_agent`; `unpaid` is reserved and never answered | He adapts: treat an unknown reason as "not serviceable" (question) |
+| Unknown tenant | maps to his 404 | normal 200 with `reason: unknown_tenant` (nothing leaks, cacheable) | He maps (as he does) |
+| Cache | about 60 seconds | `Cache-Control: private, max-age=10`; answered live | Question to him |
+| Agent | none | optional `?agentId=`; default = the tenant's default agent | OK |
+
+### 5. Agents and settings: `GET /internal/tenants/{tenantId}/agents` and `…/agents/{agentId}/config` (his B2)
+
+| Topic | His | Backend | Verdict |
+|---|---|---|---|
+| Agent list | `{ agents: [{ agentId, name, status, isDefault }] }`, default first | exactly that (built in 5B-3); an unknown tenant is 404 `TENANT_NOT_FOUND` | OK |
+| Status words | `active`, `archived` | `active`, `disabled` | He maps |
+| Default agent | cannot be archived | may be **disabled**, never deleted (Abdul, 2026-10-29) | Question to him |
+| Config answer | `{ config: {…, agentId, name, status, isDefault}, version }`; no `agentId` means the default agent | `{ tenantId, agentId, version, status, config }`; identity fields are beside the document and in the list; the default agent's id comes from the list | He adapts |
+| Caching | 60 s in-process | `Cache-Control: private, max-age=60`, `ETag`, 304; `?version=n` pins a past version | OK |
+| Disabled agent | refused where it would answer a caller | 200 with `status: "disabled"` (and its settings) so he can play his own "not available" line | He adapts |
+
+**The settings document** (what staff save through the backend and what the pull returns). The engine owns the field list, so the backend checks structure only and **keeps every key it does not know exactly as sent** (top level and inside `escalation`), inside a 64 KB limit:
+
+| Field | His limits | Backend check | Verdict |
+|---|---|---|---|
+| `businessName`, `purpose`, `tone`, `replyLanguage`, `uiLocale` | 120, 2,000, four tones, `en`/`ur`, `en`/`ur` | the same | OK (his `uiLocale` is one per tenant, on the default agent; the backend stores one per agent document: question) |
+| `timezone` | any string | a real IANA name (`UTC` and `Asia/Karachi` pass) | OK for his values; a non-IANA string is refused |
+| `hours` | `{ mon: [["09:00","17:00"]], … }` | the same, at most 5 ranges a day, no overlap, end after start; null allowed | OK |
+| `escalation` `enabled`, `contacts` (5, text 60), `whenCallerAsks`, `afterMisses` 1 to 4, `topics` (10, 40), `outsideHours` | as his `handoff/config.js` | the same; a phone must be international (`+…` or `00…`), his code also accepts a Pakistani local number (`0300…`) and stores `+92…`; every document that comes **from** him is already international | OK; a dashboard must send international numbers |
+| `escalation.announce` `{ en?, ur? }` | 200 characters, placeholders `{name}`, `{role}` | an object with `en`/`ur` strings up to 200 | **Fixed in 5B-3** (was refused as an unknown key) |
+| unknown keys inside `escalation` | n/a | kept as sent | **Fixed in 5B-3** |
+| `capabilities`, `voices` | his catalogue and voice ids | object shape only (50 and 10 entries); ids unchecked | OK (his validation stays his) |
+| `greeting` `{ en?, ur? }` | 400 characters each, `{business}` only | object with `en`/`ur` strings up to 400, trimmed, empty dropped; the placeholder rule is his | **Fixed in 5B-3** |
+| `recordCalls`, `autoEndCalls` | booleans | booleans | **Fixed in 5B-3** |
+| `endCallDelaySeconds` | integer 2 to 10 | the same | **Fixed in 5B-3** |
+| `profileSummary` | string up to 1,200 or null; a price is refused | string up to 1,200 or null; the price rule is his | **Fixed in 5B-3** |
+| `profileSummarySources` | `[{ id, title, hash }]`, up to 10, recorded by the engine, never taken from a client | the same shape and limit; stored as sent | **Fixed in 5B-3** (who writes it, since the dashboard saves through the backend, is a 5F question) |
+| `collect`, `collectVersion` | his checklist document and its version | `collect` opaque (depth 12, 20,000 nodes); `collectVersion` is just a kept unknown key, the backend does not count it | OK; open for 5F (who bumps it) |
+| `exists`, `tenantId`, `updatedAt`, `summaryStatus` (his read answer extras) | not settings | never part of a stored document unless a client sends them (then kept as unknown keys) | OK |
+
+New agents get the minimal document (no engine fields): his own defaults apply when a key is missing (built-in greeting, recording off, call ends by itself after 3 seconds).
+
+### 6. Events: `POST /internal/events` (his B7)
+
+| Event | His payload | Backend | Verdict |
+|---|---|---|---|
+| Envelope | `{ id, type, tenantId, occurredAt, data }` | the same; HMAC over `<timestamp>.<raw body>` with `INTERNAL_API_TOKEN` | OK; the signing scheme is ours (he builds the sender) |
+| `record.submitted` | `{ recordId, recordType, reference, agentId, conversationId }` | handled: finds the request under the envelope tenant by `recordId`, else by `reference`; extra fields and nulls ignored | OK (**fixed in 5B-3**: an id that is no request of ours used to make the event a silent no-op) |
+| `record.updated` | `{ recordId, status, detailsChanged? }` | handled: a live update with the backend's own status | OK |
+| `handoff.requested`, `handoff.unavailable` | `{ conversationId, agentId, channel, reason, contactId }` | **acknowledged and ignored**: not a handled type, so the delivery is stored once in the inbox, logged by type and tenant only and answered 200 `ignored`; nothing is notified | OK (no new feature; a later phase may use them for call history) |
+| `usage.call_minutes` | proposed `{ conversationId, seconds, channel }` | acknowledged, not stored until Phase 5E; we will ask for `callId` and `agentId` too | Open (5E) |
+| delivery | outbox, retries with backoff on non-2xx, same id | idempotent by `(tenant, id)`, 200 `duplicate` the second time | OK |
+
+### 7. Numbers and the telephone call (his B11): NOT BUILT, Phase 5D
+
+| Topic | His | Backend (contract only) | Verdict |
+|---|---|---|---|
+| Who answers the provider | the engine (signed webhook, number lookup, one-minute ticket, audio) | the same (engine first, L8 revised 2026-10-29); **the backend signs no ticket** | OK |
+| Lookup | `GET /internal/numbers/{e164}` → `{ tenantId, agentId \| null, numberId, status: active \| released }`, 404 for a number never held | exactly that, called on every inbound call (`+` sent as `%2B`); refusals stay his; the status check is a separate call | Contract written, route built in 5D |
+| His refusal reasons | `invalid_number`, `unknown`, `released`, `unassigned`, `agent_archived`, `tenant_unserviceable` | derived by him from the answer: 404, `status: released`, `agentId: null`, the agent's status (`disabled` = `archived`) and the status check | OK |
+| Dashboard test call | `POST /api/voice/session?agentId=` (one-minute browser ticket) | the backend calls it with the service credential and returns the ticket to the browser | Question: his route is an OLD one (`x-internal-key`, `?tenantId=`); will he accept Bearer plus `X-Tenant-Id`? |
+| Twilio account | the engine needs `TWILIO_AUTH_TOKEN` and `TWILIO_ACCOUNT_SID`; one account per engine assumed | the backend's account buys numbers (same account) | Accepted exception (L8) |
+
+### What the backend changed because of this comparison
+
+1. The settings validator no longer refuses an unknown top-level or `escalation` key (kept verbatim) and checks the seven new fields with his own limits.
+2. `order` is a request type (CHECK constraint widened by `20261029200000_phase5b3_order_requests`, notification text in English and Urdu, mock engine `/order` and `simulateCall({ type: 'order' })`).
+3. `GET /internal/tenants/{tenantId}/agents` exists.
+4. The customer upsert takes no `phone`: a caller with no number becomes a customer of their own.
+5. `record.*` events fall back to the reference when the id is not ours.
+6. The contract files say what they should: the real `record.*` payloads (`recordType`, no `reference` on `record.updated`), `handoff.*`, the number lookup as the engine's call on every inbound call, no backend-signed ticket.
 
 ## Run the human hand-off (Phase 4)
 

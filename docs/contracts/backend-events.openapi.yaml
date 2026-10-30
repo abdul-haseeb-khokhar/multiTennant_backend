@@ -138,7 +138,7 @@ components:
         record.submitted:
           description: >-
             HANDLED since Phase 5B-2 (recorded in the inbox, idempotent by event id). The AI saved a
-            request (an appointment or a call-back) for a caller; staff confirm it. The request
+            request (an appointment, a call-back or an order) for a caller; staff confirm it. The request
             ITSELF is created by the engine's call to `POST /internal/tenants/{tenantId}/requests`
             (the source of truth, it carries the details); this event never creates a request. The
             backend looks the request up under the ENVELOPE's tenant, by `recordId` (the id the
@@ -148,18 +148,24 @@ components:
             up. An event for a request the backend does not have, or one of another tenant, is
             processed without any effect (logged without the reference). A missing `recordId` and
             `reference` is a 400. Ids and the reference only (open question for the engine owner:
-            should the event carry the details too?).
+            should the event carry the details too?). **Payload as the engine hand-off lists it
+            (B7, read 2026-10-29): `{ recordId, recordType, reference, agentId, conversationId }`**;
+            only `recordId` and `reference` are read (an id that is no request of the tenant falls back
+            to the reference), every other field is ignored, so extra fields and nulls are fine.
           type: object
-          required: [recordId, reference, type]
+          anyOf:
+            - required: [recordId]
+            - required: [reference]
           properties:
-            recordId: { type: string }
+            recordId: { type: string, description: 'The id the backend returned when the engine created the request.' }
             reference:
               type: string
               example: AP-4K7Q2
               description: Unique per tenant, short enough to read out on the phone.
-            type: { type: string, enum: [appointment, callback] }
-            agentId: { type: string, nullable: true, description: 'The agent that took the call (L7); null until the engine is agent-aware (Q28), meaning the default agent.' }
-            conversationId: { type: string }
+            recordType: { type: string, enum: [appointment, callback, order], description: 'His field name (ignored by the backend, which reads the type from the request it holds).' }
+            type: { type: string, enum: [appointment, callback, order], description: 'Our earlier name for recordType; ignored.' }
+            agentId: { type: string, nullable: true, description: 'The agent that took the call (L7); null means the default agent. Ignored (the request holds it).' }
+            conversationId: { type: string, nullable: true }
             endCustomerId: { type: string, nullable: true }
             channel: { type: string, enum: [voice, chat] }
         record.updated:
@@ -171,15 +177,48 @@ components:
             (409 `REQUEST_LOCKED`) and no event is sent. The backend only publishes a live update
             `request.updated` to the tenant's dashboard stream (the backend's own current status,
             not the one in the event); no notification. Lookup as for `record.submitted`.
+            **Payload as the engine hand-off lists it (B7): `{ recordId, status, detailsChanged? }`
+            (no `reference`)**; `status` and `detailsChanged` are ignored (the live update carries the
+            backend's own status).
           type: object
-          required: [recordId, reference]
+          anyOf:
+            - required: [recordId]
+            - required: [reference]
           properties:
             recordId: { type: string }
-            reference: { type: string }
-            type: { type: string, enum: [appointment, callback] }
+            reference: { type: string, description: 'Optional (his event has none); used only when no request has this recordId.' }
+            status: { type: string, enum: [requested, confirmed, done, cancelled], description: 'His status at the time; ignored.' }
+            detailsChanged: { type: boolean, description: 'His flag that the details changed; ignored.' }
+            type: { type: string, enum: [appointment, callback, order] }
             agentId: { type: string, nullable: true, description: 'The agent the request belongs to (L7).' }
-            conversationId: { type: string }
+            conversationId: { type: string, nullable: true }
             revision: { type: integer, description: How many times the details changed. }
+        handoff.requested:
+          description: >-
+            **ACKNOWLEDGED AND IGNORED (200 `ignored`)**, no new feature (Phase 5B-3). The engine passed a
+            caller to a person. Today the backend does nothing with it: it is not a handled type, so the
+            delivery is stored once in the inbox (idempotent by event id), logged by type and tenant only
+            (never the data) and answered `ignored`. A phase that shows call history (5E) may use it;
+            when it does, deliveries that arrived before are in the inbox and a re-delivery would answer
+            `duplicate`, so list it under the pending types first if that matters.
+          type: object
+          properties:
+            conversationId: { type: string }
+            agentId: { type: string, nullable: true }
+            channel: { type: string, enum: [voice, chat] }
+            reason: { type: string, enum: [asked, topic, not_understood, frustrated] }
+            contactId: { type: string, nullable: true, description: 'Which of the agent''s forwarding contacts (an id inside the settings document); never a number.' }
+        handoff.unavailable:
+          description: >-
+            **ACKNOWLEDGED AND IGNORED (200 `ignored`)**, as `handoff.requested`: a person was needed but
+            the business was closed (`contactId` null).
+          type: object
+          properties:
+            conversationId: { type: string }
+            agentId: { type: string, nullable: true }
+            channel: { type: string, enum: [voice, chat] }
+            reason: { type: string }
+            contactId: { type: string, nullable: true }
         usage.call_minutes:
           description: >-
             ACKNOWLEDGED UNTIL PHASE 5E (200 `ignored`, nothing stored). A call ended: its length in

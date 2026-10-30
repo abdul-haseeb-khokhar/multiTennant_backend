@@ -9,6 +9,7 @@ import { AgentsController } from './agents.controller';
 import { AgentsCoreModule } from './agents-core.module';
 import { AgentsService } from './agents.service';
 import { InternalAgentConfigController } from './internal-agent-config.controller';
+import { InternalAgentListController } from './internal-agent-list.controller';
 
 /**
  * Agents (L7, Phase 5B-1): the tenant's own setups that the one shared engine uses for a call.
@@ -21,6 +22,7 @@ import { InternalAgentConfigController } from './internal-agent-config.controlle
     AgentsController,
     AgentSettingsController,
     InternalAgentConfigController,
+    InternalAgentListController,
   ],
   providers: [
     AgentsService,

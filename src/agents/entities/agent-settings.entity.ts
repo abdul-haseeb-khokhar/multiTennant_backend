@@ -23,7 +23,7 @@ export class AgentSettingsVersion extends AgentSettingsVersionSummary {
     type: 'object',
     additionalProperties: true,
     description:
-      "The settings document in the engine's shape: businessName, purpose, tone, timezone, uiLocale, replyLanguage, hours, escalation (call forwarding, with the contacts' phone numbers), capabilities, voices, collect.",
+      "The settings document in the engine's shape: businessName, purpose, tone, timezone, uiLocale, replyLanguage, hours, escalation (call forwarding, with the contacts' phone numbers and the optional announce line), capabilities, voices, collect and, when set, greeting, recordCalls, autoEndCalls, endCallDelaySeconds, profileSummary, profileSummarySources. Keys the backend does not know are kept as they were saved.",
   })
   document: Record<string, unknown>;
 }

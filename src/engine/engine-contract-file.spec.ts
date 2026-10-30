@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse } from 'yaml';
 import { PENDING_EVENT_TYPES } from '../events/engine-events.service';
+import { REQUEST_TYPES } from '../requests/state-machine';
 import { CONVERSATION_STATUSES, ESCALATION_REASONS } from './engine.types';
 
 interface Operation {
@@ -183,12 +184,14 @@ describe('docs/contracts/engine-internal.openapi.yaml after Phase 5A (what Abdul
 });
 
 /**
- * The routes of backend-internal.openapi.yaml that are built: the agent config pull (Phase 5B-1) and
- * the status check, the requests and the customer upsert (Phase 5B-2). They are built against this
- * file and the mock engine; the engine owner has NOT confirmed them. Only the number lookup (Phase
- * 5D, and only as a fallback) is still a draft.
+ * The routes of backend-internal.openapi.yaml that are built: the agent config pull (Phase 5B-1), the
+ * status check, the requests and the customer upsert (Phase 5B-2) and the agent list (Phase 5B-3).
+ * They are built against this file and the mock engine; the engine owner has NOT confirmed them. Only
+ * the number lookup (Phase 5D: the route the engine calls on every inbound call, engine first) is
+ * still a draft.
  */
 const BUILT_BACKEND_ROUTES = [
+  '/internal/tenants/{tenantId}/agents',
   '/internal/tenants/{tenantId}/agents/{agentId}/config',
   '/internal/tenants/{tenantId}/status',
   '/internal/tenants/{tenantId}/requests',
@@ -197,7 +200,7 @@ const BUILT_BACKEND_ROUTES = [
   '/internal/tenants/{tenantId}/customers/by-phone',
 ];
 
-describe('docs/contracts/backend-internal.openapi.yaml (built through Phase 5B-2, the number lookup is still a draft)', () => {
+describe('docs/contracts/backend-internal.openapi.yaml (built through Phase 5B-3, the number lookup is still a draft)', () => {
   it('describes exactly the built routes plus the number lookup of Phase 5D', () => {
     expect(Object.keys(backendInternal.paths).sort()).toEqual(
       [...BUILT_BACKEND_ROUTES, '/internal/numbers/{e164}'].sort(),
@@ -216,7 +219,7 @@ describe('docs/contracts/backend-internal.openapi.yaml (built through Phase 5B-2
         }
         expect([path, operation.summary]).toEqual([
           path,
-          expect.stringContaining('[DRAFT, not implemented]'),
+          expect.stringContaining('[NOT BUILT, Phase 5D]'),
         ]);
       }
     }
@@ -224,10 +227,113 @@ describe('docs/contracts/backend-internal.openapi.yaml (built through Phase 5B-2
 
   it('is behind the service token, and the number lookup is not built', () => {
     expect(backendInternal.security).toEqual([{ internalToken: [] }]);
-    // ... and the number lookup is not needed under backend-first routing (L8)
-    expect(
-      backendInternal.paths['/internal/numbers/{e164}'].get.summary,
-    ).toContain('fallback');
+    // ... and the number lookup is the engine's call on every inbound call (engine first, L8 revised)
+    const lookup = backendInternal.paths['/internal/numbers/{e164}'].get;
+    expect(lookup.summary).toContain('NOT BUILT');
+    expect(lookup.summary).toContain('EVERY inbound call');
+    expect(lookup.summary).not.toContain('fallback');
+  });
+
+  it('answers the number lookup with his B11 shape: tenantId, agentId (or null), numberId, status active or released', () => {
+    const lookup = backendInternal.paths['/internal/numbers/{e164}']
+      .get as unknown as {
+      responses: Record<
+        string,
+        {
+          content?: {
+            'application/json': {
+              schema: {
+                required: string[];
+                properties: Record<
+                  string,
+                  { enum?: string[]; nullable?: boolean }
+                >;
+              };
+            };
+          };
+        }
+      >;
+    };
+    const schema = lookup.responses['200'].content!['application/json'].schema;
+    expect(schema.required).toEqual([
+      'tenantId',
+      'agentId',
+      'numberId',
+      'status',
+    ]);
+    expect(schema.properties.agentId.nullable).toBe(true);
+    expect(schema.properties.status.enum).toEqual(['active', 'released']);
+    expect(Object.keys(lookup.responses)).toEqual(
+      expect.arrayContaining(['200', '404']),
+    );
+  });
+
+  it('says the ENGINE signs the call ticket: no contract file has the backend signing one', () => {
+    for (const file of [
+      'backend-internal.openapi.yaml',
+      'backend-events.openapi.yaml',
+      'engine-internal.openapi.yaml',
+    ]) {
+      const text = readFileSync(
+        join(__dirname, '..', '..', 'docs', 'contracts', file),
+        'utf8',
+      );
+      expect([
+        file,
+        /backend signs a (one-minute )?(call )?ticket/i.test(text),
+      ]).toEqual([file, false]);
+      expect([
+        file,
+        /backend-first routing/i.test(text) && !/engine first/i.test(text),
+      ]).toEqual([file, false]);
+    }
+    const internal = readFileSync(
+      join(
+        __dirname,
+        '..',
+        '..',
+        'docs',
+        'contracts',
+        'backend-internal.openapi.yaml',
+      ),
+      'utf8',
+    );
+    expect(internal).toContain('The backend signs no ticket');
+  });
+
+  it('request types in the contract are the ones the state machine has (appointment, callback, order)', () => {
+    const schemas = backendInternal.components.schemas as unknown as {
+      RequestType: { enum: string[] };
+    };
+    expect(schemas.RequestType.enum).toEqual([...REQUEST_TYPES]);
+  });
+
+  it('the settings document of the contract is open at the end and lists the optional engine fields', () => {
+    const config = (
+      backendInternal.components.schemas as unknown as {
+        AgentConfig: {
+          properties: {
+            config: {
+              additionalProperties: boolean;
+              required: string[];
+              properties: Record<string, unknown>;
+            };
+          };
+        };
+      }
+    ).AgentConfig.properties.config;
+    expect(config.additionalProperties).toBe(true);
+    for (const key of [
+      'greeting',
+      'recordCalls',
+      'autoEndCalls',
+      'endCallDelaySeconds',
+      'profileSummary',
+      'profileSummarySources',
+    ]) {
+      expect(Object.keys(config.properties)).toContain(key);
+      expect(config.required).not.toContain(key);
+    }
   });
 
   it('every built route is outside /v1 in configureApp (a drift check against the real prefix exclusions)', () => {
@@ -361,7 +467,11 @@ describe('the agent id in the contracts (L7)', () => {
     expect(Object.keys(schemas.TenantStatus.properties)).toContain('agentId');
     expect(Object.keys(schemas.CreateRequest.properties)).toContain('agentId');
     expect(Object.keys(schemas.AgentConfig.properties)).toContain('agentId');
+    expect(Object.keys(schemas.AgentSummary.properties)).toContain('agentId');
     expect(text).toContain('/components/parameters/AgentIdQuery');
-    expect(text).toContain('settingsVersion');
+    // the settings version a call was served with travels on the request (the engine's pull names it)
+    expect(Object.keys(schemas.CreateRequest.properties)).toContain(
+      'configVersion',
+    );
   });
 });

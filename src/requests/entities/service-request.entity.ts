@@ -31,7 +31,7 @@ export class RequestCustomer {
 }
 
 /**
- * A request the AI took on a call (an appointment or a call-back) that staff confirm. The AI never
+ * A request the AI took on a call (an appointment, a call-back or an order) that staff confirm. The AI never
  * books or confirms anything (L1): it saves the request as `requested` and a person moves it on.
  */
 export class ServiceRequest {

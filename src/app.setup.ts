@@ -36,6 +36,7 @@ export function configureApp(app: INestApplication) {
       'health',
       'health/ready',
       'internal/events',
+      'internal/tenants/:tenantId/agents',
       'internal/tenants/:tenantId/agents/:agentId/config',
       'internal/tenants/:tenantId/status',
       'internal/tenants/:tenantId/requests',

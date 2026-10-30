@@ -415,6 +415,74 @@ describe('Agents (real database, Phase 5B-1)', () => {
         .expect(404);
     });
 
+    it('a document with the engine fields and unknown keys survives real jsonb: saved, pulled back equal, and the same save again adds no version', async () => {
+      const t = await signup('EngineDoc');
+      const [agent] = await agentsOf(t.tenantId);
+      const path = `/v1/tenants/${t.tenantId}/agents/${agent.id}/settings`;
+      const fields = {
+        greeting: { en: 'Hello, thanks for calling {business}.' },
+        recordCalls: true,
+        autoEndCalls: false,
+        endCallDelaySeconds: 6,
+        profileSummary: 'A clinic.',
+        profileSummarySources: [{ id: 'k1', title: 'About', hash: 'ab12' }],
+        collectVersion: 9,
+        newEngineThing: { list: [1, { deep: 'x' }], flag: null },
+      };
+      await http()
+        .put(path)
+        .set('Authorization', bearer(t.token))
+        .send({ expectedVersion: 1, settings: fields })
+        .expect(200);
+      const pulled = await http()
+        .get(`/internal/tenants/${t.tenantId}/agents/${agent.id}/config`)
+        .set('Authorization', bearer(internalToken()))
+        .expect(200);
+      expect(pulled.body.version).toBe(2);
+      expect(pulled.body.config).toMatchObject(fields);
+      const again = await http()
+        .put(path)
+        .set('Authorization', bearer(t.token))
+        .send({ expectedVersion: 2, settings: fields })
+        .expect(200);
+      expect(again.body.version).toBe(2);
+      expect(await settingsOf(agent.id)).toHaveLength(2);
+    });
+
+    it("the engine's agent list: default first, ids and names only, nothing of another tenant, 404 for an unknown tenant", async () => {
+      const a = await signup('ListA', 'pro');
+      const b = await signup('ListB', 'pro');
+      await http()
+        .post(`/v1/tenants/${a.tenantId}/agents`)
+        .set('Authorization', bearer(a.token))
+        .send({ name: `Second ${run}` })
+        .expect(201);
+      const [first] = await agentsOf(a.tenantId);
+      const list = await http()
+        .get(`/internal/tenants/${a.tenantId}/agents`)
+        .set('Authorization', bearer(internalToken()))
+        .expect(200);
+      expect(list.body.agents).toHaveLength(2);
+      expect(list.body.agents[0]).toEqual({
+        agentId: first.id,
+        name: first.name,
+        status: 'active',
+        isDefault: true,
+      });
+      expect(list.body.agents[1]).toMatchObject({
+        name: `Second ${run}`,
+        isDefault: false,
+      });
+      const otherIds = (await agentsOf(b.tenantId)).map((x) => x.id);
+      for (const agent of list.body.agents) {
+        expect(otherIds).not.toContain(agent.agentId);
+      }
+      await http()
+        .get(`/internal/tenants/no-such-tenant-${run}/agents`)
+        .set('Authorization', bearer(internalToken()))
+        .expect(404);
+    });
+
     it('the mock engine pulls the same document and version a simulated call is served with', async () => {
       const t = await signup('MockPull');
       const [agent] = await agentsOf(t.tenantId);

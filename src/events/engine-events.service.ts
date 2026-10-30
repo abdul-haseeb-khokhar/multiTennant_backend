@@ -404,8 +404,9 @@ export class EngineEventsService {
 
   /**
    * The request an event is about: by the backend's id (`recordId`, which the engine got from the
-   * create call) or else by the reference, ALWAYS under the envelope's tenant. Nothing else about the
-   * request is read (no details, no customer).
+   * create call) or else, when no request has that id (an engine that still sends an id of its own), by
+   * the reference, ALWAYS under the envelope's tenant. Nothing else about the request is read (no
+   * details, no customer).
    */
   private async requestOf(
     tx: Tx,
@@ -421,23 +422,29 @@ export class EngineEventsService {
         'data.recordId or data.reference is required',
       );
     }
-    const request = await tx.customerRequest.findFirst({
-      where: {
-        tenantId,
-        ...(recordId
-          ? { id: recordId }
-          : { reference: reference?.toUpperCase() }),
-      },
-      select: {
-        id: true,
-        reference: true,
-        type: true,
-        status: true,
-        agentId: true,
-        updatedAt: true,
-        agent: { select: { name: true } },
-      },
-    });
+    const select = {
+      id: true,
+      reference: true,
+      type: true,
+      status: true,
+      agentId: true,
+      updatedAt: true,
+      agent: { select: { name: true } },
+    } as const;
+    const byId = recordId
+      ? await tx.customerRequest.findFirst({
+          where: { tenantId, id: recordId },
+          select,
+        })
+      : null;
+    const request =
+      byId ??
+      (reference
+        ? await tx.customerRequest.findFirst({
+            where: { tenantId, reference: reference.toUpperCase() },
+            select,
+          })
+        : null);
     if (!request) {
       // Type and tenant only (the reference is what the caller was told; keep it out of the log).
       this.logger.warn({

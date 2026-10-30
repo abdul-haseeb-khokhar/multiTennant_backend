@@ -84,6 +84,47 @@ describe('AgentConfigService (the engine pull, L7)', () => {
     );
   });
 
+  describe('listForEngine (his GET /internal/tenants/{tenantId}/agents)', () => {
+    it('lists the tenant agents default first, with the engine words, and only looks under the tenant', async () => {
+      prisma.agent.findMany.mockResolvedValue([
+        { id: 'a1', name: 'Front desk', status: 'active', isDefault: true },
+        { id: 'a2', name: 'Branch', status: 'disabled', isDefault: false },
+      ]);
+      await expect(service.listForEngine('t1')).resolves.toEqual([
+        {
+          agentId: 'a1',
+          name: 'Front desk',
+          status: 'active',
+          isDefault: true,
+        },
+        {
+          agentId: 'a2',
+          name: 'Branch',
+          status: 'disabled',
+          isDefault: false,
+        },
+      ]);
+      expect(prisma.agent.findMany).toHaveBeenCalledWith({
+        where: { tenantId: 't1' },
+        orderBy: [{ isDefault: 'desc' }, { createdAt: 'asc' }, { id: 'asc' }],
+        select: { id: true, name: true, status: true, isDefault: true },
+      });
+      // a tenant that has agents never needs the tenant lookup
+      expect(prisma.tenant.findUnique).not.toHaveBeenCalled();
+    });
+
+    it('an unknown tenant is 404 TENANT_NOT_FOUND, not an empty list', async () => {
+      prisma.agent.findMany.mockResolvedValue([]);
+      prisma.tenant.findUnique.mockResolvedValue(null);
+      const error = await service
+        .listForEngine('nope')
+        .catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(ApiException);
+      expect((error as ApiException).getStatus()).toBe(404);
+      expect((error as ApiException).code).toBe('TENANT_NOT_FOUND');
+    });
+  });
+
   describe('pullForCall', () => {
     it("without an agent id uses the tenant's default agent", async () => {
       prisma.agent.findFirst
