@@ -13,6 +13,7 @@ import {
   toAdminInvoiceView,
   toAdminSubscriptionSummary,
   toBillingEventView,
+  toCallMinuteUsageView,
   toConversationUsageView,
   toInvoiceView,
   toSubscriptionSummary,
@@ -103,10 +104,13 @@ export class TenantBillingService {
   }
 
   private async usageView(subscription: EffectiveSubscription) {
+    const [callMinutes, conversations] = await Promise.all([
+      this.overage.callMinuteSummary(subscription),
+      this.overage.conversationSummary(subscription),
+    ]);
     return {
-      conversations: toConversationUsageView(
-        await this.overage.conversationSummary(subscription),
-      ),
+      callMinutes: toCallMinuteUsageView(callMinutes),
+      conversations: toConversationUsageView(conversations),
     };
   }
 

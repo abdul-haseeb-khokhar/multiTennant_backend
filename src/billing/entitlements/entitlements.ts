@@ -7,16 +7,21 @@
  *     "conversationPeriod": "total",      // "total" = since the subscription period began, "month" = calendar month
  *     "knowledgeMb": 20,                  // knowledge base size in MB; null = unlimited
  *     "channels": ["chat", "whatsapp"],   // channels the tenant may connect
- *     "voice": false,                     // phone calls (the Pro add-on is granted through an override)
+ *     "voice": true,                      // phone calls (every plan since the voice-first decision, L6)
  *     "poweredByLabel": true,             // the widget shows our label
- *     "overageConversationMinor": 1500,   // optional price hint: extra conversation, minor units
- *     "voicePerMinuteMinor": 2500         // optional price hint: voice minute, minor units
+ *     "callMinutesPerPeriod": 30,         // call minutes included; null = unlimited (L6)
+ *     "callMinutePeriod": "total",        // "total" = since the subscription period began, "month" = calendar month
+ *     "overageConversationMinor": 1500,   // optional price: one extra conversation, minor units (chat, halted)
+ *     "overageMinuteMinor": 2500,         // optional price: one extra call minute, minor units (L6)
+ *     "voicePerMinuteMinor": 2500         // legacy price hint from Phase 2B; nothing reads it, `overageMinuteMinor` replaced it
  *   }
  *
  * A key missing from the JSON is treated as the most restrictive value (0 / false / none), so a
  * malformed plan row can never grant more than intended. `null` is the only way to say "unlimited".
  */
 export type ConversationPeriod = 'total' | 'month';
+/** The window of a call-minute allowance; the same two values as the conversation window. */
+export type CallMinutePeriod = ConversationPeriod;
 
 export interface Entitlements {
   seats: number | null;
@@ -26,12 +31,22 @@ export interface Entitlements {
   channels: string[];
   voice: boolean;
   poweredByLabel: boolean;
+  /** Call minutes included per `callMinutePeriod` (L6). null = unlimited; a missing key = 0. */
+  callMinutesPerPeriod: number | null;
+  callMinutePeriod: CallMinutePeriod;
   overageConversationMinor?: number;
+  /** One extra call minute, minor units. Present = the plan can bill minutes past the included amount (the owner's J6 switch decides). */
+  overageMinuteMinor?: number;
   voicePerMinuteMinor?: number;
 }
 
 /** Numeric limits that `EntitlementsService.check` compares usage against. */
-export const LIMIT_KEYS = ['seats', 'conversations', 'knowledgeMb'] as const;
+export const LIMIT_KEYS = [
+  'seats',
+  'conversations',
+  'knowledgeMb',
+  'callMinutes',
+] as const;
 export type LimitKey = (typeof LIMIT_KEYS)[number];
 
 /** Keys `check` accepts: a limit, `voice`, or `channel:<name>` (for example `channel:whatsapp`). */
@@ -39,11 +54,12 @@ export type EntitlementKey = LimitKey | 'voice' | `channel:${string}`;
 
 const LIMIT_FIELD: Record<
   LimitKey,
-  'seats' | 'conversationsPerPeriod' | 'knowledgeMb'
+  'seats' | 'conversationsPerPeriod' | 'knowledgeMb' | 'callMinutesPerPeriod'
 > = {
   seats: 'seats',
   conversations: 'conversationsPerPeriod',
   knowledgeMb: 'knowledgeMb',
+  callMinutes: 'callMinutesPerPeriod',
 };
 
 export function limitFor(entitlements: Entitlements, key: LimitKey) {
@@ -73,9 +89,14 @@ export function parseEntitlements(json: unknown): Entitlements {
       : [],
     voice: raw.voice === true,
     poweredByLabel: raw.poweredByLabel !== false,
+    callMinutesPerPeriod: limit(raw.callMinutesPerPeriod),
+    callMinutePeriod: raw.callMinutePeriod === 'total' ? 'total' : 'month',
   };
   if (typeof raw.overageConversationMinor === 'number') {
     entitlements.overageConversationMinor = raw.overageConversationMinor;
+  }
+  if (typeof raw.overageMinuteMinor === 'number') {
+    entitlements.overageMinuteMinor = raw.overageMinuteMinor;
   }
   if (typeof raw.voicePerMinuteMinor === 'number') {
     entitlements.voicePerMinuteMinor = raw.voicePerMinuteMinor;
@@ -109,7 +130,10 @@ const OVERRIDE_KEYS = new Set([
   'channels',
   'voice',
   'poweredByLabel',
+  'callMinutesPerPeriod',
+  'callMinutePeriod',
   'overageConversationMinor',
+  'overageMinuteMinor',
   'voicePerMinuteMinor',
 ]);
 
@@ -128,9 +152,12 @@ export function validateOverride(
     if (!OVERRIDE_KEYS.has(key)) {
       return { ok: false, error: `Unknown entitlement "${key}"` };
     }
-    const numeric = ['seats', 'conversationsPerPeriod', 'knowledgeMb'].includes(
-      key,
-    );
+    const numeric = [
+      'seats',
+      'conversationsPerPeriod',
+      'knowledgeMb',
+      'callMinutesPerPeriod',
+    ].includes(key);
     if (numeric) {
       if (item !== null && !(Number.isInteger(item) && (item as number) >= 0)) {
         return {
@@ -138,11 +165,11 @@ export function validateOverride(
           error: `${key} must be a non-negative integer or null`,
         };
       }
-    } else if (key === 'conversationPeriod') {
+    } else if (key === 'conversationPeriod' || key === 'callMinutePeriod') {
       if (item !== 'total' && item !== 'month') {
         return {
           ok: false,
-          error: 'conversationPeriod must be total or month',
+          error: `${key} must be total or month`,
         };
       }
     } else if (key === 'channels') {

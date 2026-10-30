@@ -38,12 +38,12 @@ describe('BillingRemindersService usage reminders with overage (J6)', () => {
   const usage = (used: number, limit: number, subscription = pro()) => {
     prisma.usageDaily.findMany.mockResolvedValue([{ tenantId: 'tenant-a' }]);
     entitlements.forTenant.mockResolvedValue(subscription);
-    entitlements.check.mockResolvedValue({
-      allowed: true,
-      planCode: 'pro',
-      limit,
-      used,
-    });
+    // Only the conversation allowance is under test here: call minutes are unlimited.
+    entitlements.check.mockImplementation(async (_tenant, key) =>
+      key === 'callMinutes'
+        ? { allowed: true, planCode: 'pro', limit: null, used: null }
+        : { allowed: true, planCode: 'pro', limit, used },
+    );
   };
 
   beforeEach(() => {

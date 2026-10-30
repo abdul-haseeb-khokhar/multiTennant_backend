@@ -2095,7 +2095,7 @@
     },
     "/v1/tenants/{tenantId}/billing": {
       "get": {
-        "description": "Agents cannot read billing (403 INSUFFICIENT_ROLE). `skip` / `take` page the invoice list, newest first. `usage.conversations` shows the included amount, the conversations used in the current period and, on plans with an overage price, the extra conversations and their amount in minor units (J6). `subscription.overage` carries the setting.",
+        "description": "Agents cannot read billing (403 INSUFFICIENT_ROLE). `skip` / `take` page the invoice list, newest first. `usage.callMinutes` (L6) shows the included minutes, the minutes used in the current period and, on plans with a minute price, the extra minutes and their amount in minor units; `usage.conversations` does the same for chat conversations (J6, chat is halted). `subscription.overage` carries the setting and both prices.",
         "operationId": "TenantBillingController_get",
         "parameters": [
           {
@@ -2145,7 +2145,7 @@
             "bearer": []
           }
         ],
-        "summary": "Current plan, status, period, limits, conversation usage and invoices (owner/admin)",
+        "summary": "Current plan, status, period, limits, call-minute and conversation usage and invoices (owner/admin)",
         "tags": [
           "billing"
         ]
@@ -2153,7 +2153,7 @@
     },
     "/v1/tenants/{tenantId}/billing/settings": {
       "patch": {
-        "description": "On plans with an overage price (Pro) the owner chooses what happens after the included conversations: `overageEnabled: true` (default) keeps the AI answering and bills each extra conversation at the plan price, `false` is a hard stop (fallback message, the conversation goes to a human). Audited as `billing.overage_changed`. Admins and agents get 403 INSUFFICIENT_ROLE; a plan without an overage price answers 409 OVERAGE_NOT_AVAILABLE. Other instances apply the change within 30 seconds.",
+        "description": "On plans with an overage price (Pro) the owner chooses what happens after the included call minutes (and chat conversations): `overageEnabled: true` (default) keeps the service going and bills each extra minute (or conversation) at the plan price, `false` is a hard stop (the engine status check answers `quota_exceeded`; chat customers get the fallback and the conversation goes to a human). One switch for both units. Audited as `billing.overage_changed`. Admins and agents get 403 INSUFFICIENT_ROLE; a plan without an overage price answers 409 OVERAGE_NOT_AVAILABLE. Other instances apply the change within 30 seconds.",
         "operationId": "TenantBillingController_updateSettings",
         "parameters": [
           {
@@ -5056,19 +5056,38 @@
           },
           "voice": {
             "type": "boolean",
-            "description": "Phone calls included."
+            "description": "Phone calls included. True on every plan since the voice-first decision (L6); the minutes are limited by `callMinutesPerPeriod`."
           },
           "poweredByLabel": {
             "type": "boolean",
             "description": "The widget shows our \"powered by\" label."
           },
+          "callMinutesPerPeriod": {
+            "type": "number",
+            "nullable": true,
+            "example": 300,
+            "description": "Call minutes included per `callMinutePeriod` (L6). null = unlimited (Enterprise). The numbers come from the plans table, which the operator sets from environment variables (`PLAN_*_CALL_MINUTES`)."
+          },
+          "callMinutePeriod": {
+            "type": "string",
+            "enum": [
+              "total",
+              "month"
+            ],
+            "description": "`total` = since the subscription period began (Starter), `month` = per UTC calendar month."
+          },
           "overageConversationMinor": {
             "type": "number",
-            "description": "Price hint: one extra conversation, minor units."
+            "description": "Price: one extra conversation, minor units (chat, halted)."
+          },
+          "overageMinuteMinor": {
+            "type": "number",
+            "description": "Price: one extra call minute, minor units (PKR 25 = 2500). Present only on plans that bill minutes past the included amount (Pro); the owner can switch that off (PATCH …/billing/settings)."
           },
           "voicePerMinuteMinor": {
             "type": "number",
-            "description": "Price hint: one voice minute, minor units."
+            "deprecated": true,
+            "description": "Legacy price hint from Phase 2B. Nothing reads it; use `overageMinuteMinor`."
           }
         },
         "required": [
@@ -5078,7 +5097,9 @@
           "knowledgeMb",
           "channels",
           "voice",
-          "poweredByLabel"
+          "poweredByLabel",
+          "callMinutesPerPeriod",
+          "callMinutePeriod"
         ]
       },
       "PlanView": {
@@ -5161,17 +5182,23 @@
         "properties": {
           "available": {
             "type": "boolean",
-            "description": "The plan has a price for extra conversations (Pro). Free and Starter do not: they always stop hard at the limit and the dashboard shows no switch."
+            "description": "The plan has a price for extra call minutes or extra conversations (Pro). Free and Starter do not: they always stop hard at the limit and the dashboard shows no switch. One switch governs both units."
           },
           "enabled": {
             "type": "boolean",
-            "description": "Past the included conversations the AI keeps answering and each extra one is billed. Always false when `available` is false. Default true on plans that have a price; the owner switches it with PATCH /v1/tenants/:tenantId/billing/settings."
+            "description": "Past the included call minutes (and conversations) the service keeps going and each extra unit is billed. Always false when `available` is false. Default true on plans that have a price; the owner switches it with PATCH /v1/tenants/:tenantId/billing/settings."
           },
           "priceMinor": {
             "type": "number",
             "nullable": true,
             "example": 1500,
-            "description": "One extra conversation, minor units of `currency` (PKR 15 = 1500). null when not available."
+            "description": "One extra conversation, minor units of `currency` (PKR 15 = 1500). null when the plan has no such price."
+          },
+          "minutePriceMinor": {
+            "type": "number",
+            "nullable": true,
+            "example": 2500,
+            "description": "One extra call minute, minor units of `currency` (PKR 25 = 2500). null when the plan has no such price."
           },
           "currency": {
             "type": "string",
@@ -5182,6 +5209,7 @@
           "available",
           "enabled",
           "priceMinor",
+          "minutePriceMinor",
           "currency"
         ]
       },
@@ -5277,6 +5305,64 @@
           "overage"
         ]
       },
+      "CallMinuteUsageView": {
+        "type": "object",
+        "properties": {
+          "period": {
+            "type": "string",
+            "enum": [
+              "month",
+              "total"
+            ],
+            "description": "`month` = the UTC calendar month, `total` = since the subscription period began (Starter)."
+          },
+          "periodStart": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Start of the counting window (a UTC day)."
+          },
+          "included": {
+            "type": "number",
+            "nullable": true,
+            "example": 300,
+            "description": "Call minutes included in the plan. null = unlimited."
+          },
+          "used": {
+            "type": "number",
+            "example": 342,
+            "description": "Call minutes used in the period (whole minutes, from `usage_daily.call_minutes`; the engine reports them from Phase 5E on)."
+          },
+          "overageMinutes": {
+            "type": "number",
+            "example": 42,
+            "description": "Minutes used past the included amount, billed at `overagePriceMinor`. 0 on plans without a minute price. A call that was already running when the allowance ran out is not cut off, so its extra minutes are counted here even when overage is switched off."
+          },
+          "overageAmountMinor": {
+            "type": "number",
+            "example": 105000,
+            "description": "`overageMinutes` times `overagePriceMinor`, integer minor units."
+          },
+          "overagePriceMinor": {
+            "type": "number",
+            "nullable": true,
+            "example": 2500
+          },
+          "currency": {
+            "type": "string",
+            "example": "PKR"
+          }
+        },
+        "required": [
+          "period",
+          "periodStart",
+          "included",
+          "used",
+          "overageMinutes",
+          "overageAmountMinor",
+          "overagePriceMinor",
+          "currency"
+        ]
+      },
       "ConversationUsageView": {
         "type": "object",
         "properties": {
@@ -5338,11 +5424,25 @@
       "BillingUsageView": {
         "type": "object",
         "properties": {
+          "callMinutes": {
+            "description": "Call minutes (L6): the product of the voice-first plans.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CallMinuteUsageView"
+              }
+            ]
+          },
           "conversations": {
-            "$ref": "#/components/schemas/ConversationUsageView"
+            "description": "Chat conversations (halted, kept as built).",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ConversationUsageView"
+              }
+            ]
           }
         },
         "required": [
+          "callMinutes",
           "conversations"
         ]
       },
@@ -5491,7 +5591,7 @@
         "properties": {
           "overageEnabled": {
             "type": "boolean",
-            "description": "true (the default): past the included conversations the AI keeps answering and each extra conversation is billed at the plan price. false: a hard stop, the customer gets the fallback and the conversation goes to a human. Only plans with an overage price (Pro) have this setting; others answer 409 OVERAGE_NOT_AVAILABLE."
+            "description": "true (the default): past the included call minutes (and chat conversations) the service keeps going and each extra minute (or conversation) is billed at the plan price. false: a hard stop; the engine's status check answers `quota_exceeded` and chat customers get the fallback. One switch for both. Only plans with an overage price (Pro) have this setting; others answer 409 OVERAGE_NOT_AVAILABLE."
           }
         },
         "required": [
@@ -6711,7 +6811,10 @@
               "billing.downgraded",
               "usage.threshold",
               "usage.limit_reached",
-              "usage.overage_started"
+              "usage.overage_started",
+              "usage.minutes_threshold",
+              "usage.minutes_limit_reached",
+              "usage.minutes_overage_started"
             ],
             "description": "Translation key prefix: the title is `<type>.title`, the body `<type>.body`."
           },

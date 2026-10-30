@@ -46,8 +46,8 @@ describe('UsageService (usage_daily, counted once)', () => {
       ],
       skipDuplicates: true,
     });
-    // tenant, date, conversations, messages, tokensIn, tokensOut
-    expect(rawValues()).toEqual(['tenant-a', '2026-10-08', 1, 0, 0, 0]);
+    // tenant, date, conversations, messages, tokensIn, tokensOut, callMinutes
+    expect(rawValues()).toEqual(['tenant-a', '2026-10-08', 1, 0, 0, 0, 0]);
     expect(prisma.$transaction).toHaveBeenCalledTimes(1);
   });
 
@@ -68,7 +68,7 @@ describe('UsageService (usage_daily, counted once)', () => {
     expect(prisma.usageEvent.createMany.mock.calls[0][0].data[0]).toMatchObject(
       { kind: 'message', refId: 'msg-1' },
     );
-    expect(rawValues()).toEqual(['tenant-a', '2026-10-08', 0, 1, 120, 30]);
+    expect(rawValues()).toEqual(['tenant-a', '2026-10-08', 0, 1, 120, 30, 0]);
 
     prisma.$executeRaw.mockClear();
     prisma.usageEvent.createMany.mockResolvedValue({ count: 0 });
@@ -84,7 +84,7 @@ describe('UsageService (usage_daily, counted once)', () => {
       tokensIn: -5,
       tokensOut: Number.NaN,
     });
-    expect(rawValues()).toEqual(['tenant-a', '2026-10-08', 0, 1, 0, 0]);
+    expect(rawValues()).toEqual(['tenant-a', '2026-10-08', 0, 1, 0, 0, 0]);
   });
 
   it('joins the callers transaction when given one (conversation row and count commit together)', async () => {
@@ -108,5 +108,39 @@ describe('UsageService (usage_daily, counted once)', () => {
     const sql = (prisma.$executeRaw.mock.calls[0][0] as string[]).join('?');
     expect(sql).toContain('ON CONFLICT ("tenant_id", "day") DO UPDATE');
     expect(sql).toContain('"usage_daily"."conversations" + EXCLUDED');
+  });
+
+  it('counts the minutes of a call once per call id (L6): ledger kind call, call_minutes incremented', async () => {
+    await expect(
+      service.recordCallMinutes('tenant-a', { callId: 'call-1', minutes: 4 }),
+    ).resolves.toBe(true);
+    expect(prisma.usageEvent.createMany.mock.calls[0][0].data[0]).toMatchObject(
+      { tenantId: 'tenant-a', kind: 'call', refId: 'call-1' },
+    );
+    expect(rawValues()).toEqual(['tenant-a', '2026-10-08', 0, 0, 0, 0, 4]);
+
+    prisma.$executeRaw.mockClear();
+    prisma.usageEvent.createMany.mockResolvedValue({ count: 0 });
+    await expect(
+      service.recordCallMinutes('tenant-a', { callId: 'call-1', minutes: 4 }),
+    ).resolves.toBe(false);
+    expect(prisma.$executeRaw).not.toHaveBeenCalled();
+  });
+
+  it('ignores nonsense call minutes instead of corrupting the counter', async () => {
+    await service.recordCallMinutes('tenant-a', { callId: 'c', minutes: -3 });
+    expect(rawValues()[6]).toBe(0);
+    prisma.$executeRaw.mockClear();
+    await service.recordCallMinutes('tenant-a', {
+      callId: 'd',
+      minutes: Number.NaN,
+    });
+    expect(rawValues()[6]).toBe(0);
+  });
+
+  it('writes the call minutes in the same atomic upsert', async () => {
+    await service.recordCallMinutes('tenant-a', { callId: 'e', minutes: 1 });
+    const sql = (prisma.$executeRaw.mock.calls[0][0] as string[]).join('?');
+    expect(sql).toContain('"usage_daily"."call_minutes" + EXCLUDED');
   });
 });

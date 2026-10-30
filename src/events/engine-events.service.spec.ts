@@ -153,6 +153,53 @@ describe('EngineEventsService', () => {
       expect(notifications.create).not.toHaveBeenCalled();
     });
 
+    describe('voice-first events nobody handles yet (record.*, usage.call_minutes)', () => {
+      it.each([
+        [
+          'record.submitted',
+          { recordId: 'r1', reference: 'AP-4K7Q2', type: 'appointment' },
+        ],
+        ['record.updated', { recordId: 'r1', reference: 'AP-4K7Q2' }],
+        [
+          'usage.call_minutes',
+          { conversationId: 'c1', seconds: 185, channel: 'voice' },
+        ],
+      ])(
+        '%s is acknowledged as ignored: no transaction, no inbox row, no usage, no notification, no live event',
+        async (type, data) => {
+          await expect(service.ingest(envelope(type, data))).resolves.toEqual({
+            status: 'ignored',
+          });
+          expect(prisma.$transaction).not.toHaveBeenCalled();
+          expect(prisma.engineEvent.createMany).not.toHaveBeenCalled();
+          expect(usage.recordMessage).not.toHaveBeenCalled();
+          expect(notifications.create).not.toHaveBeenCalled();
+          expect(published).toEqual([]);
+        },
+      );
+
+      it('still checks the tenant of the envelope first: an unknown tenant is a 404 even for these', async () => {
+        prisma.tenant.findUnique.mockResolvedValue(null);
+        await expect(
+          service.ingest(
+            envelope('record.submitted', { reference: 'AP-4K7Q2' }),
+          ),
+        ).rejects.toMatchObject({
+          status: 404,
+          response: { code: 'TENANT_NOT_FOUND' },
+        });
+      });
+
+      it('is not stored, so the same delivery is acknowledged again after a later phase handles it', async () => {
+        const event = envelope('record.submitted', { reference: 'AP-4K7Q2' });
+        await service.ingest(event);
+        await expect(service.ingest(event)).resolves.toEqual({
+          status: 'ignored',
+        });
+        expect(prisma.engineEvent.createMany).not.toHaveBeenCalled();
+      });
+    });
+
     it('a known event with a required field missing is a 400 and rolls back', async () => {
       await expect(
         service.ingest(envelope('conversation.escalated', {})),

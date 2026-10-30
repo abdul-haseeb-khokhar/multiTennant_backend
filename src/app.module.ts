@@ -6,6 +6,7 @@ import { ConversationsModule } from './conversations/conversations.module';
 import { AuditModule } from './audit/audit.module';
 import { AuthModule } from './auth/auth.module';
 import { BillingModule } from './billing/billing.module';
+import { PlanCatalogModule } from './billing/plan-catalog/plan-catalog.module';
 import { RequestContextInterceptor } from './common/request-context/request-context.interceptor';
 import { validateEnv } from './config/env.validation';
 import { DataUseModule } from './data-use/data-use.module';
@@ -40,6 +41,7 @@ import { WidgetModule } from './widget/widget.module';
     InvitesModule,
     EndCustomersModule,
     BillingModule,
+    PlanCatalogModule,
     DataUseModule,
     ApiKeysModule,
     UsageModule,

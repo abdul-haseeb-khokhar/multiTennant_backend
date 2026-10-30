@@ -19,7 +19,7 @@ import { MockEngineClient } from './mock-engine.client';
       useFactory: (config: ConfigService): EngineClient => {
         const firstTokenTimeoutMs = config.get<number>(
           'ENGINE_FIRST_TOKEN_TIMEOUT_MS',
-          5000,
+          10_000,
         );
         const totalTimeoutMs = config.get<number>(
           'ENGINE_TOTAL_TIMEOUT_MS',

@@ -53,7 +53,7 @@ describe('TenantBillingService', () => {
   let service: TenantBillingService;
   let prisma: PrismaMock;
   let subscriptions: { getEffective: jest.Mock; setOverageEnabled: jest.Mock };
-  let overage: { conversationSummary: jest.Mock };
+  let overage: { conversationSummary: jest.Mock; callMinuteSummary: jest.Mock };
 
   beforeEach(async () => {
     prisma = createPrismaMock();
@@ -71,9 +71,25 @@ describe('TenantBillingService', () => {
           available: true,
           enabled: true,
           priceMinor: 1500,
+          minutePriceMinor: 2500,
           currency: 'PKR',
           count: 120,
           amountMinor: 180_000,
+        },
+      }),
+      callMinuteSummary: jest.fn().mockResolvedValue({
+        period: 'month',
+        periodStart: new Date('2026-10-01T00:00:00.000Z'),
+        included: 300,
+        used: 342,
+        overage: {
+          available: true,
+          enabled: true,
+          priceMinor: 1500,
+          minutePriceMinor: 2500,
+          currency: 'PKR',
+          minutes: 42,
+          amountMinor: 105_000,
         },
       }),
     };
@@ -162,6 +178,7 @@ describe('TenantBillingService', () => {
         available: true,
         enabled: true,
         priceMinor: 1500,
+        minutePriceMinor: null,
         currency: 'PKR',
       });
       expect(result.usage.conversations).toEqual({
@@ -177,6 +194,21 @@ describe('TenantBillingService', () => {
       expect(overage.conversationSummary).toHaveBeenCalledWith(effective);
     });
 
+    it('shows the call-minute figures next to the conversation ones (L6): included, used, overage minutes and amount', async () => {
+      const result = await service.getForTenant('tenant-a', {});
+      expect(result.usage.callMinutes).toEqual({
+        period: 'month',
+        periodStart: new Date('2026-10-01T00:00:00.000Z'),
+        included: 300,
+        used: 342,
+        overageMinutes: 42,
+        overageAmountMinor: 105_000,
+        overagePriceMinor: 2500,
+        currency: 'PKR',
+      });
+      expect(overage.callMinuteSummary).toHaveBeenCalledWith(effective);
+    });
+
     it('the platform admin view carries the same figures', async () => {
       prisma.tenant.findUnique.mockResolvedValue({ id: 'tenant-a' });
       const result = await service.getForAdmin('tenant-a', {});
@@ -184,6 +216,11 @@ describe('TenantBillingService', () => {
         used: 1620,
         overageCount: 120,
         overageAmountMinor: 180_000,
+      });
+      expect(result.usage.callMinutes).toMatchObject({
+        used: 342,
+        overageMinutes: 42,
+        overageAmountMinor: 105_000,
       });
       expect(result.subscription.overage.enabled).toBe(true);
     });

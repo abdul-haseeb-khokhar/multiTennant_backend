@@ -14,9 +14,12 @@ describe('parseEntitlements', () => {
         conversationPeriod: 'month',
         knowledgeMb: 500,
         channels: ['chat', 'whatsapp'],
-        voice: false,
+        voice: true,
         poweredByLabel: false,
+        callMinutesPerPeriod: 300,
+        callMinutePeriod: 'month',
         overageConversationMinor: 1500,
+        overageMinuteMinor: 2500,
         voicePerMinuteMinor: 2500,
       }),
     ).toEqual({
@@ -25,11 +28,33 @@ describe('parseEntitlements', () => {
       conversationPeriod: 'month',
       knowledgeMb: 500,
       channels: ['chat', 'whatsapp'],
-      voice: false,
+      voice: true,
       poweredByLabel: false,
+      callMinutesPerPeriod: 300,
+      callMinutePeriod: 'month',
       overageConversationMinor: 1500,
+      overageMinuteMinor: 2500,
       voicePerMinuteMinor: 2500,
     });
+  });
+
+  it('reads the call-minute keys (L6): a number, null for unlimited, the period', () => {
+    expect(
+      parseEntitlements({
+        callMinutesPerPeriod: 30,
+        callMinutePeriod: 'total',
+      }),
+    ).toMatchObject({ callMinutesPerPeriod: 30, callMinutePeriod: 'total' });
+    expect(
+      parseEntitlements({ callMinutesPerPeriod: null }).callMinutesPerPeriod,
+    ).toBeNull();
+  });
+
+  it('a plan row without call-minute keys gets 0 minutes (most restrictive) in the month window, never unlimited', () => {
+    const parsed = parseEntitlements({ seats: 10, voice: true });
+    expect(parsed.callMinutesPerPeriod).toBe(0);
+    expect(parsed.callMinutePeriod).toBe('month');
+    expect(parsed.overageMinuteMinor).toBeUndefined();
   });
 
   it('null is unlimited', () => {
@@ -46,6 +71,8 @@ describe('parseEntitlements', () => {
         channels: [],
         voice: false,
         poweredByLabel: true,
+        callMinutesPerPeriod: 0,
+        callMinutePeriod: 'month',
       });
     }
     const odd = parseEntitlements({
@@ -54,7 +81,11 @@ describe('parseEntitlements', () => {
       knowledgeMb: '20',
       channels: ['chat', 5],
       voice: 'yes',
+      callMinutesPerPeriod: -5,
+      callMinutePeriod: 'week',
     });
+    expect(odd.callMinutesPerPeriod).toBe(0);
+    expect(odd.callMinutePeriod).toBe('month');
     expect(odd.seats).toBe(0);
     expect(odd.conversationsPerPeriod).toBe(0);
     expect(odd.knowledgeMb).toBe(0);
@@ -93,7 +124,9 @@ describe('limitFor', () => {
       seats: 1,
       conversationsPerPeriod: 2,
       knowledgeMb: 3,
+      callMinutesPerPeriod: 4,
     });
+    expect(limitFor(e, 'callMinutes')).toBe(4);
     expect(limitFor(e, 'seats')).toBe(1);
     expect(limitFor(e, 'conversations')).toBe(2);
     expect(limitFor(e, 'knowledgeMb')).toBe(3);
@@ -110,7 +143,10 @@ describe('validateOverride', () => {
       channels: ['chat', 'voice'],
       voice: true,
       poweredByLabel: false,
+      callMinutesPerPeriod: 600,
+      callMinutePeriod: 'total',
       overageConversationMinor: 1000,
+      overageMinuteMinor: 2000,
       voicePerMinuteMinor: 2000,
     };
     expect(validateOverride(input)).toEqual({ ok: true, value: input });
@@ -127,6 +163,12 @@ describe('validateOverride', () => {
     ['non-string channels', { channels: [1] }],
     ['a non-boolean flag', { voice: 'yes' }],
     ['a negative price hint', { overageConversationMinor: -5 }],
+    ['a negative call-minute limit', { callMinutesPerPeriod: -1 }],
+    ['a fractional call-minute limit', { callMinutesPerPeriod: 2.5 }],
+    ['a string call-minute limit', { callMinutesPerPeriod: '30' }],
+    ['a bad call-minute period', { callMinutePeriod: 'week' }],
+    ['a negative minute price', { overageMinuteMinor: -1 }],
+    ['a fractional minute price', { overageMinuteMinor: 1.5 }],
   ])('rejects %s', (_name, value) => {
     expect(validateOverride(value)).toMatchObject({ ok: false });
   });

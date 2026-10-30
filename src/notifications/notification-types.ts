@@ -17,6 +17,10 @@ export const NotificationType = {
   USAGE_THRESHOLD: 'usage.threshold',
   USAGE_LIMIT_REACHED: 'usage.limit_reached',
   USAGE_OVERAGE_STARTED: 'usage.overage_started',
+  // Call minutes (L6): the same three reminders for the voice allowance.
+  USAGE_MINUTES_THRESHOLD: 'usage.minutes_threshold',
+  USAGE_MINUTES_LIMIT_REACHED: 'usage.minutes_limit_reached',
+  USAGE_MINUTES_OVERAGE_STARTED: 'usage.minutes_overage_started',
 } as const;
 export type NotificationType =
   (typeof NotificationType)[keyof typeof NotificationType];
@@ -57,7 +61,8 @@ export const NOTIFICATION_TYPES: Record<
     link: '/conversations/<conversationId>',
   },
   [NotificationType.ACTION_PROPOSED]: {
-    recipients: 'active owners and admins',
+    recipients:
+      'active owners and admins. UNUSED since 2026-10-21 (L3: risky-action approvals are dropped and the engine executes no actions); kept so an event from an engine that still sends it is handled',
     params: {
       actionId: 'id of the proposed action',
       action: 'short action name, for example "refund"',
@@ -128,6 +133,46 @@ export const NOTIFICATION_TYPES: Record<
       price:
         'the same in major units (priceMinor / 100), for number formatting',
       currency: 'ISO currency code, for example PKR',
+    },
+    link: '/billing',
+  },
+  [NotificationType.USAGE_MINUTES_THRESHOLD]: {
+    recipients:
+      'active owners and admins; once per period at 80% of the call minutes',
+    params: {
+      metric: 'callMinutes',
+      percent: '80',
+      used: 'call minutes used in the period',
+      limit: 'call minutes included in the plan',
+      period: 'month | total (since the plan period began)',
+    },
+    link: '/billing',
+  },
+  [NotificationType.USAGE_MINUTES_OVERAGE_STARTED]: {
+    recipients:
+      'active owners and admins; once per period at 100% when the plan has a price per extra call minute and overage is on (L6, J6); calls are still answered',
+    params: {
+      metric: 'callMinutes',
+      percent: '100',
+      used: 'call minutes used in the period',
+      limit: 'call minutes included in the plan',
+      period: 'month | total',
+      priceMinor: 'price of one extra call minute, minor units',
+      price:
+        'the same in major units (priceMinor / 100), for number formatting',
+      currency: 'ISO currency code, for example PKR',
+    },
+    link: '/billing',
+  },
+  [NotificationType.USAGE_MINUTES_LIMIT_REACHED]: {
+    recipients:
+      'active owners and admins; once per period at 100% when calls stop being answered (no price per extra minute, overage switched off, or a payment overdue; L6)',
+    params: {
+      metric: 'callMinutes',
+      percent: '100',
+      used: 'call minutes used in the period',
+      limit: 'call minutes included in the plan',
+      period: 'month | total',
     },
     link: '/billing',
   },

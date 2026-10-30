@@ -4,7 +4,7 @@ import { ApiException } from '../../common/errors/api.exception';
 import { ErrorCode } from '../../common/errors/error-codes';
 import { SubscriptionStatus } from '../billing.constants';
 import { Clock } from '../clock';
-import { overageSettings } from '../overage';
+import { overageApplies, overageSettings } from '../overage';
 import { EffectiveSubscription } from '../subscriptions/effective-subscription';
 import { SubscriptionService } from '../subscriptions/subscription.service';
 import { EntitlementKey, LIMIT_KEYS, LimitKey, limitFor } from './entitlements';
@@ -21,8 +21,9 @@ export type EntitlementDecision =
       limit: number | null;
       used: number | null;
       /**
-       * Conversations only (J6): the included amount is used up but the plan has an overage price and
-       * the owner has overage switched on, so this conversation is allowed and billed as an extra.
+       * Conversations (J6) and call minutes (L6) only: the included amount is used up but the plan has
+       * an overage price for this unit and the owner has overage switched on, so this conversation
+       * or minute is allowed and billed as an extra.
        */
       overage?: true;
     }
@@ -61,7 +62,12 @@ interface CacheEntry {
  * this instance; other instances see a change within the TTL (Redis invalidation: Phase 8).
  *
  * Statuses: suspended and closed tenants are always denied; a `past_due` tenant keeps answering
- * customers (`conversations`) but cannot grow (more seats, uploads, channels) until it pays.
+ * customers (`conversations`) and callers (`callMinutes`) within its limits but cannot grow (more
+ * seats, uploads, channels) and runs up no overage until it pays.
+ *
+ * `callMinutes` (L6): `check(tenantId, 'callMinutes')` asks "may one more minute be served?", so a
+ * tenant that used exactly its included minutes is refused (or allowed with `overage: true`). The
+ * status check of Phase 5B uses it.
  */
 @Injectable()
 export class EntitlementsService {
@@ -124,6 +130,7 @@ export class EntitlementsService {
     if (
       subscription.status === SubscriptionStatus.PAST_DUE &&
       key !== 'conversations' &&
+      key !== 'callMinutes' &&
       !options.allowPastDue
     ) {
       return this.deny(
@@ -167,15 +174,17 @@ export class EntitlementsService {
       (await this.usage.getUsage(tenantId, limitKey, {
         periodStart: subscription.currentPeriodStart,
         conversationPeriod: entitlements.conversationPeriod,
+        callMinutePeriod: entitlements.callMinutePeriod,
       }));
     if (used + amount > limit) {
-      // J6: past the included conversations the AI keeps answering when the plan has an overage
-      // price and the owner left overage on. Not while a payment is overdue: that tenant keeps
-      // answering within its limit (I5) but must not run up more charges.
+      // J6/L6: past the included conversations or call minutes the service keeps going when the
+      // plan has an overage price for that unit and the owner left overage on. Not while a payment
+      // is overdue: that tenant keeps being served within its limit (I5) but must not run up more
+      // charges.
       if (
-        limitKey === 'conversations' &&
+        (limitKey === 'conversations' || limitKey === 'callMinutes') &&
         subscription.status !== SubscriptionStatus.PAST_DUE &&
-        overageSettings(subscription).enabled
+        overageApplies(overageSettings(subscription), limitKey)
       ) {
         return { allowed: true, planCode: plan, limit, used, overage: true };
       }

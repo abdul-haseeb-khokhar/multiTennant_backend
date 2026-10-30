@@ -60,7 +60,7 @@ export function createPrismaMock() {
     passwordReset: model('create', 'findUnique', 'updateMany'),
     emailVerification: model('create', 'findUnique', 'updateMany'),
     auditLog: model('create', 'findMany', 'count'),
-    plan: model('findUnique', 'findMany'),
+    plan: model('findUnique', 'findMany', 'update'),
     subscription: model('create', 'findUnique', 'findMany', 'update'),
     invoice: model('create', 'findMany', 'count'),
     billingEvent: model('create', 'findFirst', 'findMany', 'count'),

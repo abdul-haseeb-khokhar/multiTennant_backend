@@ -69,3 +69,6 @@ export const TenantStatusMirror = {
 
 /** Arbitrary constant used as the Postgres advisory lock key of the daily transition job. */
 export const TRANSITION_JOB_LOCK_KEY = 7_270_001;
+
+/** Arbitrary constant: the Postgres advisory lock key of the plan catalogue sync at startup. */
+export const PLAN_CATALOG_LOCK_KEY = 7_270_003;

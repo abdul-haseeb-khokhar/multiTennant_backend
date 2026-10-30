@@ -142,6 +142,7 @@ describe('MeService', () => {
           available: false,
           enabled: false,
           priceMinor: null,
+          minutePriceMinor: null,
           currency: 'PKR',
         },
       });

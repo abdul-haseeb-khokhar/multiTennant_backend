@@ -1,7 +1,10 @@
 import { FakeClock } from '../../src/billing/clock';
 import type { PrismaMock } from './prisma-mock';
 
-/** The seeded plan catalogue (migration 20261007140000_phase2b_billing), as Prisma rows. */
+/**
+ * The seeded plan catalogue (migration 20261007140000_phase2b_billing, plus the call minutes of
+ * 20261021120000_phase5a_call_minutes), as Prisma rows.
+ */
 export const PLAN_ROWS = [
   {
     code: 'starter',
@@ -18,9 +21,11 @@ export const PLAN_ROWS = [
       conversationsPerPeriod: 100,
       conversationPeriod: 'total',
       knowledgeMb: 20,
-      channels: ['chat'],
-      voice: false,
+      channels: ['chat', 'voice'],
+      voice: true,
       poweredByLabel: false,
+      callMinutesPerPeriod: 30,
+      callMinutePeriod: 'total',
     },
     providerPriceIds: {},
     active: true,
@@ -41,9 +46,11 @@ export const PLAN_ROWS = [
       conversationsPerPeriod: 30,
       conversationPeriod: 'month',
       knowledgeMb: 10,
-      channels: ['chat'],
-      voice: false,
+      channels: ['chat', 'voice'],
+      voice: true,
       poweredByLabel: true,
+      callMinutesPerPeriod: 20,
+      callMinutePeriod: 'month',
     },
     providerPriceIds: {},
     active: true,
@@ -64,10 +71,13 @@ export const PLAN_ROWS = [
       conversationsPerPeriod: 1500,
       conversationPeriod: 'month',
       knowledgeMb: 500,
-      channels: ['chat', 'whatsapp'],
-      voice: false,
+      channels: ['chat', 'whatsapp', 'voice'],
+      voice: true,
       poweredByLabel: false,
+      callMinutesPerPeriod: 300,
+      callMinutePeriod: 'month',
       overageConversationMinor: 1500,
+      overageMinuteMinor: 2500,
       voicePerMinuteMinor: 2500,
     },
     providerPriceIds: {},
@@ -92,6 +102,8 @@ export const PLAN_ROWS = [
       channels: ['chat', 'whatsapp', 'voice'],
       voice: true,
       poweredByLabel: false,
+      callMinutesPerPeriod: null,
+      callMinutePeriod: 'month',
     },
     providerPriceIds: {},
     active: true,
@@ -157,6 +169,8 @@ export function installBilling(
     invoiceCounter: 0,
     /** Conversations counted in usage_daily for the tenant (what the limit check and the billing summary read). */
     conversationsUsed: 0,
+    /** Call minutes counted in usage_daily for the tenant (L6). */
+    callMinutesUsed: 0,
     /** Conversations of the period that were started over the limit and held for a human. */
     heldForHuman: 0,
   };
@@ -212,8 +226,14 @@ export function installBilling(
     },
   );
   prisma.subscription.findMany.mockResolvedValue([]);
-  prisma.usageDaily.aggregate.mockImplementation(() =>
-    Promise.resolve({ _sum: { conversations: state.conversationsUsed } }),
+  prisma.usageDaily.aggregate.mockImplementation(
+    ({ _sum }: { _sum: Record<string, boolean> }) =>
+      Promise.resolve({
+        _sum: {
+          ...(_sum.conversations && { conversations: state.conversationsUsed }),
+          ...(_sum.callMinutes && { callMinutes: state.callMinutesUsed }),
+        },
+      }),
   );
   prisma.gatewayConversation.count.mockImplementation(() =>
     Promise.resolve(state.heldForHuman),

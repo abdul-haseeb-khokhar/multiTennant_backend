@@ -5,13 +5,28 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { SubscriptionStatus } from '../billing.constants';
 import { Clock } from '../clock';
 import { EntitlementsService } from '../entitlements/entitlements.service';
-import { overageSettings } from '../overage';
+import { OverageUnit, overageApplies, overageSettings } from '../overage';
 import { daysUntil } from '../periods';
 
 /** Days before a period ends at which the owners and admins are reminded (I8). */
 export const REMINDER_THRESHOLDS = [7, 3, 1] as const;
-/** A plan limit warning at 80% of the included conversations and again when they are used up. */
+/** A plan limit warning at 80% of the included conversations or call minutes and again when they are used up. */
 export const USAGE_THRESHOLDS = [80, 100] as const;
+
+/** The units with an allowance to warn about, and the notification types of each. */
+const USAGE_UNITS: readonly OverageUnit[] = ['conversations', 'callMinutes'];
+const USAGE_NOTIFICATIONS = {
+  conversations: {
+    threshold: NotificationType.USAGE_THRESHOLD,
+    overageStarted: NotificationType.USAGE_OVERAGE_STARTED,
+    limitReached: NotificationType.USAGE_LIMIT_REACHED,
+  },
+  callMinutes: {
+    threshold: NotificationType.USAGE_MINUTES_THRESHOLD,
+    overageStarted: NotificationType.USAGE_MINUTES_OVERAGE_STARTED,
+    limitReached: NotificationType.USAGE_MINUTES_LIMIT_REACHED,
+  },
+} as const;
 
 const RECIPIENT_ROLES = ['owner', 'admin'];
 const DAY_MS = 86_400_000;
@@ -28,8 +43,8 @@ export interface ReminderResult {
 /**
  * The reminders of I8 as in-app notifications for the owners and admins of a tenant: the trial
  * (Starter) or a paid period ends in 7, 3 and 1 days, the grace period started, the workspace was
- * moved to a lower plan, and the conversation allowance is 80% and 100% used. (Data-deletion
- * notices belong to Phase 8.)
+ * moved to a lower plan, and the conversation allowance or the call-minute allowance (L6) is 80%
+ * and 100% used. (Data-deletion notices belong to Phase 8.)
  *
  * IDEMPOTENT: every notification carries a `dedupeKey` naming the reminder and its period, and the
  * table is unique on (tenant, recipient, key), so running the sweep twice, from two instances, or
@@ -174,68 +189,81 @@ export class BillingRemindersService {
     });
     let created = 0;
     for (const { tenantId } of touched) {
-      // Fresh first: it drops a cached subscription, so the plan read next is the current one.
-      const decision = await this.entitlements.check(
-        tenantId,
-        'conversations',
-        0,
-        {
-          fresh: true,
-        },
-      );
-      const subscription = await this.entitlements.forTenant(tenantId);
-      if (!subscription) continue;
-      // null = unlimited; a suspended or closed tenant answers without a limit and is skipped
-      if (
-        decision.limit === null ||
-        decision.used === null ||
-        decision.limit <= 0
-      ) {
-        continue;
+      for (const unit of USAGE_UNITS) {
+        created += await this.unitThresholds(tenantId, unit, now);
       }
-      const percent = Math.floor((decision.used * 100) / decision.limit);
-      const threshold = [...USAGE_THRESHOLDS]
-        .reverse()
-        .find((t) => percent >= t);
-      if (!threshold) continue;
-      const period = subscription.entitlements.conversationPeriod;
-      const periodKey =
-        period === 'month'
-          ? now.toISOString().slice(0, 7)
-          : `since-${subscription.currentPeriodStart.toISOString().slice(0, 10)}`;
-      // J6: at 100% the message depends on what happens next. With overage on (and applied: not
-      // while a payment is overdue) the AI keeps answering and the extras are billed ("overage
-      // started"); otherwise it stops ("limit reached"). The two types have their own dedupe
-      // keys, so switching the setting later neither repeats a reminder already sent nor hides
-      // the one that now applies.
-      const overage = overageSettings(subscription);
-      const overageApplies =
-        overage.enabled && subscription.status !== SubscriptionStatus.PAST_DUE;
-      const type =
-        threshold === 100
-          ? overageApplies
-            ? NotificationType.USAGE_OVERAGE_STARTED
-            : NotificationType.USAGE_LIMIT_REACHED
-          : NotificationType.USAGE_THRESHOLD;
-      created += await this.notify(tenantId, {
-        type,
-        params: {
-          metric: 'conversations',
-          percent: threshold,
-          used: decision.used,
-          limit: decision.limit,
-          period,
-          ...(type === NotificationType.USAGE_OVERAGE_STARTED && {
-            priceMinor: overage.priceMinor,
-            price: (overage.priceMinor ?? 0) / 100,
-            currency: overage.currency,
-          }),
-        },
-        link: '/billing',
-        dedupeKey: `${type}:conversations:${periodKey}`,
-      });
     }
     return created;
+  }
+
+  /** One tenant, one unit: the reminder that fits its current use, if any (created once per period). */
+  private async unitThresholds(
+    tenantId: string,
+    unit: OverageUnit,
+    now: Date,
+  ): Promise<number> {
+    const types = USAGE_NOTIFICATIONS[unit];
+    // Fresh first: it drops a cached subscription, so the plan read next is the current one.
+    const decision = await this.entitlements.check(tenantId, unit, 0, {
+      fresh: true,
+    });
+    const subscription = await this.entitlements.forTenant(tenantId);
+    if (!subscription) return 0;
+    // null = unlimited; a suspended or closed tenant answers without a limit and is skipped
+    if (
+      decision.limit === null ||
+      decision.used === null ||
+      decision.limit <= 0
+    ) {
+      return 0;
+    }
+    const percent = Math.floor((decision.used * 100) / decision.limit);
+    const threshold = [...USAGE_THRESHOLDS].reverse().find((t) => percent >= t);
+    if (!threshold) return 0;
+    const period =
+      unit === 'callMinutes'
+        ? subscription.entitlements.callMinutePeriod
+        : subscription.entitlements.conversationPeriod;
+    const periodKey =
+      period === 'month'
+        ? now.toISOString().slice(0, 7)
+        : `since-${subscription.currentPeriodStart.toISOString().slice(0, 10)}`;
+    // J6/L6: at 100% the message depends on what happens next. With overage on (and applied: the
+    // plan prices this unit, and not while a payment is overdue) the service keeps going and the
+    // extras are billed ("overage started"); otherwise it stops ("limit reached"). Only the
+    // message that fits the CURRENT state is created, never both for one state. The two types
+    // have their own dedupe keys, so switching the setting later neither repeats a reminder
+    // already sent nor hides the one that now applies.
+    const overage = overageSettings(subscription);
+    const keepsGoing =
+      overageApplies(overage, unit) &&
+      subscription.status !== SubscriptionStatus.PAST_DUE;
+    const type =
+      threshold === 100
+        ? keepsGoing
+          ? types.overageStarted
+          : types.limitReached
+        : types.threshold;
+    const priceMinor =
+      unit === 'callMinutes' ? overage.minutePriceMinor : overage.priceMinor;
+    return this.notify(tenantId, {
+      type,
+      params: {
+        metric: unit,
+        percent: threshold,
+        used: decision.used,
+        limit: decision.limit,
+        period,
+        ...(type === types.overageStarted && {
+          priceMinor,
+          price: (priceMinor ?? 0) / 100,
+          currency: overage.currency,
+        }),
+      },
+      link: '/billing',
+      // Conversations keep the key of Phase 4 (type, unit, period) so nothing already sent is sent again.
+      dedupeKey: `${type}:${unit}:${periodKey}`,
+    });
   }
 
   // -------------------------------------------------------------------------------------------

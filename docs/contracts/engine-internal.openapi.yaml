@@ -8,6 +8,40 @@ info:
     the AI engine owner.** Until the engine implements it the backend runs against an in-process
     mock that follows this file (`ENGINE_MODE=mock`, see README.md in this folder).
 
+    **Phase 5A update (2026-10-21).** The product is now voice-first (L1) and chat is halted (L2):
+    this file describes the chat and staff-queue calls built in Phases 3 and 4, which keep working
+    but get no new work. What the engine calls on the backend (tenant status check, requests,
+    customer upsert, number lookup) is the new draft [backend-internal.openapi.yaml](backend-internal.openapi.yaml).
+
+    **What Abdullah agreed (team-alignment M1; his answers of 2026-10-15, NOTHING of it is built in
+    the engine yet):**
+    * the new `/internal/*` routes below, a streaming adapter for the reply, and 2,000 characters
+      on them (Q6, Q7);
+    * `POST …/escalate` and `aiReply: false` on the message call (Q8);
+    * the atomic claim with the 409 codes `CONVERSATION_ALREADY_CLAIMED`, `CONVERSATION_RESOLVED`
+      and `CONVERSATION_NOT_ASSIGNED_TO_YOU`, and the same `Idempotency-Key` on a claim that
+      already succeeded answering **200**, not 409 (Q9);
+    * on the new routes `Authorization: Bearer <INTERNAL_API_TOKEN>` plus `X-Tenant-Id` (Q10).
+      His OLD `/api/*` routes use `?tenantId=` and the header `x-internal-key`
+      (`INTERNAL_API_KEY`); he converts only the ones this backend calls. The backend sends the
+      Bearer form only;
+    * no AI message is stored or counted after a claim; tokens already streamed cannot be recalled
+      (Q11);
+    * messages carry `contentKey` (his column `content_key`) for system lines, and assistant
+      messages carry `provider`, `model`, `tokensIn`, `tokensOut` and `latencyMs` (Q12, Q18 to Q20);
+    * the first-token timeout is **10 seconds** until a faster model is used (his free-tier Gemini
+      needs 3.5 to 10 s; Groq about 1 s); 30 seconds in total stays (Q14). The backend default
+      `ENGINE_FIRST_TOKEN_TIMEOUT_MS` is 10000 since this phase;
+    * escalation reasons: first `customer_requested`, `outside_hours`, `ai_unavailable`,
+      `limit_reached`; `low_confidence`, `sentiment`, `topic`, `failed_action` only after he
+      evaluated them (Q13).
+
+    **Still proposals** (not answered by him): the staff list and counts, `release` with `force`,
+    `resolve` and `human-messages` exactly as written, and the conversation fields
+    `assignedUserId`, `escalatedAt`, `summary`, `resolvedAt`, `resolvedBy`. They only matter for
+    the halted chat queue. Both services default to port 3000: run the engine on another port
+    (`ENGINE_BASE_URL`) or the backend on another (`PORT`).
+
     Rules (D2):
     * Browsers never call this API. Only the backend does, over a private network.
     * Every call carries `Authorization: Bearer <INTERNAL_API_TOKEN>`, `X-Tenant-Id` and
@@ -210,7 +244,8 @@ paths:
         optionally `escalated` (the engine decided to hand over, C6), then `done`. A failure
         after the stream started is an `error` event, followed by the end of the stream.
 
-        The backend allows 5 seconds until the first `token`/`escalated`/`done` event and 30
+        The backend allows 10 seconds (agreed with the engine owner, M1 Q14; configurable with
+        `ENGINE_FIRST_TOKEN_TIMEOUT_MS`) until the first `token`/`escalated`/`done` event and 30
         seconds in total (D7); after that it stops reading, answers the customer with the
         fallback message and escalates with reason `ai_unavailable`.
 
@@ -349,7 +384,7 @@ paths:
         stops answering, a system line `agent.joined` is stored and `conversation.assigned` is
         emitted. Otherwise 409: `CONVERSATION_ALREADY_CLAIMED` (somebody holds it, possibly the
         caller) or `CONVERSATION_RESOLVED`. With the same Idempotency-Key a retry of a claim that
-        succeeded answers 200 with the same conversation, not 409.
+        succeeded answers 200 with the same conversation, not 409 (agreed, M1 Q9).
       parameters:
         - $ref: '#/components/parameters/TenantId'
         - $ref: '#/components/parameters/RequestId'
@@ -508,7 +543,10 @@ components:
     internalToken:
       type: http
       scheme: bearer
-      description: INTERNAL_API_TOKEN, one long random secret per environment, shared by backend and engine.
+      description: >-
+        INTERNAL_API_TOKEN, one long random secret per environment, shared by backend and engine.
+        The engine's old `/api/*` routes use the header `x-internal-key` instead; the backend only
+        calls routes that accept this Bearer form.
   parameters:
     TenantId:
       name: X-Tenant-Id
@@ -595,7 +633,9 @@ components:
       type: string
       description: |
         Stable codes (the dashboard translates them). `ai_unavailable` and `limit_reached` are
-        set by the backend; the others by the engine (C6).
+        set by the backend; the others by the engine (C6). Agreed for the first version (M1 Q13):
+        `customer_requested`, `outside_hours`, `ai_unavailable`, `limit_reached`; the rest only
+        after the engine owner evaluated them.
       enum:
         - customer_requested
         - low_confidence
@@ -664,7 +704,27 @@ components:
         contentKey:
           type: string
           nullable: true
-          description: Translation key for system lines such as `widget.agent.joined` (the engine emits keys, not English).
+          description: Translation key for system lines such as `widget.agent.joined` (the engine emits keys, not English). His column is `content_key` (agreed, M1 Q12).
+        provider:
+          type: string
+          nullable: true
+          description: "Assistant messages: which model provider answered, for the cost comparison of I12 (agreed, M1 Q18 to Q20). Never shown to a customer."
+        model:
+          type: string
+          nullable: true
+          description: "Assistant messages (agreed, M1)."
+        tokensIn:
+          type: integer
+          nullable: true
+          description: "Assistant messages (his `tokens_in`). Tokens stay internal: no tenant screen shows them (K5)."
+        tokensOut:
+          type: integer
+          nullable: true
+          description: "Assistant messages (his `tokens_out`)."
+        latencyMs:
+          type: integer
+          nullable: true
+          description: "Assistant messages (his `latency_ms`)."
         createdAt: { type: string, format: date-time }
     StreamEvents:
       description: |
@@ -691,6 +751,7 @@ components:
             tokensIn: { type: integer }
             tokensOut: { type: integer }
             model: { type: string }
+            provider: { type: string, description: Agreed addition (M1). }
             latencyMs: { type: integer }
         escalated:
           type: object

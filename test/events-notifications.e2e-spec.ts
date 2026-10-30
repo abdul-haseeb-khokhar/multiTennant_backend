@@ -202,6 +202,20 @@ describe('Engine events, notifications and OpenAPI (e2e, mocked database)', () =
       expect(h.notifications).toHaveLength(0);
     });
 
+    it.each([
+      ['record.submitted', { recordId: 'r1', reference: 'AP-4K7Q2' }],
+      ['record.updated', { recordId: 'r1', reference: 'AP-4K7Q2' }],
+      ['usage.call_minutes', { conversationId: 'c1', seconds: 185 }],
+    ])(
+      'the voice-first event %s is acknowledged and ignored until its phase exists (nothing stored, counted or notified)',
+      async (type, data) => {
+        const res = await deliver(envelope(type, data)).expect(200);
+        expect(res.body).toEqual({ status: 'ignored' });
+        expect(h.engineEvents).toHaveLength(0);
+        expect(h.notifications).toHaveLength(0);
+      },
+    );
+
     describe('authentication (a signature over the exact body; the token is never sent)', () => {
       const event = () =>
         envelope('usage.recorded', {

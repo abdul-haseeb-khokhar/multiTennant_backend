@@ -32,7 +32,7 @@
   "NOT_IMPLEMENTED": "This operation is not available.",
   "NO_ACTIVE_SUBSCRIPTION": "This account has no active subscription.",
   "ORIGIN_NOT_ALLOWED": "This website is not allowed to use this chat.",
-  "OVERAGE_NOT_AVAILABLE": "Extra conversations are not available on your plan. Upgrade to a plan that offers them to use this setting.",
+  "OVERAGE_NOT_AVAILABLE": "Extra call minutes and conversations are not available on your plan. Upgrade to a plan that offers them to use this setting.",
   "OWNER_REQUIRED": "Only an owner can do this.",
   "PAYLOAD_TOO_LARGE": "The request is too large.",
   "PLAN_FEATURE_UNAVAILABLE": "This feature is not included in your plan.",

@@ -68,6 +68,7 @@ describe('Overage (e2e)', () => {
           available: true,
           enabled: true,
           priceMinor: 1500,
+          minutePriceMinor: 2500,
           currency: 'PKR',
         });
         expect(res.body.usage.conversations).toEqual({
@@ -117,6 +118,7 @@ describe('Overage (e2e)', () => {
         available: false,
         enabled: false,
         priceMinor: null,
+        minutePriceMinor: null,
         currency: 'PKR',
       });
       expect(res.body.usage.conversations).toMatchObject({
@@ -172,7 +174,15 @@ describe('Overage (e2e)', () => {
           available: true,
           enabled: true,
           priceMinor: 1500,
+          minutePriceMinor: 2500,
           currency: 'PKR',
+        });
+        // the call-minute allowance and its price are in the limits (L6)
+        expect(res.body.subscription.limits).toMatchObject({
+          voice: true,
+          callMinutesPerPeriod: 300,
+          callMinutePeriod: 'month',
+          overageMinuteMinor: 2500,
         });
       },
     );
@@ -382,6 +392,160 @@ describe('Overage (e2e)', () => {
         .expect(400);
       expect(res.body.code).toBe('VALIDATION_ERROR');
       expect(billing.invoices).toEqual([]);
+    });
+  });
+
+  describe('call minutes (L6, Phase 5A)', () => {
+    const billingOf = (role: Role = 'owner', tenantId = 'tenant-a') =>
+      http()
+        .get('/v1/tenants/tenant-a/billing')
+        .set('Authorization', as(role, tenantId));
+
+    it.each(['owner', 'admin'] as const)(
+      'a %s sees included, used, the extra minutes and their amount for the period',
+      async (role) => {
+        billing.callMinutesUsed = 342;
+        const res = await billingOf(role).expect(200);
+        expect(res.body.usage.callMinutes).toEqual({
+          period: 'month',
+          periodStart: '2026-10-01T00:00:00.000Z',
+          included: 300,
+          used: 342,
+          overageMinutes: 42,
+          overageAmountMinor: 105_000,
+          overagePriceMinor: 2500,
+          currency: 'PKR',
+        });
+        // chat figures are still there, separate
+        expect(res.body.usage.conversations).toMatchObject({
+          included: 1500,
+          overageCount: 0,
+        });
+      },
+    );
+
+    it('inside the allowance, and exactly at it, nothing is overage', async () => {
+      for (const used of [0, 299, 300]) {
+        billing.callMinutesUsed = used;
+        const res = await billingOf().expect(200);
+        expect(res.body.usage.callMinutes).toMatchObject({
+          used,
+          overageMinutes: 0,
+          overageAmountMinor: 0,
+        });
+      }
+    });
+
+    it('the figures follow the plan: Starter counts 30 in total, Free 20 a month, neither bills anything', async () => {
+      setup({ planCode: 'starter', interval: 'none' });
+      billing.callMinutesUsed = 99;
+      let res = await billingOf().expect(200);
+      expect(res.body.usage.callMinutes).toEqual({
+        period: 'total',
+        periodStart: '2026-10-07T00:00:00.000Z',
+        included: 30,
+        used: 99,
+        overageMinutes: 0,
+        overageAmountMinor: 0,
+        overagePriceMinor: null,
+        currency: 'PKR',
+      });
+      setup({ planCode: 'free', interval: 'none', currentPeriodEnd: null });
+      billing.callMinutesUsed = 99;
+      res = await billingOf().expect(200);
+      expect(res.body.usage.callMinutes).toMatchObject({
+        period: 'month',
+        included: 20,
+        used: 99,
+        overageMinutes: 0,
+        overagePriceMinor: null,
+      });
+      expect(res.body.subscription.overage.minutePriceMinor).toBeNull();
+    });
+
+    it('Enterprise is unlimited: included null, nothing overage', async () => {
+      setup({ planCode: 'enterprise', interval: 'none' });
+      billing.callMinutesUsed = 12_345;
+      const res = await billingOf().expect(200);
+      expect(res.body.usage.callMinutes).toMatchObject({
+        included: null,
+        used: 12_345,
+        overageMinutes: 0,
+      });
+    });
+
+    it('the owner switch changes the setting, not the minutes already used', async () => {
+      billing.callMinutesUsed = 342;
+      const res = await http()
+        .patch('/v1/tenants/tenant-a/billing/settings')
+        .set('Authorization', as('owner'))
+        .send({ overageEnabled: false })
+        .expect(200);
+      expect(res.body.subscription.overage).toMatchObject({
+        available: true,
+        enabled: false,
+        minutePriceMinor: 2500,
+      });
+      expect(res.body.usage.callMinutes).toMatchObject({
+        used: 342,
+        overageMinutes: 42,
+      });
+    });
+
+    it('a price for minutes alone (an override on Free) makes the switch available; without a price it stays 409', async () => {
+      setup({
+        planCode: 'free',
+        interval: 'none',
+        currentPeriodEnd: null,
+        entitlementsOverride: { overageMinuteMinor: 2000 },
+      });
+      const ok = await http()
+        .patch('/v1/tenants/tenant-a/billing/settings')
+        .set('Authorization', as('owner'))
+        .send({ overageEnabled: false })
+        .expect(200);
+      expect(ok.body.subscription.overage).toMatchObject({
+        available: true,
+        enabled: false,
+        priceMinor: null,
+        minutePriceMinor: 2000,
+      });
+      setup({ planCode: 'free', interval: 'none', currentPeriodEnd: null });
+      await http()
+        .patch('/v1/tenants/tenant-a/billing/settings')
+        .set('Authorization', as('owner'))
+        .send({ overageEnabled: false })
+        .expect(409);
+    });
+
+    it('an agent cannot read the minutes (billing is owner and admin), another tenant gets 403 TENANT_MISMATCH', async () => {
+      expect((await billingOf('agent').expect(403)).body.code).toBe(
+        'INSUFFICIENT_ROLE',
+      );
+      expect((await billingOf('owner', 'tenant-b').expect(403)).body.code).toBe(
+        'TENANT_MISMATCH',
+      );
+    });
+
+    it('the platform admin view carries the same figures', async () => {
+      billing.callMinutesUsed = 310;
+      const res = await http()
+        .get('/v1/admin/tenants/tenant-a/subscription')
+        .set('Authorization', asAdmin())
+        .expect(200);
+      expect(res.body.usage.callMinutes).toMatchObject({
+        included: 300,
+        used: 310,
+        overageMinutes: 10,
+        overageAmountMinor: 25_000,
+      });
+    });
+
+    it('reads the minutes of this tenant only (the usage query is scoped to the token tenant)', async () => {
+      await billingOf().expect(200);
+      const calls = prisma.usageDaily.aggregate.mock.calls.map((c) => c[0]);
+      const minuteCall = calls.find((c) => c._sum.callMinutes);
+      expect(minuteCall.where.tenantId).toBe('tenant-a');
     });
   });
 });

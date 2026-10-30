@@ -158,7 +158,7 @@ async function main() {
   );
 
   step(
-    '5. Engine failure (/fail) and a model that never answers (/slow, waits ~5 s)',
+    '5. Engine failure (/fail) and a model that never answers (/slow, waits for ENGINE_FIRST_TOKEN_TIMEOUT_MS, 10 s by default)',
   );
   const second = (await start(visitor(2))).json;
   const failing = await say(second.token, '/fail');

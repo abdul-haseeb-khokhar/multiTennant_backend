@@ -45,6 +45,19 @@ export const HANDLED_EVENT_TYPES = [
 ] as const;
 
 /**
+ * Voice-first event types the engine reports (M2.4, L4) that no phase handles yet: a request was
+ * saved or changed (`record.submitted`, `record.updated`: Phase 5B) and a call ended
+ * (`usage.call_minutes`: Phase 5E). They are ACKNOWLEDGED (200 `ignored`) after the usual tenant
+ * check, and not written to the inbox, so that once the phase that handles them exists a re-delivery
+ * of the engine outbox is still processed instead of being answered `duplicate`.
+ */
+export const PENDING_EVENT_TYPES = [
+  'record.submitted',
+  'record.updated',
+  'usage.call_minutes',
+] as const;
+
+/**
  * Applies the events the AI engine pushes (D5): usage into `usage_daily`, notifications for the
  * team, and live messages to the dashboard and the customer's widget. It is the single code path
  * for both the real engine (`POST /internal/events`, after the signature check) and the mock
@@ -84,6 +97,16 @@ export class EngineEventsService {
         ErrorCode.TENANT_NOT_FOUND,
         'Unknown tenant',
       );
+    }
+
+    if ((PENDING_EVENT_TYPES as readonly string[]).includes(event.type)) {
+      // Type and tenant only: never the data (a request summary may hold a caller's words).
+      this.logger.log({
+        message: 'Acknowledged an engine event that is not handled yet',
+        eventType: event.type,
+        tenantId: event.tenantId,
+      });
+      return { status: 'ignored' };
     }
 
     const effects: Effects = {

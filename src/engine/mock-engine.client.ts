@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { randomInt, randomUUID } from 'node:crypto';
 import { EngineClient } from './engine-client';
 import {
   CONVERSATION_STATUSES,
@@ -35,7 +35,7 @@ export interface MockEngineOptions {
 
 export const DEFAULT_MOCK_OPTIONS: MockEngineOptions = {
   tokenDelayMs: 25,
-  firstTokenTimeoutMs: 5000,
+  firstTokenTimeoutMs: 10_000,
   totalTimeoutMs: 30_000,
 };
 
@@ -52,9 +52,63 @@ export const MOCK_COMMANDS = {
   SLOW: '/slow',
   /** The engine starts answering, then reports an error mid-stream. */
   BROKEN_STREAM: '/broken',
-  /** The AI proposes an action that needs approval: the engine emits `action.proposed` (E4). */
+  /** The AI proposes an action that needs approval: the engine emits `action.proposed` (E4). UNUSED by the product since L3; kept for the receiver tests. */
   PROPOSE_ACTION: '/action',
+  /**
+   * Simulates one finished phone call (voice-first, L1): the engine saves a request with a
+   * reference and reports the call minutes (`record.submitted`, `usage.call_minutes`). The
+   * backend acknowledges these events until Phases 5B and 5E handle them.
+   */
+  CALL: '/call',
+  /** Simulates the engine changing the details of the latest saved request (`record.updated`). */
+  CALL_UPDATE: '/call-update',
 } as const;
+
+/** Request types the engine saves for a caller (L4): an appointment or a call-back. */
+export type MockRecordType = 'appointment' | 'callback';
+export type MockRecordStatus = 'requested' | 'confirmed' | 'done' | 'cancelled';
+
+/**
+ * A request as the mock engine keeps it (the real engine owns the table; the backend's copy and
+ * the staff workflow arrive in Phase 5B). `reference` is unique per tenant, like `AP-4K7Q2`.
+ */
+export interface MockRecord {
+  id: string;
+  tenantId: string;
+  reference: string;
+  type: MockRecordType;
+  status: MockRecordStatus;
+  conversationId: string;
+  endCustomerId: string;
+  summary: string;
+  /** The business wall-clock time as a string, on purpose (no zone maths in the engine). */
+  scheduledLocal: string | null;
+  /** How many times the engine changed the details after saving. */
+  revision: number;
+  createdAt: string;
+}
+
+export interface MockCallOptions {
+  type?: MockRecordType;
+  /** Length of the call; the usage event reports seconds (default 185 = 3 minutes 5 seconds). */
+  seconds?: number;
+  /** The caller; default a new random id (the backend creates the end customer from the number in Phase 5D). */
+  endCustomerId?: string;
+  summary?: string;
+  scheduledLocal?: string | null;
+}
+
+export interface MockCallResult {
+  conversationId: string;
+  endCustomerId: string;
+  recordId: string;
+  reference: string;
+  type: MockRecordType;
+  seconds: number;
+}
+
+/** Letters and digits without look-alikes (no 0/O, 1/I/L), so a reference can be read out on the phone. */
+const REFERENCE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 
 /** The system lines (`contentKey`, keys of the `widget` namespace) the mock engine writes. */
 export const MOCK_SYSTEM_KEYS = {
@@ -104,6 +158,12 @@ const HANDOFF_REPLY =
   'I will bring in a colleague who can help you with this. Please stay in the chat.';
 const ACTION_REPLY =
   'I have asked a colleague to approve a refund for you. You will hear from us soon.';
+const callReply = (reference: string) =>
+  `Thank you for calling. I saved your request ${reference}. A colleague will confirm it and get back to you.`;
+const callUpdateReply = (reference: string) =>
+  `I updated the details of your request ${reference}. A colleague will confirm it.`;
+const NO_CALL_REPLY =
+  'There is no saved request to update yet. Send /call first to simulate a call.';
 
 /**
  * An in-process stand-in for the AI engine that behaves like the contract in
@@ -123,6 +183,7 @@ const ACTION_REPLY =
  */
 export class MockEngineClient extends EngineClient {
   private readonly conversations = new Map<string, StoredConversation>();
+  private readonly records = new Map<string, MockRecord>();
   private readonly idempotent = new Map<string, unknown>();
   private down = false;
   private sink?: EngineEventSink;
@@ -161,6 +222,7 @@ export class MockEngineClient extends EngineClient {
 
   reset() {
     this.conversations.clear();
+    this.records.clear();
     this.idempotent.clear();
     this.emitted.length = 0;
     this.down = false;
@@ -188,6 +250,140 @@ export class MockEngineClient extends EngineClient {
     return this.emitted.filter(
       (e) => e.tenantId === tenantId && e.type === type,
     );
+  }
+
+  /** The requests the mock holds for a tenant, oldest first (assertions in tests, and what the frontend prototype lists). */
+  recordsOf(tenantId: string): MockRecord[] {
+    return [...this.records.values()]
+      .filter((r) => r.tenantId === tenantId)
+      .map(clone);
+  }
+
+  /** One request by its reference, for that tenant only (another tenant reference does not exist for you). */
+  inspectRecord(tenantId: string, reference: string): MockRecord | null {
+    const found = this.records.get(key(tenantId, reference));
+    return found ? clone(found) : null;
+  }
+
+  /**
+   * Simulates one finished phone call of this tenant, the way the real engine will report it: a
+   * voice conversation, a saved request with a reference (`record.submitted`) and the call length
+   * (`usage.call_minutes`, in seconds). Needs no chat session; tests and the frontend prototype
+   * call it directly or send `/call` in a mock chat.
+   */
+  simulateCall(
+    tenantId: string,
+    options: MockCallOptions = {},
+  ): MockCallResult {
+    const type = options.type ?? 'appointment';
+    const seconds = Math.max(0, Math.trunc(options.seconds ?? 185));
+    const endCustomerId = options.endCustomerId ?? randomUUID();
+    const now = new Date().toISOString();
+    const conversation: EngineConversation = {
+      id: randomUUID(),
+      channel: 'voice',
+      endCustomerId,
+      status: 'active',
+      escalationReason: null,
+      createdAt: now,
+      lastMessageAt: now,
+      assignedUserId: null,
+      escalatedAt: null,
+      summary: null,
+      resolvedAt: null,
+      resolvedBy: null,
+    };
+    this.conversations.set(key(tenantId, conversation.id), {
+      tenantId,
+      conversation,
+      messages: [],
+    });
+    this.emit(tenantId, 'conversation.created', {
+      conversationId: conversation.id,
+      endCustomerId,
+      channel: 'voice',
+    });
+    const record: MockRecord = {
+      id: randomUUID(),
+      tenantId,
+      reference: this.newReference(tenantId, type),
+      type,
+      status: 'requested',
+      conversationId: conversation.id,
+      endCustomerId,
+      summary:
+        options.summary ??
+        (type === 'appointment'
+          ? 'The caller asked for an appointment.'
+          : 'The caller asked to be called back.'),
+      scheduledLocal:
+        options.scheduledLocal === undefined
+          ? type === 'appointment'
+            ? '2026-11-03 15:30'
+            : null
+          : options.scheduledLocal,
+      revision: 0,
+      createdAt: now,
+    };
+    this.records.set(key(tenantId, record.reference), record);
+    this.emit(tenantId, 'record.submitted', {
+      recordId: record.id,
+      reference: record.reference,
+      type: record.type,
+      conversationId: conversation.id,
+      endCustomerId,
+      channel: 'voice',
+    });
+    this.emit(tenantId, 'usage.call_minutes', {
+      conversationId: conversation.id,
+      seconds,
+      channel: 'voice',
+    });
+    // The call is over: closed by the AI, without the chat events of a resolution.
+    conversation.status = 'resolved';
+    conversation.resolvedAt = new Date().toISOString();
+    conversation.resolvedBy = 'ai';
+    return {
+      conversationId: conversation.id,
+      endCustomerId,
+      recordId: record.id,
+      reference: record.reference,
+      type,
+      seconds,
+    };
+  }
+
+  /**
+   * Simulates the engine changing the details of a saved request (`record.updated`). Like the real
+   * engine it may do so only while the request is `requested`; afterwards the request is locked
+   * and this answers `false` without emitting anything (the real route answers 409 `locked`).
+   */
+  simulateRequestUpdate(
+    tenantId: string,
+    reference: string,
+    change: { summary?: string; scheduledLocal?: string | null } = {},
+  ): boolean {
+    const record = this.records.get(key(tenantId, reference));
+    if (!record || record.status !== 'requested') return false;
+    record.revision += 1;
+    if (change.summary !== undefined) record.summary = change.summary;
+    if (change.scheduledLocal !== undefined) {
+      record.scheduledLocal = change.scheduledLocal;
+    }
+    this.emit(tenantId, 'record.updated', {
+      recordId: record.id,
+      reference: record.reference,
+      type: record.type,
+      conversationId: record.conversationId,
+      revision: record.revision,
+    });
+    return true;
+  }
+
+  /** Test control: a person confirmed (or otherwise moved) the request on the backend side; the engine may no longer change it. */
+  lockRecord(tenantId: string, reference: string, status: MockRecordStatus) {
+    const record = this.records.get(key(tenantId, reference));
+    if (record) record.status = status;
   }
 
   /** Simulates a staff member replying: assigns them and stores an `author_type=human` message. */
@@ -553,14 +749,32 @@ export class MockEngineClient extends EngineClient {
     }
 
     const proposeAction = text.startsWith(MOCK_COMMANDS.PROPOSE_ACTION);
+    // Longest command first: "/call-update" also starts with "/call".
+    const callUpdate = text.startsWith(MOCK_COMMANDS.CALL_UPDATE);
+    const callStart = !callUpdate && text.startsWith(MOCK_COMMANDS.CALL);
     const handoff =
       text.startsWith(MOCK_COMMANDS.ESCALATE) || HUMAN_REQUEST.test(text);
-    result.replyText = handoff
-      ? HANDOFF_REPLY
-      : proposeAction
-        ? ACTION_REPLY
-        : (CANNED.find(([pattern]) => pattern.test(text))?.[1] ??
-          GENERIC_REPLY);
+    let callText: string | null = null;
+    if (callStart) {
+      callText = callReply(this.simulateCall(ctx.tenantId).reference);
+    } else if (callUpdate) {
+      const latest = this.recordsOf(ctx.tenantId).at(-1);
+      callText =
+        latest &&
+        this.simulateRequestUpdate(ctx.tenantId, latest.reference, {
+          summary: 'The caller changed the details of the request.',
+        })
+          ? callUpdateReply(latest.reference)
+          : NO_CALL_REPLY;
+    }
+    result.replyText =
+      callText ??
+      (handoff
+        ? HANDOFF_REPLY
+        : proposeAction
+          ? ACTION_REPLY
+          : (CANNED.find(([pattern]) => pattern.test(text))?.[1] ??
+            GENERIC_REPLY));
     const reply = this.addMessage(stored, {
       authorType: 'ai',
       content: result.replyText,
@@ -643,6 +857,19 @@ export class MockEngineClient extends EngineClient {
       conversationStatus: result.status,
       aiReply: result.replyId !== null,
     };
+  }
+
+  /** A reference like AP-4K7Q2 that no request of this tenant has yet. */
+  private newReference(tenantId: string, type: MockRecordType): string {
+    const prefix = type === 'appointment' ? 'AP' : 'CB';
+    for (;;) {
+      let code = '';
+      for (let i = 0; i < 5; i += 1) {
+        code += REFERENCE_ALPHABET[randomInt(REFERENCE_ALPHABET.length)];
+      }
+      const reference = `${prefix}-${code}`;
+      if (!this.records.has(key(tenantId, reference))) return reference;
+    }
   }
 
   private assertUp() {

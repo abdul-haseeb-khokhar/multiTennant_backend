@@ -313,12 +313,12 @@ describe('BillingRemindersService', () => {
         currentPeriodStart: new Date('2026-10-01T00:00:00.000Z'),
         entitlements: { conversationPeriod: 'month' },
       });
-      entitlements.check.mockResolvedValue({
-        allowed: true,
-        planCode: 'pro',
-        limit,
-        used,
-      });
+      // Only the conversation allowance is under test here: call minutes are unlimited.
+      entitlements.check.mockImplementation(async (_tenant, key) =>
+        key === 'callMinutes'
+          ? { allowed: true, planCode: 'pro', limit: null, used: null }
+          : { allowed: true, planCode: 'pro', limit, used },
+      );
     };
 
     it('re-checks only tenants whose usage changed in the last hours, with a fresh read and no extra conversation', async () => {

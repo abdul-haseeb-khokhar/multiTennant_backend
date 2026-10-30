@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse } from 'yaml';
+import { PENDING_EVENT_TYPES } from '../events/engine-events.service';
 import { CONVERSATION_STATUSES, ESCALATION_REASONS } from './engine.types';
 
 interface Operation {
@@ -40,6 +41,29 @@ const events = parse(
 ) as {
   paths: Record<string, unknown>;
   components: { schemas: { Events: { properties: Record<string, unknown> } } };
+};
+
+const backendInternal = parse(
+  readFileSync(
+    join(
+      __dirname,
+      '..',
+      '..',
+      'docs',
+      'contracts',
+      'backend-internal.openapi.yaml',
+    ),
+    'utf8',
+  ),
+) as {
+  security: Array<Record<string, unknown>>;
+  paths: Record<
+    string,
+    Record<string, { summary: string; parameters?: Array<{ $ref?: string }> }>
+  >;
+  components: {
+    schemas: Record<string, { enum?: Array<string | null> }>;
+  };
 };
 
 describe('docs/contracts/engine-internal.openapi.yaml', () => {
@@ -118,6 +142,105 @@ describe('docs/contracts/engine-internal.openapi.yaml', () => {
   });
 });
 
+describe('docs/contracts/engine-internal.openapi.yaml after Phase 5A (what Abdullah agreed)', () => {
+  const message = (
+    contract as unknown as {
+      components: { schemas: { Message: { properties: object } } };
+    }
+  ).components.schemas.Message.properties;
+
+  it('messages carry content_key, provider, model, tokens and latency (M1)', () => {
+    expect(Object.keys(message)).toEqual(
+      expect.arrayContaining([
+        'contentKey',
+        'provider',
+        'model',
+        'tokensIn',
+        'tokensOut',
+        'latencyMs',
+      ]),
+    );
+  });
+
+  it('says the first-token timeout is 10 seconds and the claim retry answers 200', () => {
+    const text = readFileSync(
+      join(
+        __dirname,
+        '..',
+        '..',
+        'docs',
+        'contracts',
+        'engine-internal.openapi.yaml',
+      ),
+      'utf8',
+    );
+    expect(text).toContain('10 seconds');
+    expect(text).not.toMatch(/allows 5 seconds/);
+    expect(text).toMatch(
+      /answers 200 with the same conversation, not 409 \(agreed/,
+    );
+  });
+});
+
+describe('docs/contracts/backend-internal.openapi.yaml (DRAFT, nothing implemented)', () => {
+  it('describes exactly the routes planned for Phases 5B and 5D', () => {
+    expect(Object.keys(backendInternal.paths).sort()).toEqual([
+      '/internal/numbers/{e164}',
+      '/internal/tenants/{tenantId}/customers/by-phone',
+      '/internal/tenants/{tenantId}/requests',
+      '/internal/tenants/{tenantId}/requests/{reference}',
+      '/internal/tenants/{tenantId}/requests/{reference}/withdraw',
+      '/internal/tenants/{tenantId}/status',
+    ]);
+  });
+
+  it('marks every operation as a draft, so nobody mistakes it for a built route', () => {
+    for (const [path, methods] of Object.entries(backendInternal.paths)) {
+      for (const operation of Object.values(methods)) {
+        expect([path, operation.summary]).toEqual([
+          path,
+          expect.stringContaining('[DRAFT, not implemented]'),
+        ]);
+      }
+    }
+  });
+
+  it('is behind the service token and none of these routes exists in the backend yet', () => {
+    expect(backendInternal.security).toEqual([{ internalToken: [] }]);
+    // The built routes outside /v1 are the event receiver and health only (CLAUDE.md rule 12).
+    const builtInternal = ['/internal/events'];
+    for (const path of Object.keys(backendInternal.paths)) {
+      expect(builtInternal).not.toContain(path);
+    }
+  });
+
+  it('answers the status check with the reasons Abdullah named', () => {
+    expect(backendInternal.components.schemas.TenantStatus).toBeDefined();
+    const reasons = (
+      backendInternal.components.schemas as unknown as {
+        TenantStatus: {
+          properties: { reason: { enum: Array<string | null> } };
+        };
+      }
+    ).TenantStatus.properties.reason.enum;
+    expect(reasons).toEqual([
+      'suspended',
+      'unpaid',
+      'quota_exceeded',
+      'unknown_tenant',
+      null,
+    ]);
+  });
+
+  it('puts the tenant in the path of every tenant route (the engine states it, the backend checks it)', () => {
+    for (const path of Object.keys(backendInternal.paths)) {
+      if (path.startsWith('/internal/tenants/')) {
+        expect(path).toContain('{tenantId}');
+      }
+    }
+  });
+});
+
 describe('docs/contracts/backend-events.openapi.yaml', () => {
   it('describes the one receiver route, outside /v1', () => {
     expect(Object.keys(events.paths)).toEqual(['/internal/events']);
@@ -136,5 +259,24 @@ describe('docs/contracts/backend-events.openapi.yaml', () => {
         'action.proposed',
       ]),
     );
+  });
+
+  it('documents the voice-first events that are acknowledged until Phases 5B and 5E', () => {
+    const types = Object.keys(events.components.schemas.Events.properties);
+    expect(types).toEqual(
+      expect.arrayContaining([
+        'record.submitted',
+        'record.updated',
+        'usage.call_minutes',
+      ]),
+    );
+  });
+
+  it('lists exactly the types the receiver acknowledges without handling', () => {
+    expect([...PENDING_EVENT_TYPES].sort()).toEqual([
+      'record.submitted',
+      'record.updated',
+      'usage.call_minutes',
+    ]);
   });
 });
