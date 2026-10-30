@@ -111,6 +111,9 @@ describe('Account decisions (real database, Phase 3C)', () => {
     app = moduleRef.createNestApplication({ logger: false, rawBody: true });
     configureApp(app);
     await app.init();
+    // Listen once: supertest starts a server per request on one that is not listening, and the ten
+    // parallel selections below then close it under each other (read ECONNRESET). The other DB specs do the same.
+    await app.listen(0);
     prisma = app.get(PrismaService);
   });
 
