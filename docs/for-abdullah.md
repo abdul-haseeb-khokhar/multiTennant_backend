@@ -193,3 +193,38 @@ After reading your repository and your two answer files, Abdul decided how agent
 | Q29 | | |
 | Q30 | | |
 | Q31 | | |
+
+---
+
+## 9. Addendum 2026-10-29: after reading your repository again
+
+I read your repository up to 2026-10-27 (agents, knowledge per agent, the number lookup, the Twilio phone path, orders, greeting and call ending). Thank you: it is much further than our plan assumed. Abdul decided **engine first**: your engine answers the Twilio webhook, verifies the signature and signs the one-minute call ticket (as you built it); we drop our own webhook. We own the numbers table and tell you which business and agent a number rings. Everything below is a PROPOSAL for you to correct; our side of the contract is built against a mock (see the three files in `docs/contracts/`).
+
+**Our side, built so far:** the agent settings pull `GET /internal/tenants/{tenantId}/agents/{agentId}/config` (versioned, ETag), the status check `GET /internal/tenants/{tenantId}/status?agentId=`, the requests routes (`POST /internal/tenants/{tenantId}/requests`, `PATCH …/requests/{reference}`, `POST …/requests/{reference}/withdraw`, `PUT …/customers/by-phone`) and the receivers for `record.submitted` / `record.updated`. **Built since (Phase 5B-3, 2026-10-29):** the agent list `GET /internal/tenants/{tenantId}/agents` (`{agents:[{agentId, name, status, isDefault}]}`, default first), the `order` request type, a settings validator that keeps keys it does not know, and a field-by-field comparison of every shape you send with what we accept: **please read the table "What Abdullah must adapt to" in `docs/contracts/README.md`** (it lists, per field, what is OK, what we changed for you and what you adapt). Coming from us: the number lookup `GET /internal/numbers/{e164}` (answer as in your B11; the contract is written, the route comes in Phase 5D), then call-minute usage.
+
+**Where we differ, and what we ask of you:**
+- Auth on every route we expose: `Authorization: Bearer <INTERNAL_API_TOKEN>` (not `x-internal-key`); errors `{statusCode, code, message}` (not `{error}`); the tenant is in the path; requests are addressed by their reference.
+- Agent status: ours is `active | disabled` (yours `active | archived`). Our owner may disable even the default agent (never delete it): what should a call to a disabled default agent do? Our status check answers `agent_disabled`.
+- Status reasons: we add `agent_disabled`, `unknown_agent` and an `overage` flag; we propose you may cache the answer for at most 10 seconds (your note says about 60).
+- Settings: the field list stays yours; **we now keep unknown top-level keys (and unknown keys inside `escalation`) verbatim instead of refusing them**, and validate only structure with your own limits for `greeting`, `recordCalls`, `autoEndCalls`, `endCallDelaySeconds`, `profileSummary`, `profileSummarySources` and `escalation.announce`. Please offer your validation as a route (`POST /api/agent-config/validate`) that we call on save.
+- Requests: we accept `order` as a third type. The reference is drawn by you; on a clash we answer 409 `REQUEST_REFERENCE_TAKEN`; draw another and repeat with the same `submissionKey`. The routes are the source of truth; the events only confirm.
+
+**Answers to your open questions (proposals):**
+1. Which routes first: the config pull, the status check, the requests and customers, the number lookup; then usage events.
+2. Twilio: the platform has one account; the backend buys and releases numbers and keeps the account keys; the engine is given the auth token and the account id it needs for the webhook signature and the transfers. Tell us if you want a subaccount per business.
+3. Who sends the confirmation SMS or WhatsApp: the backend, on its own `confirmed` transition (Phase 6).
+4. Events carry ids and references only, not customer details.
+5. Usage: `usage.call_minutes {callId, conversationId, agentId, seconds}` through the signed outbox; the backend rounds each call up to whole minutes.
+6. Call recordings: not decided; the backend would store them. Not before the legal review (UK and Ireland).
+
+| Q | Answer (Agree / Change: … / Cannot) | Note |
+|---|---|---|
+| Q32 Engine first and the number lookup | | |
+| Q33 Bearer auth, our error shape, tenant in the path | | |
+| Q34 Disabled versus archived, and the default agent | | |
+| Q35 Unknown settings keys kept, validation route | | |
+| Q36 Route order and the usage event | | |
+| Q37 One Twilio account, who holds which key | | |
+| Q38 A caller with no number (an email-only request): we upsert the customer with no `phone`, a new customer each time; `email` is not stored on the customer (it stays in `data`). OK? | | |
+| Q39 Settings details: your `uiLocale` is per tenant (on the default agent), ours is stored per agent document; who bumps `collectVersion` and who writes `profileSummarySources` once the dashboard saves through us (your note says never from a client)? | | |
+| Q40 The dashboard test call: we call your `POST /api/voice/session?agentId=` (one-minute browser ticket). Will you accept `Authorization: Bearer` plus `X-Tenant-Id` on it instead of `x-internal-key` and `?tenantId=`? And `whatsapp` as a request channel: later, with a migration on our side, when you send it | | |

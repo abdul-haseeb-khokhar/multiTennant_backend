@@ -356,6 +356,42 @@ describe('Phase 5B-2: tenant status check, requests and the staff workflow (e2e,
       });
     });
 
+    it('a caller with no number (an email-only request) is a customer of their own: 201 every time, shown without a phone', async () => {
+      const first = await put('tenant-a', {
+        name: 'Sara',
+        email: 'ignored@example.test',
+      }).expect(201);
+      const second = await put('tenant-a', { name: 'Sara' }).expect(201);
+      expect(second.body.endCustomerId).not.toBe(first.body.endCustomerId);
+      expect(f.customersOf('tenant-a')).toHaveLength(2);
+      expect(f.customersOf('tenant-a')[0].externalId).toMatch(/^call_/);
+      // the email is not stored on the customer (it stays in the request's own data)
+      expect(JSON.stringify(f.customersOf('tenant-a'))).not.toContain(
+        'ignored@example.test',
+      );
+      const saved = await internal(
+        'post',
+        '/internal/tenants/tenant-a/requests',
+      )
+        .send({
+          reference: 'CB-NOPH1',
+          type: 'callback',
+          submissionKey: 'no-phone',
+          endCustomerId: first.body.endCustomerId,
+          summary: 'Sara asks for a call-back by email',
+          data: { name: 'Sara', email: 'ignored@example.test' },
+        })
+        .expect(201);
+      const detail = await http()
+        .get(staff('tenant-a', `/${saved.body.id}`))
+        .set('Authorization', as('agent-a'))
+        .expect(200);
+      expect(detail.body.customer).toMatchObject({
+        name: 'Sara',
+        phone: null,
+      });
+    });
+
     it('fills in a missing name and language but never overwrites what is there', async () => {
       await put('tenant-a', { phone: PHONE }).expect(201);
       await put('tenant-a', {
@@ -597,6 +633,149 @@ describe('Phase 5B-2: tenant status check, requests and the staff workflow (e2e,
       ).expect(400);
       expect(res.body.statusCode).toBe(400);
       expect(f.requestsOf('tenant-a')).toHaveLength(0);
+    });
+
+    // Written the way the engine's hand-off shows a request (docs/handoff-to-backend.md B4, read
+    // 2026-10-29): reference prefixes AP-, CB-, OR- from its alphabet, `data` per type, `scheduledLocal`
+    // a wall-clock string. Prices and the total are NOT in an order.
+    describe('the three request types as the engine hand-off shows them', () => {
+      const engineBody = (type: string) => {
+        const base = {
+          type,
+          submissionKey: `engine-${type}`,
+          channel: 'voice',
+          language: 'ur',
+          timezone: 'Asia/Karachi',
+          configVersion: 7,
+          conversationId: 'conv-9',
+          agentId: null,
+          scheduledLocal: null as string | null,
+        };
+        switch (type) {
+          case 'appointment':
+            return {
+              ...base,
+              reference: 'AP-4K7Q2',
+              summary:
+                'Ahmed · Root canal · Thursday, 22 October 2026 at 5:00 pm',
+              scheduledLocal: '2026-10-22T17:00',
+              data: {
+                name: 'Ahmed',
+                phone: '+923001234567',
+                service: 'root_canal',
+                datetime: '2026-10-22T17:00',
+              },
+            };
+          case 'callback':
+            return {
+              ...base,
+              reference: 'CB-MN3P9',
+              summary: 'Sara asks for a call-back',
+              data: { name: 'Sara', phone: '+923007654321', notes: 'evenings' },
+            };
+          default:
+            return {
+              ...base,
+              reference: 'OR-7HW2X',
+              summary: 'Ahmed · 2 × Chicken Biryani · delivery',
+              data: {
+                name: 'Ahmed',
+                phone: '+923001234567',
+                order_items: [
+                  { id: 'chicken_biryani', name: 'Chicken Biryani', qty: 2 },
+                ],
+                order_type: 'delivery',
+                address: 'House 5, Street 2, Lahore',
+                notes: 'no onions',
+              },
+            };
+        }
+      };
+
+      it.each(['appointment', 'callback', 'order'])(
+        'saves a %s (201) with a null agent, the engine alphabet and its own data document',
+        async (type) => {
+          const endCustomerId = await customer();
+          const payload = engineBody(type);
+          const res = await create('tenant-a', {
+            ...payload,
+            endCustomerId,
+          }).expect(201);
+          expect(res.body).toMatchObject({
+            agentId: 'ag-a1',
+            type,
+            reference: payload.reference,
+            status: 'requested',
+            created: true,
+          });
+          expect(f.requestsOf('tenant-a')[0]).toMatchObject({
+            type,
+            reference: payload.reference,
+            language: 'ur',
+            configVersion: 7,
+            scheduledLocal: payload.scheduledLocal,
+            details: payload.data,
+          });
+          // the same call again is the same request
+          const again = await create('tenant-a', {
+            ...payload,
+            endCustomerId,
+          }).expect(200);
+          expect(again.body).toMatchObject({ id: res.body.id, created: false });
+        },
+      );
+
+      it('tells the team about an order with requestType order', async () => {
+        const endCustomerId = await customer();
+        await create('tenant-a', {
+          ...engineBody('order'),
+          endCustomerId,
+        }).expect(201);
+        expect(f.notificationsOf('owner-a')[0]).toMatchObject({
+          type: 'request.submitted',
+          params: { requestType: 'order', reference: 'OR-7HW2X' },
+        });
+        expect(JSON.stringify(f.notificationsOf('owner-a'))).not.toContain(
+          'chicken_biryani',
+        );
+      });
+
+      it('the engine may correct the items of an order while it is requested, and the workflow is the same as for any request', async () => {
+        const endCustomerId = await customer();
+        const payload = engineBody('order');
+        const saved = await create('tenant-a', {
+          ...payload,
+          endCustomerId,
+        }).expect(201);
+        await internal(
+          'patch',
+          `/internal/tenants/tenant-a/requests/${payload.reference}`,
+        )
+          .send({
+            summary: 'Ahmed · 3 × Chicken Biryani · delivery',
+            data: {
+              ...payload.data,
+              order_items: [
+                { id: 'chicken_biryani', name: 'Chicken Biryani', qty: 3 },
+              ],
+            },
+          })
+          .expect(200);
+        const staffMove = (status: string) =>
+          http()
+            .patch(staff('tenant-a', `/${saved.body.id}/status`))
+            .set('Authorization', as('agent-a'))
+            .send({ status });
+        await staffMove('confirmed').expect(200);
+        // once a person confirmed it, the engine is locked out, exactly as for an appointment
+        await internal(
+          'patch',
+          `/internal/tenants/tenant-a/requests/${payload.reference}`,
+        )
+          .send({ summary: 'too late' })
+          .expect(409);
+        await staffMove('done').expect(200);
+      });
     });
 
     it('creates one notification per ACTIVE staff member (none for a disabled user, none for another tenant), without any caller data', async () => {
@@ -887,6 +1066,30 @@ describe('Phase 5B-2: tenant status check, requests and the staff workflow (e2e,
         const byAgent = await get('?agentId=ag-a2').expect(200);
         expect(byAgent.body.data.map((r: any) => r.id)).toEqual([second]);
         await get('?status=pending').expect(400);
+      });
+
+      it('filters and searches orders: type=order, the OR- reference, and the detail carries the engine document', async () => {
+        const order = await save('tenant-a', '+923009998877', 'Bilal Raza', {
+          reference: 'OR-7HW2X',
+          submissionKey: 'k-order',
+          type: 'order',
+          data: {
+            order_items: [{ id: 'chicken_biryani', name: 'Biryani', qty: 2 }],
+            order_type: 'pickup',
+          },
+        });
+        const byType = await get('?type=order').expect(200);
+        expect(byType.body.data.map((r: any) => r.id)).toEqual([order]);
+        expect(byType.body.data[0]).toMatchObject({ type: 'order' });
+        expect(byType.body.data[0]).not.toHaveProperty('details');
+        const byReference = await get('?q=or-7hw').expect(200);
+        expect(byReference.body.data.map((r: any) => r.id)).toEqual([order]);
+        const detail = await get(`/${order}`).expect(200);
+        expect(detail.body).toMatchObject({
+          type: 'order',
+          details: { order_type: 'pickup' },
+        });
+        await get('?type=pizza').expect(400);
       });
 
       it('filters by date range', async () => {

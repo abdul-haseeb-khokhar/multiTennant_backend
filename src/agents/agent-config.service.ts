@@ -5,6 +5,15 @@ import { ErrorCode } from '../common/errors/error-codes';
 import { PrismaService } from '../prisma/prisma.service';
 import { AgentSettingsDocument } from './agent-settings.defaults';
 
+/** One agent in the list the engine pulls (his `GET /internal/tenants/{tenantId}/agents`). */
+export interface EngineAgentSummary {
+  agentId: string;
+  name: string;
+  /** `disabled` is the engine's `archived`: it answers no call but is kept. */
+  status: 'active' | 'disabled';
+  isDefault: boolean;
+}
+
 /** What the engine receives when it pulls an agent's settings at the start of a call (L7). */
 export interface PulledAgentConfig {
   tenantId: string;
@@ -66,6 +75,39 @@ export class AgentConfigService {
       config: settings.document as unknown as AgentSettingsDocument,
       etag: etagOf(agentId, settings.version, status),
     };
+  }
+
+  /**
+   * The tenant's agents for the engine's list route (his B2, Phase 5B-3): the default agent first, then
+   * by age. Tenant in the `where`; an unknown tenant is 404 `TENANT_NOT_FOUND` (every tenant has a default
+   * agent, so an empty list can only mean "no such tenant", and the engine is told so instead of being
+   * handed an empty list it might mistake for "no agents yet").
+   */
+  async listForEngine(tenantId: string): Promise<EngineAgentSummary[]> {
+    const rows = await this.prisma.agent.findMany({
+      where: { tenantId },
+      orderBy: [{ isDefault: 'desc' }, { createdAt: 'asc' }, { id: 'asc' }],
+      select: { id: true, name: true, status: true, isDefault: true },
+    });
+    if (rows.length === 0) {
+      const tenant = await this.prisma.tenant.findUnique({
+        where: { id: tenantId },
+        select: { id: true },
+      });
+      if (!tenant) {
+        throw new ApiException(
+          HttpStatus.NOT_FOUND,
+          ErrorCode.TENANT_NOT_FOUND,
+          'Tenant not found',
+        );
+      }
+    }
+    return rows.map((row) => ({
+      agentId: row.id,
+      name: row.name,
+      status: row.status === 'disabled' ? 'disabled' : 'active',
+      isDefault: row.isDefault,
+    }));
   }
 
   /** The tenant's default agent id, or null when the tenant has none (cannot happen after the Phase 5B-1 backfill). */

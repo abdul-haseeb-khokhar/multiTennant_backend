@@ -281,6 +281,78 @@ describe('EngineEventsService', () => {
       );
     });
 
+    it('record.submitted exactly as the engine hand-off shows it (recordType, a null agentId and conversationId) is handled', async () => {
+      await expect(
+        service.ingest(
+          envelope('record.submitted', {
+            recordId: 'r1',
+            recordType: 'order',
+            reference: 'OR-7HW2X',
+            agentId: null,
+            conversationId: null,
+          }),
+        ),
+      ).resolves.toEqual({ status: 'processed' });
+      expect(notifications.create).toHaveBeenCalledTimes(1);
+      expect(published).toHaveLength(1);
+    });
+
+    it('record.updated with detailsChanged and a status is handled (the extra field is ignored)', async () => {
+      await expect(
+        service.ingest(
+          envelope('record.updated', {
+            recordId: 'r1',
+            status: 'requested',
+            detailsChanged: true,
+          }),
+        ),
+      ).resolves.toEqual({ status: 'processed' });
+      expect(published).toHaveLength(1);
+    });
+
+    it('an id that is no request of the tenant (an engine that still sends its own id) falls back to the reference, still under the tenant', async () => {
+      prisma.customerRequest.findFirst
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(row());
+      await service.ingest(
+        envelope('record.submitted', {
+          recordId: 'engine-own-id',
+          reference: 'or-7hw2x',
+        }),
+      );
+      expect(prisma.customerRequest.findFirst).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({
+          where: { tenantId: 'tenant-a', id: 'engine-own-id' },
+        }),
+      );
+      expect(prisma.customerRequest.findFirst).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          where: { tenantId: 'tenant-a', reference: 'OR-7HW2X' },
+        }),
+      );
+      expect(notifications.create).toHaveBeenCalledTimes(1);
+    });
+
+    it('handoff.requested and handoff.unavailable are acknowledged and ignored: no notification, no live message', async () => {
+      for (const type of ['handoff.requested', 'handoff.unavailable']) {
+        await expect(
+          service.ingest(
+            envelope(type, {
+              conversationId: 'c1',
+              agentId: 'ag1',
+              channel: 'voice',
+              reason: 'asked',
+              contactId: null,
+            }),
+          ),
+        ).resolves.toEqual({ status: 'ignored' });
+      }
+      expect(notifications.create).not.toHaveBeenCalled();
+      expect(published).toEqual([]);
+    });
+
     it('record.updated: only a live update with the status, no notification', async () => {
       prisma.customerRequest.findFirst.mockResolvedValue(
         row({ status: 'confirmed' }),

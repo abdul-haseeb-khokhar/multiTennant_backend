@@ -36,6 +36,14 @@ info:
       `limit_reached`; `low_confidence`, `sentiment`, `topic`, `failed_action` only after he
       evaluated them (Q13).
 
+    **Dashboard test call (Phase 5D; engine first, 2026-10-29).** The only call path for Free and
+    Starter tenants. The backend asks the ENGINE for a one-minute single-use browser ticket with his
+    existing route `POST /api/voice/session?tenantId=…&agentId=…` (answer `{ ticket, agentId, line,
+    url, healthUrl, expiresAt }`) and hands it to the browser; the backend signs nothing and shares
+    no ticket secret. That route is one of his OLD ones (`x-internal-key`, `?tenantId=`): converting
+    it to Bearer plus `X-Tenant-Id` is a question for him (docs/contracts/README.md, "What Abdullah
+    must adapt to"). Not built in the backend yet and not described as a path in this file.
+
     **Still proposals** (not answered by him): the staff list and counts, `release` with `force`,
     `resolve` and `human-messages` exactly as written, and the conversation fields
     `assignedUserId`, `escalatedAt`, `summary`, `resolvedAt`, `resolvedBy`. They only matter for

@@ -19,7 +19,7 @@ async function collect(events: AsyncIterable<EngineStreamEvent>) {
 }
 
 const ctx = { tenantId: 'tenant-a' };
-const REFERENCE = /^(AP|CB)-[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{5}$/;
+const REFERENCE = /^(AP|CB|OR)-[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{5}$/;
 
 /** The call-shaped simulation of Phase 5A: a saved request, its update and the call minutes (L1, L4). */
 describe('MockEngineClient: a simulated phone call', () => {
@@ -97,6 +97,18 @@ describe('MockEngineClient: a simulated phone call', () => {
       expect(engine.inspectRecord('tenant-a', call.reference)).toMatchObject({
         type: 'callback',
         scheduledLocal: null,
+      });
+    });
+
+    it('can simulate an order (OR- reference, no time) whose dishes travel in the engine document', async () => {
+      const call = await engine.simulateCall('tenant-a', { type: 'order' });
+      expect(call.reference).toMatch(
+        /^OR-[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{5}$/,
+      );
+      expect(engine.inspectRecord('tenant-a', call.reference)).toMatchObject({
+        type: 'order',
+        scheduledLocal: null,
+        summary: 'The caller ordered two dishes for pickup.',
       });
     });
 
@@ -218,6 +230,14 @@ describe('MockEngineClient: a simulated phone call', () => {
         channel: 'widget',
         endCustomerId: 'ec-1',
       }));
+    });
+
+    it(`${MOCK_COMMANDS.ORDER} simulates a call that saves an order (not a call-back)`, async () => {
+      await collect(engine.sendMessage(ctx, id, { content: '/order' }));
+      const records = engine.recordsOf('tenant-a');
+      expect(records).toHaveLength(1);
+      expect(records[0]).toMatchObject({ type: 'order' });
+      expect(records[0].reference).toMatch(/^OR-/);
     });
 
     it(`${MOCK_COMMANDS.CALL} simulates a call and the reply names the saved reference`, async () => {
@@ -423,6 +443,29 @@ describe('MockEngineClient: a simulated phone call', () => {
         withdrawRequest: jest.fn().mockResolvedValue({ ok: true }),
       };
       engine.setBackend(backend);
+    });
+
+    it('saves an order in the backend with the order in data, and nothing in data for an appointment', async () => {
+      await engine.simulateCall('tenant-a', {
+        agentId: 'ag1',
+        type: 'order',
+        name: 'Ahmed',
+      });
+      await engine.simulateCall('tenant-a', { agentId: 'ag1' });
+      const [order, appointment] = backend.createRequest.mock.calls.map(
+        (call) => call[1] as unknown as Record<string, unknown>,
+      );
+      expect(order).toMatchObject({
+        type: 'order',
+        reference: expect.stringMatching(/^OR-/),
+        data: {
+          name: 'Ahmed',
+          order_type: 'pickup',
+          order_items: [{ id: 'chicken_biryani', qty: 2 }],
+        },
+      });
+      expect(JSON.stringify(order.data)).not.toMatch(/price|total/i);
+      expect(appointment).not.toHaveProperty('data');
     });
 
     it('asks the status check first, then the customer, then saves the request in the backend', async () => {

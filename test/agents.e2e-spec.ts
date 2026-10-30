@@ -1,6 +1,7 @@
 import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { CONFIG_PULLS_PER_MINUTE } from '../src/agents/internal-agent-config.controller';
+import { AGENT_LISTS_PER_MINUTE } from '../src/agents/internal-agent-list.controller';
 import { buildDefaultSettings } from '../src/agents/agent-settings.defaults';
 import { FakeClock } from '../src/billing/clock';
 import { EntitlementsService } from '../src/billing/entitlements/entitlements.service';
@@ -646,8 +647,11 @@ describe('Agents (e2e, L7)', () => {
           'hours.mon[0]:end_before_start',
           'escalation.contacts[0].phone:invalid_phone',
           'escalation.afterMisses:out_of_range',
-          'extra:unknown_field',
         ]),
+      );
+      // an unknown key (`extra`) is not a problem: the engine owns the field list
+      expect(pairs.some((pair: string) => pair.startsWith('extra:'))).toBe(
+        false,
       );
       expect(settings.filter((s) => s.agentId === 'ag-a1')).toHaveLength(1);
     });
@@ -828,6 +832,157 @@ describe('Agents (e2e, L7)', () => {
       expect(limited.headers['retry-after']).toBeDefined();
       await internal('tenant-b', 'ag-b1').expect(200);
     }, 60_000);
+  });
+
+  describe('GET /internal/tenants/:tenantId/agents (the engine list, Phase 5B-3)', () => {
+    const list = (tenantId: string) =>
+      http()
+        .get(`/internal/tenants/${tenantId}/agents`)
+        .set('Authorization', `Bearer ${INTERNAL_TOKEN}`);
+
+    it('is outside /v1 and needs the service token: 401 without or with a wrong one, never staff tokens', async () => {
+      const path = '/internal/tenants/tenant-a/agents';
+      await http().get(path).expect(401);
+      await http().get(path).set('Authorization', 'Bearer wrong').expect(401);
+      await http().get(path).set('Authorization', as('owner')).expect(401);
+      await http()
+        .get(`/v1${path}`)
+        .set('Authorization', `Bearer ${INTERNAL_TOKEN}`)
+        .expect(404);
+    });
+
+    it("answers {agents:[{agentId, name, status, isDefault}]} for the tenant's agents and nothing else (no settings, no other tenant)", async () => {
+      seedAgent('tenant-a', 'ag-a2', {
+        name: 'Branch',
+        status: 'disabled',
+        isDefault: false,
+      });
+      const res = await list('tenant-a').expect(200);
+      expect(res.body).toEqual({
+        agents: [
+          {
+            agentId: 'ag-a1',
+            name: 'Acme Dental',
+            status: 'active',
+            isDefault: true,
+          },
+          {
+            agentId: 'ag-a2',
+            name: 'Branch',
+            status: 'disabled',
+            isDefault: false,
+          },
+        ],
+      });
+      const other = await list('tenant-b').expect(200);
+      expect(other.body.agents.map((a: Row) => a.agentId)).toEqual(['ag-b1']);
+      expect(JSON.stringify(res.body)).not.toMatch(/document|phone|escalation/);
+    });
+
+    it('an unknown tenant is a 404 TENANT_NOT_FOUND, like the other internal routes', async () => {
+      const res = await list('tenant-zzz').expect(404);
+      expect(res.body).toMatchObject({
+        statusCode: 404,
+        code: 'TENANT_NOT_FOUND',
+      });
+    });
+
+    it('is rate limited per tenant (429 with Retry-After), while another tenant is unaffected', async () => {
+      for (let i = 0; i < AGENT_LISTS_PER_MINUTE; i++) {
+        await list('tenant-a').expect(200);
+      }
+      const limited = await list('tenant-a').expect(429);
+      expect(limited.headers['retry-after']).toBeDefined();
+      await list('tenant-b').expect(200);
+    }, 60_000);
+  });
+
+  describe('a settings document written the way the engine hand-off shows it (Phase 5B-3)', () => {
+    const engineFields = {
+      greeting: {
+        en: 'Hello, thanks for calling {business}. How can I help?',
+      },
+      recordCalls: false,
+      autoEndCalls: true,
+      endCallDelaySeconds: 3,
+      profileSummary: 'A dental clinic open on weekdays.',
+      profileSummarySources: [
+        { id: 'ks_1', title: 'About us', hash: '9f86d081884c7d65' },
+      ],
+      collectVersion: 4,
+      futureEngineField: { anything: ['goes', 1] },
+    };
+
+    it('is saved through PUT (new fields, an unknown key, escalation.announce and an unknown escalation key) and handed back unchanged by the config pull', async () => {
+      const escalation = {
+        enabled: true,
+        contacts: [
+          { id: 'c1', role: 'Doctor', name: 'Ayesha', phone: '+923001234567' },
+        ],
+        whenCallerAsks: true,
+        afterMisses: 2,
+        topics: ['emergency'],
+        outsideHours: 'callback',
+        announce: { en: "I'm connecting you to {name}, our {role}." },
+        futureRule: { x: 1 },
+      };
+      const saved = await http()
+        .put(url('/ag-a1/settings'))
+        .set('Authorization', as('owner'))
+        .send({
+          expectedVersion: 1,
+          settings: { ...engineFields, escalation },
+        })
+        .expect(200);
+      expect(saved.body.version).toBe(2);
+      const pulled = await internal('tenant-a', 'ag-a1').expect(200);
+      expect(pulled.body.version).toBe(2);
+      expect(pulled.body.config).toMatchObject({
+        ...engineFields,
+        escalation,
+        businessName: 'Acme Dental',
+      });
+    });
+
+    it('saving exactly the same fields again adds no version', async () => {
+      await http()
+        .put(url('/ag-a1/settings'))
+        .set('Authorization', as('owner'))
+        .send({ expectedVersion: 1, settings: engineFields })
+        .expect(200);
+      const again = await http()
+        .put(url('/ag-a1/settings'))
+        .set('Authorization', as('owner'))
+        .send({ expectedVersion: 2, settings: engineFields })
+        .expect(200);
+      expect(again.body.version).toBe(2);
+      expect(settings.filter((s) => s.agentId === 'ag-a1')).toHaveLength(2);
+    });
+
+    it('a value the engine would also refuse is a 400 AGENT_SETTINGS_INVALID with the field named, and nothing is saved', async () => {
+      const res = await http()
+        .put(url('/ag-a1/settings'))
+        .set('Authorization', as('owner'))
+        .send({
+          expectedVersion: 1,
+          settings: { endCallDelaySeconds: 99, greeting: { fr: 'x' } },
+        })
+        .expect(400);
+      expect(res.body.code).toBe('AGENT_SETTINGS_INVALID');
+      expect(res.body.details).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            field: 'endCallDelaySeconds',
+            code: 'out_of_range',
+          }),
+          expect.objectContaining({
+            field: 'greeting.fr',
+            code: 'unknown_field',
+          }),
+        ]),
+      );
+      expect(settings.filter((s) => s.agentId === 'ag-a1')).toHaveLength(1);
+    });
   });
 
   describe('the mock engine pulls the settings at the start of a call', () => {

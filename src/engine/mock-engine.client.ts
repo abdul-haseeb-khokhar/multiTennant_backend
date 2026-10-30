@@ -64,10 +64,32 @@ export const MOCK_COMMANDS = {
   CALL: '/call',
   /** Simulates the engine changing the details of the latest saved request (`record.updated`). */
   CALL_UPDATE: '/call-update',
+  /** Like `/call`, but the request is an order (Phase 5B-3): the engine saves a request of type `order` with an `OR-` reference and the order in `data`. */
+  ORDER: '/order',
 } as const;
 
-/** Request types the engine saves for a caller (L4): an appointment or a call-back. */
-export type MockRecordType = 'appointment' | 'callback';
+/** Request types the engine saves for a caller (L4): an appointment, a call-back or (since 5B-3) an order. */
+export type MockRecordType = 'appointment' | 'callback' | 'order';
+
+/** The engine's reference prefixes (AP- appointment, CB- call-back, OR- order). */
+const REFERENCE_PREFIX: Record<MockRecordType, string> = {
+  appointment: 'AP',
+  callback: 'CB',
+  order: 'OR',
+};
+
+const DEFAULT_SUMMARY: Record<MockRecordType, string> = {
+  appointment: 'The caller asked for an appointment.',
+  callback: 'The caller asked to be called back.',
+  order: 'The caller ordered two dishes for pickup.',
+};
+
+/** What the engine's `data` holds for an order (its hand-off B4): dishes from the owner's menu, pickup or delivery; no prices. */
+const mockOrderData = (name?: string): Record<string, unknown> => ({
+  ...(name && { name }),
+  order_items: [{ id: 'chicken_biryani', name: 'Chicken Biryani', qty: 2 }],
+  order_type: 'pickup',
+});
 export type MockRecordStatus = 'requested' | 'confirmed' | 'done' | 'cancelled';
 
 /**
@@ -127,6 +149,8 @@ export interface MockCallOptions {
   endCustomerId?: string;
   summary?: string;
   scheduledLocal?: string | null;
+  /** The engine's document of what the agent collected, sent as `data` (an order gets a default one). */
+  data?: Record<string, unknown>;
 }
 
 export interface MockCallResult {
@@ -411,11 +435,7 @@ export class MockEngineClient extends EngineClient {
       status: 'requested',
       conversationId: conversation.id,
       endCustomerId,
-      summary:
-        options.summary ??
-        (type === 'appointment'
-          ? 'The caller asked for an appointment.'
-          : 'The caller asked to be called back.'),
+      summary: options.summary ?? DEFAULT_SUMMARY[type],
       scheduledLocal:
         options.scheduledLocal === undefined
           ? type === 'appointment'
@@ -425,6 +445,8 @@ export class MockEngineClient extends EngineClient {
       revision: 0,
       createdAt: now,
     };
+    const collected =
+      options.data ?? (type === 'order' ? mockOrderData(options.name) : null);
     if (this.backend) {
       // Saved in the backend under a reference the engine draws; a collision (409
       // REQUEST_REFERENCE_TAKEN, in the backend's table) means "draw another one".
@@ -441,6 +463,7 @@ export class MockEngineClient extends EngineClient {
           scheduledLocal: record.scheduledLocal,
           timezone: 'Asia/Karachi',
           ...(pulled && { configVersion: pulled.version }),
+          ...(collected && { data: collected }),
         });
         if (saved.ok) {
           record.id = saved.id;
@@ -927,13 +950,22 @@ export class MockEngineClient extends EngineClient {
     const proposeAction = text.startsWith(MOCK_COMMANDS.PROPOSE_ACTION);
     // Longest command first: "/call-update" also starts with "/call".
     const callUpdate = text.startsWith(MOCK_COMMANDS.CALL_UPDATE);
-    const callStart = !callUpdate && text.startsWith(MOCK_COMMANDS.CALL);
+    const orderStart = text.startsWith(MOCK_COMMANDS.ORDER);
+    const callStart =
+      !callUpdate && !orderStart && text.startsWith(MOCK_COMMANDS.CALL);
     const handoff =
       text.startsWith(MOCK_COMMANDS.ESCALATE) || HUMAN_REQUEST.test(text);
     let callText: string | null = null;
-    if (callStart) {
+    if (callStart || orderStart) {
       try {
-        callText = callReply((await this.simulateCall(ctx.tenantId)).reference);
+        callText = callReply(
+          (
+            await this.simulateCall(
+              ctx.tenantId,
+              orderStart ? { type: 'order' } : {},
+            )
+          ).reference,
+        );
       } catch (error) {
         if (error instanceof MockAgentUnavailableError) {
           callText = AGENT_UNAVAILABLE_REPLY;
@@ -1047,7 +1079,7 @@ export class MockEngineClient extends EngineClient {
 
   /** A reference like AP-4K7Q2 that no request of this tenant has yet. */
   private newReference(tenantId: string, type: MockRecordType): string {
-    const prefix = type === 'appointment' ? 'AP' : 'CB';
+    const prefix = REFERENCE_PREFIX[type];
     for (;;) {
       let code = '';
       for (let i = 0; i < 5; i += 1) {

@@ -43,6 +43,7 @@ export class CreateRequestDto {
   })
   reference: string;
 
+  /** `appointment`, `callback` or `order` (reference prefixes AP-, CB-, OR-). */
   @IsIn(REQUEST_TYPES)
   type: string;
 

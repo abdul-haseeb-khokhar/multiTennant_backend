@@ -6,6 +6,8 @@ Status: **reshaped 2026-10-21; Phase 5A (alignment: call minutes in the plans, m
 
 **Update 2026-10-28:** a tenant now has many agents and many numbers, each number linked to one agent (team-alignment L7, L8, L9). Every block below is **per agent** where it concerns settings, knowledge, requests or call history, the roadmap has a new first step 5B-1 (agents foundation) and phone numbers link to agents (5D). The roadmap is the source of truth for the order.
 
+**Update 2026-10-29:** the engine repository was read again (team-alignment N): the engine now has agents, knowledge per agent, a number lookup and the whole Twilio phone path built. Abdul decided **engine first** for the Twilio webhook (L8 revised): the engine answers the provider and signs the call ticket; the backend owns the numbers table, the lookup route the engine calls, number purchase and release, the status check and the requests. Phase 5D shrinks accordingly and a follow-up Phase 5B-3 (**built 2026-10-29** on branch `phase-5b3-engine-alignment`) aligns our settings validator, request types and agent list with what the engine already sends. Where an earlier paragraph of this file says the backend receives the webhook or signs the ticket, this paragraph wins.
+
 **Decisions of 2026-10-28 (later the same day):** the engine pulls each agent's settings from the backend at call start; the backend receives the Twilio call first; Free and Starter make browser test calls only and real numbers are for Pro and Enterprise; the staff role `agent` is not renamed. The roadmap (Phase 5B to 5F) is the source of truth.
 
 ## 1. What changed and why
@@ -43,7 +45,7 @@ Do 5a to 5d first; 5e waits for the decisions below.
 **5c Phone numbers (his B11, our Q26).**
 - `phone_numbers` (tenant, E.164 unique, provider, provider id, status). Assigned by a platform admin first; buying and porting numbers comes in Phase 6.
 - `GET /internal/numbers/{e164}` returns `{tenantId}`, used by the engine after it verifies the Twilio webhook signature, so the tenant is never taken from what the caller supplies.
-- Ticket: the backend verifies the Twilio signature, maps the number, signs a one-minute single-use ticket, and the telephone provider connects to the engine's voice gateway with it (the gateway needs a public secure WebSocket; everything else stays private).
+- Ticket (**superseded 2026-10-29, engine first, L8 revised: the ENGINE verifies the Twilio signature, asks the backend which business and agent the number rings and signs its own one-minute ticket; the backend signs nothing**): the telephone provider connects to the engine's voice gateway with the engine's ticket (the gateway needs a public secure WebSocket; everything else stays private).
 - The end customer is upserted from the caller's number.
 
 **5d Call usage and billing (his B8).** *Phase 5A already built the plan side: the entitlement keys, `usage_daily.call_minutes` read by `check('callMinutes')`, the minute overage under the owner's switch, the billing summary and the three reminders; what is left is the engine's usage event and its ingestion through `UsageService.recordCallMinutes`.* Agree the shape first (his proposal: `usage.call_minutes {conversationId, seconds, channel}`, `usage.chat_message`, `usage.record_created`, `usage.embedding_texts`). Add call minutes to the plan entitlements and to `usage_daily`; the owner usage page shows conversations, messages and call minutes (no token counts); the status check returns `quota_exceeded` when the minutes are used up.

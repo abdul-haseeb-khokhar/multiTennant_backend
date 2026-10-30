@@ -49,6 +49,22 @@ describe('PhoneCustomersService', () => {
     service = new PhoneCustomersService(prisma as never);
   });
 
+  it('a caller with no number is a new customer of their own every time (call_<uuid>), never merged', async () => {
+    prisma.endCustomer.create.mockResolvedValue({ id: 'ec-anon' });
+    await expect(
+      service.upsert('t1', { name: 'Sara', locale: 'ur' }),
+    ).resolves.toEqual({ endCustomerId: 'ec-anon', created: true });
+    await service.upsert('t1', { name: 'Sara' });
+    expect(prisma.endCustomer.findFirst).not.toHaveBeenCalled();
+    const [first, second] = prisma.endCustomer.create.mock.calls.map(
+      (call) => (call[0] as { data: { externalId: string } }).data,
+    );
+    expect(first).toMatchObject({ tenantId: 't1', name: 'Sara', locale: 'ur' });
+    expect(first.externalId).toMatch(/^call_[0-9a-f-]{36}$/);
+    expect(second.externalId).not.toBe(first.externalId);
+    expect(phoneOfExternalId(first.externalId)).toBeNull();
+  });
+
   it('finds the customer by tenant AND external id and creates it when it is not there', async () => {
     prisma.endCustomer.findFirst.mockResolvedValue(null);
     prisma.endCustomer.create.mockResolvedValue({ id: 'ec1' });

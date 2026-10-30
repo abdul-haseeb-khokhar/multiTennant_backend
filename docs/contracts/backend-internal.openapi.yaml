@@ -6,19 +6,23 @@ info:
     The routes of the backend core that the AI engine calls to ASK or COMMAND (the other direction
     of [engine-internal.openapi.yaml](engine-internal.openapi.yaml)), for the voice-first product
     (team-alignment L4, M1; Abdullah's duties B1, B4 and B11). The events the engine PUSHES are in
-    [backend-events.openapi.yaml](backend-events.openapi.yaml) (`record.submitted`,
-    `record.updated`, `usage.call_minutes` are acknowledged and ignored until the phases below).
+    [backend-events.openapi.yaml](backend-events.openapi.yaml) (`record.submitted` and
+    `record.updated` are handled since Phase 5B-2; `usage.call_minutes` is acknowledged and ignored
+    until Phase 5E; `handoff.requested` and `handoff.unavailable` are acknowledged and ignored).
 
     **Status: drafted in Phase 5A (2026-10-21), extended in Phase 5B-1 (2026-10-28), BUILT in
-    Phases 5B-1 and 5B-2 (2026-10-29): the agent config pull, the tenant status check, the
-    requests (create, update, withdraw) and the customer upsert exist in the backend and are
-    tested against the mock engine and real Postgres. Abdullah has NOT seen this file and has
-    confirmed none of the shapes (Q28 to Q31), so every route below is a PROPOSAL that is built,
-    not an agreed contract.** Only the number lookup (`/internal/numbers/{e164}`, Phase 5D, and
-    only as a fallback) is still a draft and says so in its summary. The shapes follow what he
-    described in his handoff (his names where known: `serviceable`, `reason`, `submissionKey`,
-    `locked`, `record.submitted`) and are PROPOSALS where he did not say. Questions for him are
-    collected under "Open questions" at the end of this description.
+    Phases 5B-1, 5B-2 and 5B-3 (2026-10-29): the agent config pull, the agent list, the tenant
+    status check, the requests (create, update, withdraw; appointment, call-back and order) and
+    the customer upsert exist in the backend and are tested against the mock engine and real
+    Postgres. Abdullah has NOT seen this file and has confirmed none of the shapes (Q28 to Q31),
+    so every route below is a PROPOSAL that is built, not an agreed contract.** Only the number
+    lookup (`/internal/numbers/{e164}`, Phase 5D) is still a draft: since 2026-10-29 (engine
+    first, L8 revised) it is **the route the engine calls on every inbound call**, and it says
+    NOT BUILT in its summary. The shapes follow what he described in his handoff (his names
+    where known: `serviceable`, `reason`, `submissionKey`, `locked`, `record.submitted`) and
+    are PROPOSALS where he did not say. Phase 5B-3 compared every field he sends with what these
+    routes accept: [README.md](README.md) has the table "What Abdullah must adapt to". Questions
+    for him are collected under "Open questions" at the end of this description.
 
     Rules (the same as the engine contract, reversed):
     * **Private network only.** Never routed to the internet; the public API is `/v1`.
@@ -26,10 +30,11 @@ info:
       one that signs the events), `X-Request-Id` for correlation. Wrong or missing token: 401. No
       token configured on the backend: 503.
     * **The tenant is in the path** (`/internal/tenants/{tenantId}/...`), because the engine learns it
-      from the backend (`GET /internal/numbers/{e164}`) and states it on every call. The backend
-      checks that the tenant exists and scopes every query to it; an id of another tenant in a body
-      is never a way to reach that tenant's rows (a reference or an id of another tenant answers
-      404).
+      from the backend (`GET /internal/numbers/{e164}`) and states it on every call. (His handoff
+      sketches `/internal/records` and `/internal/customers/by-phone/{phone}` without a tenant; the
+      tenant in the path is decided, N2.2.) The backend checks that the tenant exists and scopes
+      every query to it; an id of another tenant in a body is never a way to reach that tenant's
+      rows (a reference or an id of another tenant answers 404).
     * **Agents (team-alignment L7, decided 2026-10-28).** A tenant has many agents (the tenant's own
       setup the one shared engine uses for a call: settings, knowledge, hours, greeting, voice,
       forwarding contacts), every number belongs to exactly one agent, and every tenant has one
@@ -38,12 +43,17 @@ info:
       of a request and of the customer upsert. The engine sends the same id as `X-Agent-Id` on its
       own routes and in its events (`agentId` in `data`). Until the engine is agent-aware (Q28) an
       absent `agentId` means "the tenant's default agent".
-    * **The call ticket (Phase 5D, not built).** The backend receives the telephone provider's
-      webhook first (L8), checks tenant and agent, and signs a one-minute single-use ticket that
-      carries ONLY `tenantId`, `agentId` and `settingsVersion`. The engine's voice gateway
-      verifies it and then PULLS the settings with `GET /internal/tenants/{tenantId}/agents/
-      {agentId}/config?version={settingsVersion}`. The settings hold forwarding phone numbers, so
-      they never travel in the ticket, a URL or through the provider. The signing is Phase 5D.
+    * **The telephone call is the ENGINE's (engine first, decided 2026-10-29, L8 revised).** The
+      engine answers the telephone provider's webhook on its own public address, verifies the
+      provider's signature, asks the backend which business and agent the dialled number rings
+      (`GET /internal/numbers/{e164}`, Phase 5D) and whether that business may be served now
+      (`GET /internal/tenants/{tenantId}/status`), and issues its own one-minute single-use call
+      ticket. **The backend signs no ticket and needs no ticket secret**; it only says who a
+      number belongs to. At the start of the call the engine PULLS the agent's settings with
+      `GET /internal/tenants/{tenantId}/agents/{agentId}/config` (the settings hold forwarding
+      phone numbers, so they never travel in a ticket, a URL or through the provider). A test call
+      from the dashboard goes the other way: the backend asks the ENGINE for a one-minute browser
+      ticket (`POST /api/voice/session`, his route, Phase 5D); see engine-internal.openapi.yaml.
     * Commands carry `Idempotency-Key` where a repeat must be harmless; a request has its own
       `submissionKey` for that.
     * Errors have the shape `{ statusCode, code, message }` (plus `requestId`, and `details` where
@@ -86,6 +96,23 @@ info:
        `record.*` events? Built: the routes. The events `record.submitted` and `record.updated` only
        make sure the team was told (notification and live update are once-only), never create or
        change a request.
+    9. **New in 5B-3.** The settings document: the backend keeps every key it does not know exactly
+       as the dashboard sent it and hands it back (so a field you add tomorrow needs no change
+       here), and checks only the structure of the fields you listed in your handoff (greeting,
+       recordCalls, autoEndCalls, endCallDelaySeconds, profileSummary, profileSummarySources,
+       escalation.announce) with your own limits. Does the dashboard save the document whole through
+       the backend (built) while you keep deeper validation (`collect`, capability and voice ids)?
+       Will you offer the validation route you mentioned (`POST /api/agent-config/validate`)?
+    10. **New in 5B-3.** `order` is accepted as a third request type (reference prefix `OR-`,
+        `data` stored as you send it; prices and the total are not in it, the team confirms them).
+        The request routes need the `endCustomerId` the customer upsert returned; a caller with no
+        number (an email-only request) is upserted with no `phone` and gets a customer of their
+        own each time. Is that what you want?
+    11. **New in 5B-3.** `GET /internal/tenants/{tenantId}/agents` lists the tenant's agents
+        (`agentId`, `name`, `status` `active` or `disabled`, `isDefault`, default first); your
+        `archived` is our `disabled`. Our default agent MAY be disabled (it cannot be deleted);
+        what does a call to a disabled default agent do on your side? (Ours: the status check
+        answers `agent_disabled`.)
 tags:
   - name: agents
   - name: status
@@ -98,6 +125,56 @@ servers:
 security:
   - internalToken: []
 paths:
+  /internal/tenants/{tenantId}/agents:
+    get:
+      tags: [agents]
+      summary: "The tenant's agents, for the engine (his B2; IMPLEMENTED in Phase 5B-3, not confirmed by the engine owner)"
+      description: |
+        **Built (Phase 5B-3).** The list the engine reads to learn which agents a business has (his
+        `GET /internal/tenants/{tenantId}/agents`): the default agent first, then by age. It carries
+        names, ids, the status and the default flag only; the settings are a separate pull (below),
+        so no forwarding phone number is here.
+
+        * `Authorization: Bearer <INTERNAL_API_TOKEN>` (401 wrong or missing, 503 not configured).
+        * The tenant is the path segment. An unknown tenant answers **404 `TENANT_NOT_FOUND`** (every
+          tenant has a default agent, so an empty list cannot mean "no agents"; the other internal
+          routes answer an unknown tenant the same way, except the status check, which is a normal
+          200 `unknown_tenant`).
+        * `status` is `active` or `disabled`: our word for what his handoff calls `archived` (a
+          disabled agent answers no call but is kept; the default agent may be disabled, it cannot be
+          deleted).
+        * Answered live (no cache header); rate limited per tenant (600 a minute): 429 with
+          `Retry-After`.
+      parameters:
+        - $ref: '#/components/parameters/TenantId'
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '200':
+          description: The tenant's agents
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [agents]
+                properties:
+                  agents:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AgentSummary'
+              examples:
+                two:
+                  value:
+                    agents:
+                      - { agentId: 8c1d2b6e-0a3f-4c44-8d5e-5d0f7a9b0002, name: Acme Dental, status: active, isDefault: true }
+                      - { agentId: 3b7a9d10-5c2e-4f6a-9a41-77c0d2e8a003, name: Lahore branch, status: disabled, isDefault: false }
+        '401':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '429':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
   /internal/tenants/{tenantId}/agents/{agentId}/config:
     get:
       tags: [agents]
@@ -124,7 +201,15 @@ paths:
         * The body holds forwarding phone numbers: neither side logs it.
 
         `config` is the document in the engine's shape (the backend stores it, checks its structure
-        when staff save it and does not interpret `collect`).
+        when staff save it and does not interpret `collect`). **A key the backend does not know is
+        kept exactly as it was saved and returned here (Phase 5B-3)**, at the top of the document
+        and inside `escalation`; the optional keys of his handoff (`greeting`, `recordCalls`,
+        `autoEndCalls`, `endCallDelaySeconds`, `profileSummary`, `profileSummarySources`,
+        `escalation.announce`) are absent until an owner sets them, and the engine's own defaults
+        apply then. His handoff puts `agentId`, `name`, `status` and `isDefault` inside
+        `config`; here they are beside it (`agentId`, `status`; the name and the default flag
+        are in the list route above). His "no agentId means the default agent" is the list route's
+        `isDefault`: ask for the list, then for the default's config.
       parameters:
         - $ref: '#/components/parameters/TenantId'
         - $ref: '#/components/parameters/AgentIdPath'
@@ -416,6 +501,13 @@ paths:
         (`phone_+923001234567`), shown to every staff role, never logged and never put in a URL (it
         is in the body). An agent of another tenant answers 404 `AGENT_NOT_FOUND`, an unknown
         tenant 404 `TENANT_NOT_FOUND`. The same number in two tenants is two customers.
+
+        **No number (Phase 5B-3).** `phone` may be left out (his own rule: a request with no phone,
+        an email-only appointment, makes a customer row of its own; an address is not reliable
+        enough to merge two people on): the answer is always **201** with a NEW customer (external
+        id `call_<uuid>`), never merged. His body also has `email`: the backend ignores it (an end
+        customer has no email column; the address stays in the request's `data`). Unknown fields
+        are ignored, not refused.
       parameters:
         - $ref: '#/components/parameters/TenantId'
         - $ref: '#/components/parameters/RequestId'
@@ -425,7 +517,6 @@ paths:
           application/json:
             schema:
               type: object
-              required: [phone]
               properties:
                 agentId:
                   type: string
@@ -434,7 +525,7 @@ paths:
                   type: string
                   pattern: '^\+[1-9][0-9]{6,14}$'
                   example: '+923001234567'
-                  description: E.164.
+                  description: 'E.164. Optional (Phase 5B-3): without it the caller is a new customer of their own every time.'
                 name:
                   type: string
                   maxLength: 200
@@ -461,18 +552,35 @@ paths:
   /internal/numbers/{e164}:
     get:
       tags: [numbers]
-      summary: '[DRAFT, not implemented] [NOT NEEDED under backend-first routing (L8); kept only as a fallback] Which business and agent own this phone number? (his B11, our Q26; Phase 5D)'
+      summary: '[NOT BUILT, Phase 5D] The route the engine calls on EVERY inbound call: which business and agent own this phone number? (his B11; engine first, L8 revised 2026-10-29)'
       description: |
-        **Not needed under backend-first routing (decided 2026-10-28, L8):** the backend receives
-        the telephone provider's webhook itself, maps the number to (tenant, agent) and hands the
-        engine a call ticket (see the rules above), so the engine never has to look a number up.
-        This route is kept in the draft only as a fallback in case Abdullah keeps the design in
-        which the engine receives the webhook; it is built only if that happens.
+        **NOT BUILT (Phase 5D); this is the contract the route will follow.** Under engine-first
+        routing (decided 2026-10-29) the ENGINE answers the telephone provider's webhook, verifies
+        the provider's signature and then asks this route which business and agent the dialled
+        number rings (his `resolveDialledNumber`; its stand-in table becomes this call). The tenant
+        is therefore never taken from anything the caller supplies. The backend owns the numbers
+        (the `phone_numbers` table, each number linked to exactly one agent of its own tenant, the
+        plan limit, purchase and release) and **only says who a number belongs to**: it signs no call
+        ticket. The status check stays a separate call (`GET /internal/tenants/{tenantId}/status`).
 
-        Asked by the engine after it verified the telephone provider's webhook signature (or after
-        it accepted the backend's call ticket), so the tenant is never taken from what a caller
-        supplies. The `+` of the number must be sent as `%2B` in the path. An unknown or inactive
-        number answers 404 `NUMBER_NOT_FOUND` and reveals nothing else.
+        * `Authorization: Bearer <INTERNAL_API_TOKEN>`; the `+` of the number must be sent as `%2B`
+          in the path; rate limited.
+        * **200** for every number the backend ever held: `{ tenantId, agentId, numberId, status }`.
+          `status` is `active` or `released` (a released number keeps its row and the engine
+          refuses the call); `agentId` is null for a number linked to no agent (the engine refuses
+          that too). The engine applies those rules to the answer; the backend answers from the
+          table only and never guesses.
+        * **404 `NUMBER_NOT_FOUND`** for a number the backend never held; it reveals nothing about
+          other tenants.
+        * How his refusals map to ours (his reasons are his; the backend only returns data): his
+          `unknown` = the 404; `released` = `status: released`; `unassigned` = `agentId: null`;
+          `agent_archived` = the agent's status is `disabled` (the engine reads it from the agent
+          list or the status check; the status check answers `agent_disabled`);
+          `tenant_unserviceable` = the status check (`suspended`, `quota_exceeded`, ...);
+          `invalid_number` = a malformed number, which the engine refuses before asking (here a
+          400).
+        * Written to refuse at write time what the engine refuses at call time: a number without a
+          country code, an agent of another tenant, a disabled agent.
       parameters:
         - $ref: '#/components/parameters/RequestId'
         - name: e164
@@ -489,11 +597,27 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [tenantId, agentId]
+                required: [tenantId, agentId, numberId, status]
                 properties:
                   tenantId: { type: string }
-                  agentId: { type: string, description: 'The one agent the number is linked to (L7).' }
+                  agentId:
+                    type: string
+                    nullable: true
+                    description: 'The one agent the number is linked to (L7); null when it is linked to none.'
+                  numberId: { type: string, description: 'The backend id of the number (the engine stamps its call logs with it).' }
+                  status: { type: string, enum: [active, released] }
+              examples:
+                active:
+                  value: { tenantId: 2f1c0c3e-6f0b-4a35-9c58-1f3c8c1d0001, agentId: 8c1d2b6e-0a3f-4c44-8d5e-5d0f7a9b0002, numberId: 5a6b7c8d-1e2f-4a3b-9c4d-0e1f2a3b4c5d, status: active }
+                released:
+                  value: { tenantId: 2f1c0c3e-6f0b-4a35-9c58-1f3c8c1d0001, agentId: 8c1d2b6e-0a3f-4c44-8d5e-5d0f7a9b0002, numberId: 5a6b7c8d-1e2f-4a3b-9c4d-0e1f2a3b4c5d, status: released }
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
         '404':
+          $ref: '#/components/responses/Error'
+        '429':
           $ref: '#/components/responses/Error'
 components:
   securitySchemes:
@@ -577,6 +701,17 @@ components:
         overage:
           type: boolean
           description: true when the call is served only because the included call minutes are used up and extra minutes are billed (Pro with the owner's switch on). Always false when not serviceable.
+    AgentSummary:
+      type: object
+      required: [agentId, name, status, isDefault]
+      properties:
+        agentId: { type: string }
+        name: { type: string, maxLength: 80 }
+        status:
+          type: string
+          enum: [active, disabled]
+          description: 'Our word for his `archived`: a disabled agent answers no call but is kept.'
+        isDefault: { type: boolean, description: 'Exactly one agent per tenant is the default (it may be disabled, never deleted).' }
     AgentConfig:
       type: object
       required: [tenantId, agentId, version, status, config]
@@ -589,11 +724,14 @@ components:
           enum: [active, disabled]
         config:
           type: object
-          additionalProperties: false
+          additionalProperties: true
           description: |
             The engine's document (its agent_configs fields). The backend checks the structure
             when staff save it; the checklist collect, the capabilities and the voice ids are
-            validated by the engine and stored as they are.
+            validated by the engine and stored as they are. **The engine owns the field list:** a
+            key listed below is checked structurally, any other key (for example `collectVersion`,
+            or a field added tomorrow) is stored and returned exactly as sent, inside the 64 KB
+            limit of the whole document (Phase 5B-3).
           required: [businessName, purpose, tone, timezone, uiLocale, replyLanguage, hours, escalation, capabilities, voices, collect]
           properties:
             businessName: { type: string, minLength: 1, maxLength: 120 }
@@ -632,6 +770,9 @@ components:
                 afterMisses: { type: integer, minimum: 1, maximum: 4 }
                 topics: { type: array, maxItems: 10, items: { type: string, maxLength: 40 } }
                 outsideHours: { type: string, enum: [callback, forward] }
+                announce:
+                  $ref: '#/components/schemas/LocalizedText200'
+              additionalProperties: true
             capabilities: { type: object, additionalProperties: true }
             voices: { type: object, additionalProperties: { type: string }, description: 'Voice id per spoken language.' }
             collect:
@@ -639,9 +780,41 @@ components:
               nullable: true
               additionalProperties: true
               description: 'What the agent collects for a request - the engine''s document, opaque to the backend.'
+            greeting:
+              $ref: '#/components/schemas/LocalizedText400'
+            recordCalls: { type: boolean, description: 'The owner switched call recording on for this agent (optional; absent = off).' }
+            autoEndCalls: { type: boolean, description: 'The call ends by itself once the conversation is over (optional; the engine treats absent as on).' }
+            endCallDelaySeconds: { type: integer, minimum: 2, maximum: 10, description: 'Seconds of quiet before the call ends by itself (optional; the engine treats absent as 3).' }
+            profileSummary: { type: string, nullable: true, maxLength: 1200, description: 'The business summary the owner approved (optional; null or absent = none). The backend does not check for prices: that rule is the engine''s.' }
+            profileSummarySources:
+              type: array
+              maxItems: 10
+              description: 'The documents the summary was written from (optional; recorded by the engine).'
+              items:
+                type: object
+                required: [id, title, hash]
+                properties:
+                  id: { type: string, maxLength: 100 }
+                  title: { type: string, maxLength: 300 }
+                  hash: { type: string, maxLength: 200 }
+    LocalizedText400:
+      type: object
+      description: 'A text per spoken language; `{business}` is the engine''s only placeholder (the engine checks placeholders). A language that is left out or empty uses the engine''s built-in wording.'
+      properties:
+        en: { type: string, maxLength: 400 }
+        ur: { type: string, maxLength: 400 }
+      additionalProperties: false
+    LocalizedText200:
+      type: object
+      description: 'The line said before a transfer, with `{name}` and `{role}`; empty or absent = the engine''s built-in line.'
+      properties:
+        en: { type: string, maxLength: 200 }
+        ur: { type: string, maxLength: 200 }
+      additionalProperties: false
     RequestType:
       type: string
-      enum: [appointment, callback]
+      description: 'The three types the engine takes on a call (reference prefixes AP-, CB-, OR-). `order` was added in Phase 5B-3: dishes from the owner''s menu, pickup or delivery, in `data`; prices and the total are NOT in it (the team confirms them).'
+      enum: [appointment, callback, order]
     RequestStatus:
       type: string
       description: |
@@ -656,12 +829,13 @@ components:
       properties:
         agentId:
           type: string
-          description: The agent that took the call (default the tenant's default agent). One of another tenant answers 404 `AGENT_NOT_FOUND`.
+          nullable: true
+          description: The agent that took the call (default the tenant's default agent; null means the default, as in his `agentId ?? null`). One of another tenant answers 404 `AGENT_NOT_FOUND`.
         reference:
           type: string
           maxLength: 40
           example: AP-4K7Q2
-          description: Made by the engine, unique per tenant, short enough to read out on the phone.
+          description: Made by the engine (AP-, CB-, OR- and five characters of his alphabet ABCDEFGHJKMNPQRSTUVWXYZ23456789), unique per tenant, short enough to read out on the phone. Stored upper case.
         type:
           $ref: '#/components/schemas/RequestType'
         submissionKey:
@@ -673,13 +847,16 @@ components:
           description: From the customer upsert. Must be a customer of this tenant.
         conversationId:
           type: string
+          nullable: true
           description: The engine's id of the call.
         channel:
           type: string
           enum: [voice, chat]
           default: voice
+          description: 'His handoff also lists `whatsapp` "later"; it is refused (400) until the engine really sends it and the database allows it.'
         language:
           type: string
+          nullable: true
           example: ur
         summary:
           type: string
@@ -692,14 +869,20 @@ components:
           description: The business's wall-clock time as a string, on purpose (the engine does no time-zone arithmetic).
         timezone:
           type: string
+          nullable: true
           example: Asia/Karachi
         configVersion:
           type: integer
-          description: The version of the agent settings the engine used (the settingsVersion of the call ticket).
+          nullable: true
+          description: 'The version of the agent settings the engine used for the call (the version of the config pull).'
         data:
           type: object
           additionalProperties: true
-          description: What the agent collected (name, service, notes ...), already validated by the engine; the backend stores it and does not interpret it.
+          description: |
+            What the agent collected, already validated by the engine; the backend stores it (16 KB at most) and does not
+            interpret it. An appointment: name, phone, service, datetime ...; an order: name, phone,
+            `order_items` [{ id, name, qty }], `order_type` pickup or delivery, `address` (delivery only), notes - and no
+            prices. Personal data: never logged.
     UpdateRequestDetails:
       type: object
       properties:

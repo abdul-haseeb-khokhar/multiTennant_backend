@@ -116,7 +116,7 @@ model Agent {
   @@schema("tenant_core")
 }
 
-/// A request the AI took on a call (appointment or call-back) that staff confirm (Phase 5B-2, his B4,
+/// A request the AI took on a call (appointment, call-back or order) that staff confirm (Phase 5B-2, his B4,
 /// L1: the AI never books anything, it saves a request as 'requested' and a person moves it on). The
 /// engine's word for it is a "record". Created through the engine's internal routes, idempotent by
 /// (tenant, submission_key); the reference (for example AP-4K7Q2) is drawn by the ENGINE and unique per
@@ -132,7 +132,7 @@ model CustomerRequest {
   // Null only for a customer erased later (F1); the engine always names one.
   endCustomerId   String?   @map("end_customer_id")
   reference       String
-  // 'appointment' | 'callback' (CHECK in the migration)
+  // 'appointment' | 'callback' | 'order' (CHECK in the migrations; `order` since Phase 5B-3)
   type            String
   // 'requested' | 'confirmed' | 'done' | 'cancelled' (CHECK in the migration)
   status          String    @default("requested")

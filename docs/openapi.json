@@ -3722,7 +3722,8 @@
               "type": "string",
               "enum": [
                 "appointment",
-                "callback"
+                "callback",
+                "order"
               ]
             }
           },
@@ -7742,7 +7743,7 @@
           "document": {
             "type": "object",
             "additionalProperties": true,
-            "description": "The settings document in the engine's shape: businessName, purpose, tone, timezone, uiLocale, replyLanguage, hours, escalation (call forwarding, with the contacts' phone numbers), capabilities, voices, collect."
+            "description": "The settings document in the engine's shape: businessName, purpose, tone, timezone, uiLocale, replyLanguage, hours, escalation (call forwarding, with the contacts' phone numbers and the optional announce line), capabilities, voices, collect and, when set, greeting, recordCalls, autoEndCalls, endCallDelaySeconds, profileSummary, profileSummarySources. Keys the backend does not know are kept as they were saved."
           }
         },
         "required": [
@@ -7769,7 +7770,7 @@
               "tone": "friendly",
               "replyLanguage": "ur"
             },
-            "description": "The keys to change. Each key you send replaces that whole key; keys you leave out keep their value. Known keys: businessName, purpose, tone (professional|friendly|concise|formal), timezone (IANA), uiLocale and replyLanguage (en|ur), hours (`{mon: [[\"09:00\",\"17:00\"]], …}` or null), escalation (call forwarding), capabilities, voices, collect (what the agent collects: the engine's document, stored as it is; null = not set up). The backend checks the structure only (400 AGENT_SETTINGS_INVALID with `details`); deeper checks of `collect` and `voices` belong to the engine."
+            "description": "The keys to change. Each key you send replaces that whole key; keys you leave out keep their value. Known keys: businessName, purpose, tone (professional|friendly|concise|formal), timezone (IANA), uiLocale and replyLanguage (en|ur), hours (`{mon: [[\"09:00\",\"17:00\"]], …}` or null), escalation (call forwarding), capabilities, voices, collect (what the agent collects: the engine's document, stored as it is; null = not set up). Optional keys the engine added (absent until set): greeting (`{en?, ur?}`, 400 characters each, `{business}` is the placeholder), recordCalls and autoEndCalls (booleans), endCallDelaySeconds (2 to 10), profileSummary (text up to 1200 or null), profileSummarySources (`[{id, title, hash}]`, up to 10) and escalation.announce (`{en?, ur?}`, 200 characters each). A key the backend does not know (at the top or inside escalation) is kept exactly as sent and handed to the engine: the engine owns the field list. The backend checks the structure only (400 AGENT_SETTINGS_INVALID with `details`); deeper checks of `collect`, `voices` and the placeholders belong to the engine."
           }
         },
         "required": [
@@ -7866,7 +7867,8 @@
             "type": "string",
             "enum": [
               "appointment",
-              "callback"
+              "callback",
+              "order"
             ]
           },
           "status": {

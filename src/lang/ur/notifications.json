@@ -42,7 +42,7 @@
   "ingestion.failed.title": "علمی ذریعہ ناکام ہو گیا",
   "invite.accepted.body": "{name} نے دعوت قبول کر لی ہے اور ٹیم میں شامل ہو گئے ہیں۔",
   "invite.accepted.title": "ٹیم میں نیا رکن شامل ہوا",
-  "request.submitted.body": "{requestType, select, appointment {اپوائنٹمنٹ کی درخواست} callback {واپسی کال کی درخواست} other {درخواست}} ({reference}) کو {agentName} نے وصول کیا ہے۔ اسے کھول کر تصدیق کریں یا رد کریں۔",
+  "request.submitted.body": "{requestType, select, appointment {اپوائنٹمنٹ کی درخواست} callback {واپسی کال کی درخواست} order {آرڈر کی درخواست} other {درخواست}} ({reference}) کو {agentName} نے وصول کیا ہے۔ اسے کھول کر تصدیق کریں یا رد کریں۔",
   "request.submitted.title": "کالر کی طرف سے نئی درخواست",
   "usage.limit_reached.body": "آپ اپنے پلان میں شامل تمام {limit} گفتگوئیں استعمال کر چکے ہیں۔ نئی گفتگوئیں اگلی مدت یا اپ گریڈ تک آپ کی ٹیم کو جائیں گی۔",
   "usage.limit_reached.title": "پلان کی حد پوری ہو گئی",
