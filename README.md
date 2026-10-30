@@ -16,7 +16,8 @@ Backend core of a multi-tenant **AI customer-support platform**. Businesses and 
 | 4C | Real email through Resend (test mode), HTML and plain-text templates in English and Urdu, `delivery` in API answers, mail health | merged (PR #6); real delivery in test mode was confirmed by the owner on 2026-10-11 (see Email below) |
 | 3C | Account decisions: logout that ends all sessions, email-first login with a workspace picker (and login throttling), owner self-service with slug rename and time zone, nobody can disable, demote or delete themselves, upgrade requests to the platform team | built on branch `phase-3c-account`, not yet merged; see the frontend list in [docs/team-alignment.md](docs/team-alignment.md) J1 to J5 |
 | 5A | Voice-first alignment: call minutes in every plan (Starter, Free, Pro, Enterprise), minute overage under the owner's existing switch, 80% and 100% minute reminders, plan numbers and prices from environment variables, updated engine contracts, a simulated phone call on the mock engine | built on branch `phase-5a-alignment`, not yet merged; see [docs/backend-roadmap.md](docs/backend-roadmap.md) and "Plan numbers and prices" below |
-| 5B to 5F, 6 and later | Voice-first plan: agents (many per tenant, each number linked to one agent), tenant status check and requests workflow, real-engine integration, phone numbers, call usage and billing, agent settings and knowledge; then telephony go-live and hardening. Message operations are halted and WhatsApp is deferred | planned, see [docs/backend-roadmap.md](docs/backend-roadmap.md) and team-alignment L |
+| 5B-1 | Agents foundation (team-alignment L7): a tenant has many agents (its own setup the one shared engine uses for a call), one default agent per tenant (created at signup, backfilled for existing tenants), plan limits for agents and phone numbers, versioned agent settings in the engine's shape, and the route the engine pulls them from at the start of every call | built on branch `phase-5b1-agents`, not yet merged; see [docs/backend-roadmap.md](docs/backend-roadmap.md) and "Agents" below |
+| 5B-2 to 5F, 6 and later | Voice-first plan: tenant status check and requests workflow (both agent-aware), real-engine integration, phone numbers (each linked to one agent), call usage and billing, agent settings screens and knowledge; then telephony go-live and hardening. Message operations are halted and WhatsApp is deferred | planned, see [docs/backend-roadmap.md](docs/backend-roadmap.md) and team-alignment L |
 
 ## Documentation
 
@@ -55,9 +56,24 @@ Create a platform admin (needed for `/v1/admin/...`):
 PLATFORM_ADMIN_EMAIL=you@example.com PLATFORM_ADMIN_PASSWORD='a long password' npm run platform-admin:create
 ```
 
+## Agents (Phase 5B-1)
+
+An **agent** is the *tenant's own setup* that the one shared AI engine uses for a call: its settings, hours, greeting, voice, language, what it collects and who it forwards calls to. It is not a separate AI, and it is not the staff role named `agent` (owner, admin, agent), which keeps its name. A tenant has many agents; later each phone number will belong to exactly one of them. Every tenant has one **default agent** (created when it signs up, named after the tenant); it can be renamed or disabled but not deleted.
+
+- **Staff API** (`/v1/tenants/:tenantId/agents`): every role lists and reads agents (name, status, default flag); owner and admin create, rename, disable/enable and delete them, and read and edit their **settings** (`…/agents/:agentId/settings`, versioned: every save adds a version, `expectedVersion` guards against two people saving at once). Settings hold forwarding phone numbers, so the staff role `agent` cannot read them.
+- **Plan limits:** Starter 1 agent and 0 phone numbers, Free 1 and 0, Pro 3 and 5, Enterprise unlimited (placeholders, set by the variables below). 0 numbers means browser test calls only. Disabled agents count; lowering a limit never deletes anything.
+- **The engine pulls the settings:** `GET /internal/tenants/{tenantId}/agents/{agentId}/config` (service token, outside `/v1`, not in the public API) returns the current version, its ETag and the agent's status; see [docs/contracts/backend-internal.openapi.yaml](docs/contracts/backend-internal.openapi.yaml). With the mock engine a simulated call pulls the settings through the same service.
+
+| Variable | What it sets | Placeholder the database starts with |
+|---|---|---|
+| `PLAN_STARTER_AGENTS`, `PLAN_FREE_AGENTS`, `PLAN_PRO_AGENTS` | agents per plan | 1, 1, 3 |
+| `PLAN_STARTER_PHONE_NUMBERS`, `PLAN_FREE_PHONE_NUMBERS`, `PLAN_PRO_PHONE_NUMBERS` | real phone numbers per plan (assigned from Phase 5D) | 0, 0, 5 |
+
+They work exactly like the plan variables below (optional, whole numbers in digits, 0 to 10,000, applied to the `plans` table at startup).
+
 ## Plan numbers and prices (environment variables)
 
-The call minutes of each plan, the price of an extra minute and the Pro prices come from **environment variables**, not from code. All six are optional. Whole numbers in digits only (no decimals, signs or `1e3`); an empty value counts as "not set"; a bad value stops the backend from starting and the error names the variable (never its value). Money is in **minor units** (PKR 25 = `2500`); minutes are whole minutes. Bounds: minutes 0 to 1,000,000, money 0 to 2,000,000,000.
+The call minutes of each plan, the price of an extra minute, the Pro prices (and, since Phase 5B-1, the agents and phone numbers above) come from **environment variables**, not from code. All twelve are optional. Whole numbers in digits only (no decimals, signs or `1e3`); an empty value counts as "not set"; a bad value stops the backend from starting and the error names the variable (never its value). Money is in **minor units** (PKR 25 = `2500`); minutes are whole minutes. Bounds: minutes 0 to 1,000,000, money 0 to 2,000,000,000, agents and phone numbers 0 to 10,000.
 
 | Variable | What it sets | Placeholder the database starts with |
 |---|---|---|

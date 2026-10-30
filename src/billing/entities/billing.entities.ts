@@ -64,6 +64,24 @@ export class EntitlementsView {
   })
   callMinutePeriod: 'total' | 'month';
 
+  @ApiProperty({
+    type: Number,
+    nullable: true,
+    example: 3,
+    description:
+      'Agents the workspace may have, disabled ones included (L7). null = unlimited. Creating one past the limit answers 403 PLAN_LIMIT_REACHED with `details: { limit: "agents", used, max }`. Set by `PLAN_*_AGENTS`.',
+  })
+  agents: number | null;
+
+  @ApiProperty({
+    type: Number,
+    nullable: true,
+    example: 5,
+    description:
+      'Real phone numbers the workspace may hold (L7, assigned from Phase 5D). 0 on Free and Starter: they make browser test calls only. null = unlimited. Set by `PLAN_*_PHONE_NUMBERS`.',
+  })
+  phoneNumbers: number | null;
+
   @ApiPropertyOptional({
     description: 'Price: one extra conversation, minor units (chat, halted).',
   })
@@ -427,6 +445,19 @@ export class CallMinuteUsageView {
   currency: string;
 }
 
+export class CountUsageView {
+  @ApiProperty({
+    type: Number,
+    nullable: true,
+    example: 3,
+    description: 'What the plan allows. null = unlimited.',
+  })
+  included: number | null;
+
+  @ApiProperty({ example: 1, description: 'What the workspace has now.' })
+  used: number;
+}
+
 export class BillingUsageView {
   @ApiProperty({
     type: CallMinuteUsageView,
@@ -439,6 +470,20 @@ export class BillingUsageView {
     description: 'Chat conversations (halted, kept as built).',
   })
   conversations: ConversationUsageView;
+
+  @ApiProperty({
+    type: CountUsageView,
+    description:
+      'Agents (L7): the limit and how many exist, disabled ones included.',
+  })
+  agents: CountUsageView;
+
+  @ApiProperty({
+    type: CountUsageView,
+    description:
+      'Real phone numbers (L7): the limit and how many are assigned (0 until Phase 5D).',
+  })
+  phoneNumbers: CountUsageView;
 }
 
 export class TenantBillingSettings {

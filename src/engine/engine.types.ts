@@ -170,6 +170,26 @@ export interface EngineEventEnvelope {
 /** Where the mock engine delivers its events. Set by the event receiver at start-up. */
 export type EngineEventSink = (event: EngineEventEnvelope) => Promise<void>;
 
+/**
+ * What the engine gets when it pulls an agent's settings at the start of a call (L7,
+ * `GET /internal/tenants/{tenantId}/agents/{agentId}/config`). `config` is the settings document.
+ */
+export interface PulledAgentSettings {
+  agentId: string;
+  version: number;
+  status: 'active' | 'disabled';
+  config: object;
+}
+
+/**
+ * How the mock engine pulls an agent's settings: the backend hands it the same service the real
+ * route uses. Without an `agentId` the tenant's default agent; `null` when the tenant has none.
+ */
+export type AgentConfigSource = (
+  tenantId: string,
+  agentId?: string,
+) => Promise<PulledAgentSettings | null>;
+
 /** Events of the message stream, in the order the engine sends them. */
 export type EngineStreamEvent =
   | {

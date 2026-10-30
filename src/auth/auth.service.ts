@@ -1,5 +1,6 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
+import { AgentProvisioningService } from '../agents/agent-provisioning.service';
 import { AuditAction, AuditService } from '../audit/audit.service';
 import { ApiException } from '../common/errors/api.exception';
 import { ErrorCode } from '../common/errors/error-codes';
@@ -38,6 +39,7 @@ export class AuthService {
     private readonly audit: AuditService,
     private readonly slugs: SlugService,
     private readonly throttle: LoginThrottleService,
+    private readonly agents: AgentProvisioningService,
   ) {}
 
   /**
@@ -189,6 +191,12 @@ export class AuthService {
       });
       // Every new tenant starts on Starter for 15 days (I2), in the same transaction.
       await this.subscriptions.createStarter(tx, tenant.id);
+      // ... and its default agent with the first settings version (L7), so the product works from
+      // the first minute. It is not counted against any limit: the plan always has room for one.
+      await this.agents.provision(tx, tenant, {
+        isDefault: true,
+        actor: { userId: owner.id, role: owner.role },
+      });
       return { tenant, owner };
     });
   }

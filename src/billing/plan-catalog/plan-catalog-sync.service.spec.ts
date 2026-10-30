@@ -282,6 +282,61 @@ describe('PlanCatalogSyncService', () => {
     expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
+  describe('agents and phone numbers (L7)', () => {
+    const entitlementsOf = (code: string) =>
+      row(code).entitlements as Record<string, unknown>;
+
+    it('writes the agent and phone-number limits into the matching plan, logging one line per change', async () => {
+      const changes = await make({
+        PLAN_PRO_AGENTS: '6',
+        PLAN_PRO_PHONE_NUMBERS: '10',
+        PLAN_STARTER_AGENTS: '2',
+        PLAN_FREE_PHONE_NUMBERS: '0',
+      }).sync();
+      expect(changes).toEqual(
+        expect.arrayContaining([
+          { plan: 'starter', field: 'entitlements.agents', from: null, to: 2 },
+          { plan: 'pro', field: 'entitlements.agents', from: null, to: 6 },
+          {
+            plan: 'pro',
+            field: 'entitlements.phoneNumbers',
+            from: null,
+            to: 10,
+          },
+          {
+            plan: 'free',
+            field: 'entitlements.phoneNumbers',
+            from: null,
+            to: 0,
+          },
+        ]),
+      );
+      expect(entitlementsOf('pro')).toMatchObject({
+        agents: 6,
+        phoneNumbers: 10,
+        callMinutesPerPeriod: 300,
+      });
+      expect(entitlementsOf('starter').agents).toBe(2);
+      expect(entitlementsOf('free').phoneNumbers).toBe(0);
+      expect(log).toHaveBeenCalledTimes(4);
+    });
+
+    it('is idempotent and leaves Enterprise (no variable) alone', async () => {
+      await make({ PLAN_PRO_AGENTS: '6' }).sync();
+      log.mockClear();
+      await expect(make({ PLAN_PRO_AGENTS: '6' }).sync()).resolves.toEqual([]);
+      expect(log).not.toHaveBeenCalled();
+      expect(entitlementsOf('enterprise')).not.toHaveProperty('agents');
+    });
+
+    it('lowering a limit changes only the plan row (no tenant data is touched)', async () => {
+      row('pro').entitlements = { ...entitlementsOf('pro'), agents: 3 };
+      await make({ PLAN_PRO_AGENTS: '1' }).sync();
+      expect(entitlementsOf('pro').agents).toBe(1);
+      expect(prisma.plan.update).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it('runs at application bootstrap', async () => {
     await make({ PLAN_PRO_CALL_MINUTES: '400' }).onApplicationBootstrap();
     expect(minutes('pro')).toBe(400);

@@ -56,6 +56,47 @@ describe('Auth (e2e)', () => {
           tenantId: data.tenantId,
         }),
       );
+      prisma.agent.create.mockImplementation(({ data }) =>
+        Promise.resolve({ id: 'agent-1', status: 'active', ...data }),
+      );
+      prisma.agentSettings.create.mockResolvedValue({});
+    });
+
+    it('creates the default agent with settings version 1 in the signup transaction (L7)', async () => {
+      await request(app.getHttpServer())
+        .post('/v1/auth/signup')
+        .send(body)
+        .expect(201);
+      expect(prisma.agent.create).toHaveBeenCalledTimes(1);
+      expect(prisma.agent.create.mock.calls[0][0].data).toEqual({
+        tenantId: 't1',
+        name: 'Acme Support',
+        isDefault: true,
+        createdBy: 'u1',
+      });
+      const settings = prisma.agentSettings.create.mock.calls[0][0].data;
+      expect(settings).toMatchObject({
+        tenantId: 't1',
+        agentId: 'agent-1',
+        version: 1,
+        createdBy: 'u1',
+        document: { businessName: 'Acme Support', tone: 'professional' },
+      });
+      const audited = prisma.auditLog.create.mock.calls.map(
+        ([arg]) => arg.data,
+      );
+      expect(audited).toContainEqual(
+        expect.objectContaining({
+          action: 'agent.created',
+          tenantId: 't1',
+          actorRole: 'owner',
+        }),
+      );
+      // a failed signup creates no agent
+      prisma.agent.create.mockClear();
+      prisma.tenantUser.create.mockRejectedValue(new Error('boom'));
+      await request(app.getHttpServer()).post('/v1/auth/signup').send(body);
+      expect(prisma.agent.create).not.toHaveBeenCalled();
     });
 
     it('creates the tenant and its owner and returns a usable token', async () => {

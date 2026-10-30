@@ -53,6 +53,11 @@ export function toCallMinuteUsageView(u: CallMinuteUsageSummary) {
   };
 }
 
+/** How many of a counted thing (agents, phone numbers) the plan allows and the tenant has (L7). */
+export function toCountUsageView(included: number | null, used: number) {
+  return { included, used };
+}
+
 export function toAdminSubscriptionSummary(s: EffectiveSubscription) {
   return {
     ...toSubscriptionSummary(s),

@@ -13,7 +13,9 @@
  *     "callMinutePeriod": "total",        // "total" = since the subscription period began, "month" = calendar month
  *     "overageConversationMinor": 1500,   // optional price: one extra conversation, minor units (chat, halted)
  *     "overageMinuteMinor": 2500,         // optional price: one extra call minute, minor units (L6)
- *     "voicePerMinuteMinor": 2500         // legacy price hint from Phase 2B; nothing reads it, `overageMinuteMinor` replaced it
+ *     "voicePerMinuteMinor": 2500,        // legacy price hint from Phase 2B; nothing reads it, `overageMinuteMinor` replaced it
+ *     "agents": 3,                        // the tenant's agents (L7), disabled ones count; null = unlimited
+ *     "phoneNumbers": 5                   // real phone numbers (L7, Phase 5D); 0 = browser test calls only; null = unlimited
  *   }
  *
  * A key missing from the JSON is treated as the most restrictive value (0 / false / none), so a
@@ -34,6 +36,10 @@ export interface Entitlements {
   /** Call minutes included per `callMinutePeriod` (L6). null = unlimited; a missing key = 0. */
   callMinutesPerPeriod: number | null;
   callMinutePeriod: CallMinutePeriod;
+  /** Agents the tenant may have (L7); disabled ones count. null = unlimited; a missing key = 0. */
+  agents: number | null;
+  /** Real phone numbers the tenant may hold (L7, assigned in Phase 5D). 0 = browser test calls only. null = unlimited. */
+  phoneNumbers: number | null;
   overageConversationMinor?: number;
   /** One extra call minute, minor units. Present = the plan can bill minutes past the included amount (the owner's J6 switch decides). */
   overageMinuteMinor?: number;
@@ -46,20 +52,32 @@ export const LIMIT_KEYS = [
   'conversations',
   'knowledgeMb',
   'callMinutes',
+  'agents',
+  'phoneNumbers',
 ] as const;
 export type LimitKey = (typeof LIMIT_KEYS)[number];
+
+/** Limits on how many of a thing a tenant may HAVE (counted live, no period), as opposed to usage over a period. */
+export type CountLimitKey = 'seats' | 'agents' | 'phoneNumbers';
 
 /** Keys `check` accepts: a limit, `voice`, or `channel:<name>` (for example `channel:whatsapp`). */
 export type EntitlementKey = LimitKey | 'voice' | `channel:${string}`;
 
 const LIMIT_FIELD: Record<
   LimitKey,
-  'seats' | 'conversationsPerPeriod' | 'knowledgeMb' | 'callMinutesPerPeriod'
+  | 'seats'
+  | 'conversationsPerPeriod'
+  | 'knowledgeMb'
+  | 'callMinutesPerPeriod'
+  | 'agents'
+  | 'phoneNumbers'
 > = {
   seats: 'seats',
   conversations: 'conversationsPerPeriod',
   knowledgeMb: 'knowledgeMb',
   callMinutes: 'callMinutesPerPeriod',
+  agents: 'agents',
+  phoneNumbers: 'phoneNumbers',
 };
 
 export function limitFor(entitlements: Entitlements, key: LimitKey) {
@@ -91,6 +109,8 @@ export function parseEntitlements(json: unknown): Entitlements {
     poweredByLabel: raw.poweredByLabel !== false,
     callMinutesPerPeriod: limit(raw.callMinutesPerPeriod),
     callMinutePeriod: raw.callMinutePeriod === 'total' ? 'total' : 'month',
+    agents: limit(raw.agents),
+    phoneNumbers: limit(raw.phoneNumbers),
   };
   if (typeof raw.overageConversationMinor === 'number') {
     entitlements.overageConversationMinor = raw.overageConversationMinor;
@@ -135,6 +155,8 @@ const OVERRIDE_KEYS = new Set([
   'overageConversationMinor',
   'overageMinuteMinor',
   'voicePerMinuteMinor',
+  'agents',
+  'phoneNumbers',
 ]);
 
 /**
@@ -157,6 +179,8 @@ export function validateOverride(
       'conversationsPerPeriod',
       'knowledgeMb',
       'callMinutesPerPeriod',
+      'agents',
+      'phoneNumbers',
     ].includes(key);
     if (numeric) {
       if (item !== null && !(Number.isInteger(item) && (item as number) >= 0)) {

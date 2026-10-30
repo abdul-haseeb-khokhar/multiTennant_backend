@@ -7,7 +7,7 @@ import {
 } from './plan-catalog.env';
 
 describe('plan catalogue variables', () => {
-  it('are exactly the six documented names, each tied to one plan and one field', () => {
+  it('are exactly the twelve documented names, each tied to one plan and one field', () => {
     expect(PLAN_CATALOG_VARIABLE_NAMES).toEqual([
       'PLAN_STARTER_CALL_MINUTES',
       'PLAN_FREE_CALL_MINUTES',
@@ -15,6 +15,12 @@ describe('plan catalogue variables', () => {
       'PLAN_PRO_OVERAGE_MINUTE_MINOR',
       'PLAN_PRO_PRICE_MONTH_MINOR',
       'PLAN_PRO_PRICE_YEAR_MINOR',
+      'PLAN_STARTER_AGENTS',
+      'PLAN_FREE_AGENTS',
+      'PLAN_PRO_AGENTS',
+      'PLAN_STARTER_PHONE_NUMBERS',
+      'PLAN_FREE_PHONE_NUMBERS',
+      'PLAN_PRO_PHONE_NUMBERS',
     ]);
     expect(
       PLAN_CATALOG_VARIABLES.map((v) => [
@@ -29,6 +35,12 @@ describe('plan catalogue variables', () => {
       ['pro', 'entitlements.overageMinuteMinor', 2_000_000_000],
       ['pro', 'priceMinor', 2_000_000_000],
       ['pro', 'yearlyPriceMinor', 2_000_000_000],
+      ['starter', 'entitlements.agents', 10_000],
+      ['free', 'entitlements.agents', 10_000],
+      ['pro', 'entitlements.agents', 10_000],
+      ['starter', 'entitlements.phoneNumbers', 10_000],
+      ['free', 'entitlements.phoneNumbers', 10_000],
+      ['pro', 'entitlements.phoneNumbers', 10_000],
     ]);
   });
 });
@@ -79,6 +91,19 @@ describe('planCatalogProblems', () => {
       expect(planCatalogProblems({ PLAN_PRO_CALL_MINUTES: bad })).toHaveLength(
         1,
       );
+    },
+  );
+
+  it.each(['PLAN_PRO_AGENTS', 'PLAN_FREE_PHONE_NUMBERS'])(
+    'bounds %s to 0..10000 whole numbers',
+    (name) => {
+      expect(planCatalogProblems({ [name]: '0' })).toEqual([]);
+      expect(planCatalogProblems({ [name]: '10000' })).toEqual([]);
+      for (const bad of ['10001', '-1', '2.5', 'many', '1e2']) {
+        expect(planCatalogProblems({ [name]: bad })).toEqual([
+          expect.stringContaining(name),
+        ]);
+      }
     },
   );
 

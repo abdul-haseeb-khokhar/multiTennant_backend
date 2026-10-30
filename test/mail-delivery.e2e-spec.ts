@@ -155,6 +155,10 @@ describe('Mail delivery (e2e)', () => {
           tenantId: data.tenantId,
         }),
       );
+      prisma.agent.create.mockImplementation(({ data }) =>
+        Promise.resolve({ id: 'agent-1', status: 'active', ...data }),
+      );
+      prisma.agentSettings.create.mockResolvedValue({});
     });
     const signup = () =>
       http().post('/v1/auth/signup').send({

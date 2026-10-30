@@ -134,4 +134,27 @@ describe('DefaultUsageProvider (conversations come from usage_daily)', () => {
       ).resolves.toBe(0);
     });
   });
+
+  describe('agents and phone numbers (L7)', () => {
+    const context = {
+      periodStart: new Date('2026-10-01T00:00:00.000Z'),
+      conversationPeriod: 'month' as const,
+    };
+
+    it('counts the agents of the tenant live, disabled ones included, for that tenant only', async () => {
+      prisma.agent.count.mockResolvedValue(2);
+      await expect(
+        provider.getUsage('tenant-a', 'agents', context),
+      ).resolves.toBe(2);
+      expect(prisma.agent.count).toHaveBeenCalledWith({
+        where: { tenantId: 'tenant-a' },
+      });
+    });
+
+    it('phone numbers are 0 until the table exists (Phase 5D)', async () => {
+      await expect(
+        provider.getUsage('tenant-a', 'phoneNumbers', context),
+      ).resolves.toBe(0);
+    });
+  });
 });

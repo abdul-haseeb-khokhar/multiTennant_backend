@@ -113,9 +113,39 @@ describe('Plan catalogue from environment variables (real database)', () => {
     expect(pro).toMatchObject({
       price_minor: 1_999_900,
       yearly_price_minor: 19_999_000,
-      entitlements: { callMinutesPerPeriod: 300, overageMinuteMinor: 2500 },
+      entitlements: {
+        callMinutesPerPeriod: 300,
+        overageMinuteMinor: 2500,
+        agents: 3,
+        phoneNumbers: 5,
+      },
     });
-    expect(PLAN_CATALOG_VARIABLE_NAMES).toHaveLength(6);
+    expect(PLAN_CATALOG_VARIABLE_NAMES).toHaveLength(12);
+  });
+
+  it('the agent and phone-number variables (L7) change only their own key, and restore cleanly', async () => {
+    const before = await plan('pro');
+    const changes = await sync({
+      PLAN_PRO_AGENTS: '7',
+      PLAN_PRO_PHONE_NUMBERS: '9',
+    });
+    expect(
+      changes.map((c) => `${c.plan} ${c.field} ${c.from}->${c.to}`),
+    ).toEqual([
+      'pro entitlements.agents 3->7',
+      'pro entitlements.phoneNumbers 5->9',
+    ]);
+    const after = await plan('pro');
+    expect(after.entitlements).toEqual({
+      ...before.entitlements,
+      agents: 7,
+      phoneNumbers: 9,
+    });
+    await expect(
+      sync({ PLAN_PRO_AGENTS: '7', PLAN_PRO_PHONE_NUMBERS: '9' }),
+    ).resolves.toEqual([]);
+    await sync({ PLAN_PRO_AGENTS: '3', PLAN_PRO_PHONE_NUMBERS: '5' });
+    expect((await plan('pro')).entitlements).toEqual(before.entitlements);
   });
 
   it('changes the rows for the variables that are SET and nothing else; a second run changes nothing, not even updated_at', async () => {

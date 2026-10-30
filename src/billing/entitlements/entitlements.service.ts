@@ -7,7 +7,13 @@ import { Clock } from '../clock';
 import { overageApplies, overageSettings } from '../overage';
 import { EffectiveSubscription } from '../subscriptions/effective-subscription';
 import { SubscriptionService } from '../subscriptions/subscription.service';
-import { EntitlementKey, LIMIT_KEYS, LimitKey, limitFor } from './entitlements';
+import {
+  CountLimitKey,
+  EntitlementKey,
+  LIMIT_KEYS,
+  LimitKey,
+  limitFor,
+} from './entitlements';
 import { UsageProvider } from './usage.provider';
 
 /** How long a tenant's subscription is cached. It never outlives the next time-based transition. */
@@ -67,7 +73,7 @@ interface CacheEntry {
  *
  * `callMinutes` (L6): `check(tenantId, 'callMinutes')` asks "may one more minute be served?", so a
  * tenant that used exactly its included minutes is refused (or allowed with `overage: true`). The
- * status check of Phase 5B uses it.
+ * status check of Phase 5B-2 uses it.
  */
 @Injectable()
 export class EntitlementsService {
@@ -258,6 +264,40 @@ export class EntitlementsService {
         HttpStatus.FORBIDDEN,
         decision.code,
         decision.reason,
+      );
+    }
+  }
+
+  /**
+   * "May the tenant have one more agent (or phone number)?" (L7), run inside the caller's
+   * transaction. Like the seat check it takes the subscription row lock first, so two simultaneous
+   * creations cannot both claim the last slot. The tenant's current number is counted in the
+   * transaction (disabled agents count). A refusal for the plan's limit carries
+   * `details: { limit, used, max }` next to the usual body; a past-due or suspended tenant gets
+   * the matching code (it cannot grow).
+   */
+  async assertCountAvailable(
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+    key: Extract<CountLimitKey, 'agents' | 'phoneNumbers'>,
+  ): Promise<void> {
+    this.invalidate(tenantId);
+    const subscription = await this.effective(tenantId);
+    await this.subscriptions.lock(tx, tenantId);
+    // Phase 5D: count the tenant's `phone_numbers` rows here; none exist yet.
+    const used =
+      key === 'agents' ? await tx.agent.count({ where: { tenantId } }) : 0;
+    const decision = await this.evaluate(tenantId, subscription, key, 1, {
+      currentUsage: used,
+    });
+    if (!decision.allowed) {
+      throw new ApiException(
+        HttpStatus.FORBIDDEN,
+        decision.code,
+        decision.reason,
+        decision.code === ErrorCode.PLAN_LIMIT_REACHED
+          ? { details: { limit: key, used, max: decision.limit } }
+          : undefined,
       );
     }
   }

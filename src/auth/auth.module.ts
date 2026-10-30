@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtModule, JwtModuleOptions } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
+import { AgentsCoreModule } from '../agents/agents-core.module';
 import { BillingCoreModule } from '../billing/billing-core.module';
 import { RateLimiter } from '../common/throttle/rate-limiter';
 import { MailModule } from '../mail/mail.module';
@@ -40,6 +41,7 @@ import { WorkspaceSelectionTokenService } from './workspace-selection-token.serv
     }),
     MailModule,
     BillingCoreModule,
+    AgentsCoreModule,
     SlugsModule,
   ],
   providers: [

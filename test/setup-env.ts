@@ -1,3 +1,4 @@
+import { PLAN_CATALOG_VARIABLE_NAMES } from '../src/billing/plan-catalog/plan-catalog.env';
 // Environment for e2e tests. Set before AppModule is imported so env validation passes.
 process.env.JWT_SECRET = 'e2e-test-secret-at-least-16-chars';
 process.env.JWT_EXPIRES_IN = '1h';
@@ -28,13 +29,6 @@ process.env.PLATFORM_ADMIN_NOTIFY_EMAIL = 'ops@platform.test';
 
 // Plan catalogue (L6): the PLAN_* variables must not leak in from a developer .env, or the sync
 // would change the plans the tests assert on (an empty value means "not set").
-for (const name of [
-  'PLAN_STARTER_CALL_MINUTES',
-  'PLAN_FREE_CALL_MINUTES',
-  'PLAN_PRO_CALL_MINUTES',
-  'PLAN_PRO_OVERAGE_MINUTE_MINOR',
-  'PLAN_PRO_PRICE_MONTH_MINOR',
-  'PLAN_PRO_PRICE_YEAR_MINOR',
-]) {
+for (const name of PLAN_CATALOG_VARIABLE_NAMES) {
   process.env[name] = '';
 }
