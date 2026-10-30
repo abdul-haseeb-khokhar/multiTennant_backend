@@ -88,8 +88,13 @@ describe('Platform admin routes (e2e)', () => {
     expect(res.body.code).toBe('TENANT_NOT_FOUND');
   });
 
-  describe('PATCH plan and status go through the subscription (the tenant columns are mirrors)', () => {
+  describe('plan and status changes go through the subscription routes (the tenant columns are mirrors; J5)', () => {
     let billing: ReturnType<typeof installBilling>;
+    const post = (path: string, body: object = {}) =>
+      request(app.getHttpServer())
+        .post(`/v1/admin/tenants/t1/subscription/${path}`)
+        .set('Authorization', asAdmin())
+        .send(body);
 
     beforeEach(() => {
       billing = installBilling(prisma, clock, {
@@ -103,13 +108,34 @@ describe('Platform admin routes (e2e)', () => {
       });
     });
 
-    it('suspends the tenant: subscription suspended, mirror written by the billing code, name untouched', async () => {
-      const res = await request(app.getHttpServer())
-        .patch('/v1/admin/tenants/t1')
-        .set('Authorization', asAdmin())
-        .send({ status: 'suspended' })
-        .expect(200);
-      expect(res.body).toMatchObject({ id: 't1' });
+    it.each([
+      ['plan', { plan: 'free' }],
+      ['status', { status: 'suspended' }],
+      [
+        'both, next to a name',
+        { name: 'Renamed', plan: 'free', status: 'active' },
+      ],
+    ])(
+      'PATCH with %s is refused with 400 USE_SUBSCRIPTION_ROUTES and writes nothing',
+      async (_name, body) => {
+        const res = await request(app.getHttpServer())
+          .patch('/v1/admin/tenants/t1')
+          .set('Authorization', asAdmin())
+          .send(body)
+          .expect(400);
+        expect(res.body.code).toBe('USE_SUBSCRIPTION_ROUTES');
+        expect(prisma.tenant.update).not.toHaveBeenCalled();
+        expect(billing.mirrors).toEqual([]);
+        expect(billing.row).toMatchObject({
+          planCode: 'starter',
+          status: 'active',
+        });
+      },
+    );
+
+    it('suspend: subscription suspended, mirror written by the billing code', async () => {
+      const res = await post('suspend', { reason: 'unpaid' }).expect(200);
+      expect(res.body.subscription.status).toBe('suspended');
       expect(billing.row).toMatchObject({
         status: 'suspended',
         statusBeforeSuspension: 'active',
@@ -120,11 +146,7 @@ describe('Platform admin routes (e2e)', () => {
     });
 
     it("suspending a tenant is written to that tenant's audit log with the platform admin as actor (H6)", async () => {
-      await request(app.getHttpServer())
-        .patch('/v1/admin/tenants/t1')
-        .set('Authorization', asAdmin())
-        .send({ status: 'suspended' })
-        .expect(200);
+      await post('suspend').expect(200);
       expect(prisma.auditLog.create).toHaveBeenCalledTimes(1);
       expect(prisma.auditLog.create.mock.calls[0][0].data).toMatchObject({
         tenantId: 't1',
@@ -137,17 +159,9 @@ describe('Platform admin routes (e2e)', () => {
       });
     });
 
-    it('lifting the suspension restores the previous state and audits tenant.reactivated', async () => {
-      await request(app.getHttpServer())
-        .patch('/v1/admin/tenants/t1')
-        .set('Authorization', asAdmin())
-        .send({ status: 'suspended' })
-        .expect(200);
-      await request(app.getHttpServer())
-        .patch('/v1/admin/tenants/t1')
-        .set('Authorization', asAdmin())
-        .send({ status: 'active' })
-        .expect(200);
+    it('unsuspend restores the previous state and audits tenant.reactivated', async () => {
+      await post('suspend').expect(200);
+      await post('unsuspend').expect(200);
       expect(billing.row).toMatchObject({ status: 'active' });
       expect(billing.mirrors.at(-1)).toEqual({
         id: 't1',
@@ -159,12 +173,8 @@ describe('Platform admin routes (e2e)', () => {
       ).toEqual(['tenant.suspended', 'tenant.reactivated']);
     });
 
-    it('a plan in the body is a plan change with no payment and no invoice', async () => {
-      await request(app.getHttpServer())
-        .patch('/v1/admin/tenants/t1')
-        .set('Authorization', asAdmin())
-        .send({ plan: 'free' })
-        .expect(200);
+    it('change-plan is a plan change with no payment and no invoice', async () => {
+      await post('change-plan', { planCode: 'free' }).expect(200);
       expect(billing.row).toMatchObject({
         planCode: 'free',
         currentPeriodEnd: null,
@@ -175,34 +185,23 @@ describe('Platform admin routes (e2e)', () => {
       expect(billing.invoices).toEqual([]);
     });
 
-    it('never writes plan or status straight to the tenant row', async () => {
-      await request(app.getHttpServer())
-        .patch('/v1/admin/tenants/t1')
-        .set('Authorization', asAdmin())
-        .send({ name: 'Renamed', status: 'suspended' })
-        .expect(200);
-      for (const [arg] of prisma.tenant.update.mock.calls) {
-        if (arg.data.name !== undefined) {
-          expect(arg.data).toEqual({
-            name: 'Renamed',
-            defaultLocale: undefined,
-          });
-        }
-      }
-    });
-
     it('409 INVALID_SUBSCRIPTION_STATE when the plan cannot change (suspended tenant)', async () => {
       billing.row = {
         ...billing.row!,
         status: 'suspended',
         statusBeforeSuspension: 'active',
       };
-      const res = await request(app.getHttpServer())
-        .patch('/v1/admin/tenants/t1')
-        .set('Authorization', asAdmin())
-        .send({ plan: 'free' })
-        .expect(409);
+      const res = await post('change-plan', { planCode: 'free' }).expect(409);
       expect(res.body.code).toBe('INVALID_SUBSCRIPTION_STATE');
+    });
+
+    it('suspend and unsuspend are for platform admins only', async () => {
+      for (const path of ['suspend', 'unsuspend']) {
+        await request(app.getHttpServer())
+          .post(`/v1/admin/tenants/t1/subscription/${path}`)
+          .send({})
+          .expect(401);
+      }
     });
   });
 

@@ -10,10 +10,11 @@ Backend core of a multi-tenant **AI customer-support platform**. Businesses and 
 | 1 | Account and team management (invites, password reset, email verification, audit log, i18n) | merged (the mail provider came in Phase 4C) |
 | 2B | Billing foundation (plans, Starter → Free, subscriptions, entitlements, manual payments) | merged (tax wording and training-data consent stay open) |
 | 3 | Gateway and widget entry (API keys, widget sessions, streamed chat, usage, fallbacks) | merged; runs against a **mock engine** only |
-| 3B | Frontend gap-report fixes (password limit, proxy-aware IPs, invite preview, locale validation, OpenAPI fixes) | done on branch `phase-4-human-agent`, not merged yet |
-| 4 | Human takeover (conversation API, claim/reply/release/resolve), engine event receiver, live streams, in-app notifications and billing reminders | done on branch `phase-4-human-agent` against the **mock engine** only, not merged yet |
-| 4B | Pro overage setting (the owner chooses between PKR 15 per extra conversation and a hard stop), overage figures, overage reminder | done on branch `phase-4b-4c` (stacked on Phase 4, not merged yet); the optional spending cap is undecided |
-| 4C | Real email through Resend (test mode), HTML and plain-text templates in English and Urdu, `delivery` in API answers, mail health | done on branch `phase-4b-4c`; verified against a fake Resend server only, real delivery is for you to check (see Email below) |
+| 3B | Frontend gap-report fixes (password limit, proxy-aware IPs, invite preview, locale validation, OpenAPI fixes) | merged (PR #5) |
+| 4 | Human takeover (conversation API, claim/reply/release/resolve), engine event receiver, live streams, in-app notifications and billing reminders | merged (PR #5) against the **mock engine** only |
+| 4B | Pro overage setting (the owner chooses between PKR 15 per extra conversation and a hard stop), overage figures, overage reminder | merged (PR #6); the optional spending cap is undecided |
+| 4C | Real email through Resend (test mode), HTML and plain-text templates in English and Urdu, `delivery` in API answers, mail health | merged (PR #6); real delivery in test mode was confirmed by the owner on 2026-10-11 (see Email below) |
+| 3C | Account decisions: logout that ends all sessions, email-first login with a workspace picker (and login throttling), owner self-service with slug rename and time zone, nobody can disable, demote or delete themselves, upgrade requests to the platform team | built on branch `phase-3c-account`, not yet merged; see the frontend list in [docs/team-alignment.md](docs/team-alignment.md) J1 to J5 |
 | 5 and later | Tenant configuration, WhatsApp and voice, hardening | planned, see [docs/backend-roadmap.md](docs/backend-roadmap.md) |
 
 ## Documentation
@@ -42,6 +43,8 @@ npm run start:dev           # http://localhost:3000, API under /v1, docs at /doc
 ```
 
 For local development MAIL_MODE=link returns invite, reset and verification links in the API responses (the app refuses to start with it when NODE_ENV=production). Emails are only logged until you configure a mail provider (see Email below). The engine defaults to the in-process mock (`ENGINE_MODE=mock`); see [docs/contracts/README.md](docs/contracts/README.md) for a curl walkthrough, or run `npm run widget:walkthrough` / `npm run handoff:walkthrough` against the running server.
+
+Optional: `PLATFORM_ADMIN_NOTIFY_EMAIL` in `.env` is the address that gets an email when a workspace owner asks for a plan upgrade (the request is stored either way). In the Resend test stage `MAIL_REDIRECT_TO` still sends it to the redirect address.
 
 Create a platform admin (needed for `/v1/admin/...`):
 

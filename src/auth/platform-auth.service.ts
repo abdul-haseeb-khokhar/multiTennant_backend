@@ -1,4 +1,4 @@
-import { HttpStatus, Injectable } from '@nestjs/common';
+import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
@@ -12,6 +12,8 @@ const DUMMY_PASSWORD_HASH = bcrypt.hashSync('not-a-real-password', 10);
 
 @Injectable()
 export class PlatformAuthService {
+  private readonly logger = new Logger(PlatformAuthService.name);
+
   constructor(
     private readonly jwtService: JwtService,
     private readonly prisma: PrismaService,
@@ -35,9 +37,22 @@ export class PlatformAuthService {
     }
 
     const access_token = this.jwtService.sign(
-      { sub: admin.id, scope: PLATFORM_SCOPE },
+      { sub: admin.id, scope: PLATFORM_SCOPE, iatMs: Date.now() },
       { expiresIn: this.config.get('PLATFORM_JWT_EXPIRES_IN', '1h') },
     );
     return { access_token };
+  }
+
+  /**
+   * Ends every session of this platform admin (J1): tokens issued before now stop working. The
+   * audit log is per tenant and an admin has none, so the event goes to the application log
+   * (the admin's id only) instead of the `audit_logs` table.
+   */
+  async logout(adminId: string) {
+    await this.prisma.platformAdmin.update({
+      where: { id: adminId },
+      data: { tokensValidAfter: new Date() },
+    });
+    this.logger.log({ message: 'auth.logout', adminId });
   }
 }

@@ -18,6 +18,8 @@ import {
   ChangePlanDto,
   ExtendSubscriptionDto,
   RecordPaymentDto,
+  SuspendTenantDto,
+  UnsuspendTenantDto,
 } from './dto/subscription-commands.dto';
 
 /**
@@ -138,6 +140,37 @@ export class ManualBillingService {
         adminId,
         BillingEventType.SUBSCRIPTION_CANCELED,
         { atPeriodEnd: dto.atPeriodEnd ?? true },
+        dto.idempotencyKey,
+      ),
+    );
+  }
+
+  /**
+   * Suspends the tenant (its staff and widget stop working, B6). This and `unsuspend` are the only
+   * way to do it since `PATCH /admin/tenants/:id` stopped taking `status` (J5).
+   */
+  async suspend(tenantId: string, adminId: string, dto: SuspendTenantDto) {
+    return this.run(
+      tenantId,
+      this.manual.event(
+        tenantId,
+        adminId,
+        BillingEventType.TENANT_SUSPENDED,
+        { reason: dto.reason },
+        dto.idempotencyKey,
+      ),
+    );
+  }
+
+  /** Lifts a suspension: the tenant returns to the state it had before. */
+  async unsuspend(tenantId: string, adminId: string, dto: UnsuspendTenantDto) {
+    return this.run(
+      tenantId,
+      this.manual.event(
+        tenantId,
+        adminId,
+        BillingEventType.TENANT_UNSUSPENDED,
+        {},
         dto.idempotencyKey,
       ),
     );

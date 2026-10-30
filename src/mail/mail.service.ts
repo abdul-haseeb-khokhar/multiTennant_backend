@@ -20,6 +20,8 @@ const LINK_PATH: Record<MailTemplate, { path: string; token: boolean }> = {
   'billing-period-ending': { path: '/billing', token: false },
   'billing-grace-started': { path: '/billing', token: false },
   'billing-downgraded': { path: '/billing', token: false },
+  // Goes to the platform admins: the console's list of upgrade requests (J5).
+  'upgrade-request': { path: '/admin/upgrade-requests', token: false },
 };
 
 export interface MailRequest {

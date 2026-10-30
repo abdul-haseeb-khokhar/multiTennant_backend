@@ -5,6 +5,7 @@ import { PassportModule } from '@nestjs/passport';
 import { BillingCoreModule } from '../billing/billing-core.module';
 import { RateLimiter } from '../common/throttle/rate-limiter';
 import { MailModule } from '../mail/mail.module';
+import { SlugsModule } from '../slugs/slugs.module';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { EmailVerificationController } from './email-verification.controller';
@@ -12,6 +13,7 @@ import { EmailVerificationService } from './email-verification.service';
 import { EmailVerifiedGuard } from './email-verified.guard';
 import { JwtAuthGuard } from './jwt-auth.guard';
 import { JwtStrategy } from './jwt.strategy';
+import { LoginThrottleService } from './login-throttle.service';
 import { PasswordResetController } from './password-reset.controller';
 import { PasswordResetService } from './password-reset.service';
 import { PlatformAuthController } from './platform-auth.controller';
@@ -20,6 +22,9 @@ import { PlatformJwtAuthGuard } from './platform-jwt-auth.guard';
 import { PlatformJwtStrategy } from './platform-jwt.strategy';
 import { RolesGuard } from './roles.guard';
 import { SessionTokenService } from './session-token.service';
+import { SlugAvailabilityService } from './slug-availability.service';
+import { WorkspaceLoginService } from './workspace-login.service';
+import { WorkspaceSelectionTokenService } from './workspace-selection-token.service';
 
 @Module({
   imports: [
@@ -35,6 +40,7 @@ import { SessionTokenService } from './session-token.service';
     }),
     MailModule,
     BillingCoreModule,
+    SlugsModule,
   ],
   providers: [
     AuthService,
@@ -42,6 +48,10 @@ import { SessionTokenService } from './session-token.service';
     SessionTokenService,
     EmailVerificationService,
     PasswordResetService,
+    LoginThrottleService,
+    SlugAvailabilityService,
+    WorkspaceLoginService,
+    WorkspaceSelectionTokenService,
     RateLimiter,
     JwtStrategy,
     PlatformJwtStrategy,

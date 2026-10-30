@@ -14,9 +14,7 @@ import {
   ApiOperation,
   ApiTags,
 } from '@nestjs/swagger';
-import { CurrentPlatformAdmin } from '../auth/current-platform-admin.decorator';
 import { PlatformJwtAuthGuard } from '../auth/platform-jwt-auth.guard';
-import type { PlatformUser } from '../auth/platform-jwt.strategy';
 import { ApiPaginatedResponse } from '../common/pagination/api-paginated-response.decorator';
 import { QueryTenantDto } from './dto/query-tenant.dto';
 import { UpdateTenantDto } from './dto/update-tenant.dto';
@@ -44,14 +42,14 @@ export class TenantsController {
   }
 
   @Patch(':id')
-  @ApiOperation({ summary: 'Rename a tenant, change its plan or suspend it' })
+  @ApiOperation({
+    summary: 'Rename a tenant or change its default language',
+    description:
+      '`plan` and `status` are no longer accepted (400 `USE_SUBSCRIPTION_ROUTES`): use `/admin/tenants/:id/subscription` (`activate`, `change-plan`, `suspend`, `unsuspend`, ...).',
+  })
   @ApiOkResponse({ type: Tenant })
-  update(
-    @Param('id') id: string,
-    @Body() updateTenantDto: UpdateTenantDto,
-    @CurrentPlatformAdmin() admin: PlatformUser,
-  ) {
-    return this.tenantsService.update(id, updateTenantDto, admin.adminId);
+  update(@Param('id') id: string, @Body() updateTenantDto: UpdateTenantDto) {
+    return this.tenantsService.update(id, updateTenantDto);
   }
 
   @Delete(':id')

@@ -28,6 +28,17 @@ export class Tenant {
   @ApiProperty({ example: 'en', description: 'Default language (H7)' })
   defaultLocale: string;
 
+  @ApiProperty({ example: 'Asia/Karachi', description: 'IANA time zone (J7)' })
+  timezone: string;
+
+  @ApiProperty({
+    type: String,
+    format: 'date-time',
+    nullable: true,
+    description: 'When the slug was last renamed by its owner (J3).',
+  })
+  slugChangedAt: Date | null;
+
   @ApiProperty({ type: String, format: 'date-time' })
   createdAt: Date;
 }

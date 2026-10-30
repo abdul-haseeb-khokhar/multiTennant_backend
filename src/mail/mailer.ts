@@ -1,5 +1,5 @@
 /**
- * The emails the backend can send. The first three carry a single-use link (invite, reset,
+ * The emails the backend can send (`upgrade-request` goes to the platform admins, J5). The first three carry a single-use link (invite, reset,
  * verification); the billing ones (I8) carry a plain link to the billing page. Wording lives in the
  * `email.<template>.*` keys of the `notifications` translation namespace.
  */
@@ -9,7 +9,8 @@ export type MailTemplate =
   | 'email-verification'
   | 'billing-period-ending'
   | 'billing-grace-started'
-  | 'billing-downgraded';
+  | 'billing-downgraded'
+  | 'upgrade-request';
 
 /** Values a template may interpolate (plan names, day counts). Never tokens or links. */
 export type MailParams = Record<string, string | number>;

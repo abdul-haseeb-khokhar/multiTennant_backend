@@ -43,6 +43,24 @@ describe('AllExceptionsFilter', () => {
     expect(headers).toHaveBeenCalledWith('Retry-After', '42');
   });
 
+  it('an ApiException with extra fields passes them to the body (suggestions of a taken slug)', () => {
+    const { status, body } = run(
+      new ApiException(HttpStatus.CONFLICT, ErrorCode.SLUG_TAKEN, 'taken', {
+        suggestions: ['acme-2'],
+        nextAllowedAt: '2026-11-01T00:00:00.000Z',
+      }),
+    );
+    expect(status).toBe(409);
+    expect(body).toMatchObject({
+      statusCode: 409,
+      code: 'SLUG_TAKEN',
+      message: 'taken',
+      suggestions: ['acme-2'],
+      nextAllowedAt: '2026-11-01T00:00:00.000Z',
+      requestId: 'req-1',
+    });
+  });
+
   it('other errors set no Retry-After header and carry no retryAfterSeconds', () => {
     const { body } = run(
       new ApiException(HttpStatus.CONFLICT, ErrorCode.SLUG_TAKEN, 'taken'),

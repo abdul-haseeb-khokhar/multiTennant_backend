@@ -196,3 +196,18 @@ export class CancelSubscriptionDto extends IdempotentCommandDto {
   @IsBoolean()
   atPeriodEnd?: boolean;
 }
+
+export class SuspendTenantDto extends IdempotentCommandDto {
+  @ApiPropertyOptional({
+    maxLength: 200,
+    description:
+      'Why (kept in the billing event log, not shown to the tenant).',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  reason?: string;
+}
+
+/** Lifting a suspension takes nothing but the optional idempotency key. */
+export class UnsuspendTenantDto extends IdempotentCommandDto {}

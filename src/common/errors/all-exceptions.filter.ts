@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import type { Request, Response } from 'express';
+import { ApiException } from './api.exception';
 import { ErrorCode } from './error-codes';
 import { RateLimitedException } from './rate-limited.exception';
 
@@ -23,6 +24,8 @@ const CODE_BY_STATUS: Record<number, string> = {
 };
 
 interface ErrorBody {
+  /** Extra fields of an `ApiException` (`suggestions`, `nextAllowedAt`, ...). */
+  [extra: string]: unknown;
   statusCode: number;
   code: string;
   message: string;
@@ -82,7 +85,10 @@ export class AllExceptionsFilter implements ExceptionFilter {
           details: raw.map(String),
         };
       }
+      // An ApiException may carry extra fields (see its `extra` argument); they pass through.
+      const { statusCode: _s, code: _c, message: _m, ...extra } = obj;
       return {
+        ...(exception instanceof ApiException ? extra : {}),
         statusCode: status,
         code: obj.code ?? CODE_BY_STATUS[status] ?? ErrorCode.INTERNAL_ERROR,
         message: typeof raw === 'string' ? raw : exception.message,

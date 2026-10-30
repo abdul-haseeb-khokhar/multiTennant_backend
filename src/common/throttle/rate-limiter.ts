@@ -37,6 +37,28 @@ export class RateLimiter {
     };
   }
 
+  /**
+   * Whether `key` may still act: fewer than `limit` hits so far in its current window. Counts
+   * nothing, so a caller can look first and only count what really failed (login throttling).
+   * `retryAfterSeconds` is the time until the window ends.
+   */
+  peek(key: string, limit: number): RateLimitResult {
+    const now = Date.now();
+    const window = this.windows.get(key);
+    if (!window || window.resetAt <= now) {
+      return { allowed: true, retryAfterSeconds: 0 };
+    }
+    return {
+      allowed: window.count < limit,
+      retryAfterSeconds: Math.max(Math.ceil((window.resetAt - now) / 1000), 1),
+    };
+  }
+
+  /** Forgets the counter of `key` (a successful login clears the failures counted against it). */
+  reset(key: string) {
+    this.windows.delete(key);
+  }
+
   private prune(now: number) {
     // Bound on memory: sweep expired windows once the map is large, and if an attack with many
     // distinct keys still leaves it full, drop the oldest entries (insertion order) so the map

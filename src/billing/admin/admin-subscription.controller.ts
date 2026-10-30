@@ -31,6 +31,8 @@ import {
   ChangePlanDto,
   ExtendSubscriptionDto,
   RecordPaymentDto,
+  SuspendTenantDto,
+  UnsuspendTenantDto,
 } from './dto/subscription-commands.dto';
 import { ManualBillingService } from './manual-billing.service';
 
@@ -134,5 +136,37 @@ export class AdminSubscriptionController {
     @CurrentPlatformAdmin() admin: PlatformUser,
   ) {
     return this.manual.cancel(id, admin.adminId, dto);
+  }
+
+  @Post('suspend')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Suspend the tenant',
+    description:
+      'Its staff are refused (403 TENANT_SUSPENDED) and its widget answers "blocked". Not a plan change: the plan and period stay. Replaces `status: "suspended"` on PATCH /admin/tenants/:id (J5).',
+  })
+  @ApiOkResponse({ type: SubscriptionCommandResult })
+  suspend(
+    @Param('id') id: string,
+    @Body() dto: SuspendTenantDto,
+    @CurrentPlatformAdmin() admin: PlatformUser,
+  ) {
+    return this.manual.suspend(id, admin.adminId, dto);
+  }
+
+  @Post('unsuspend')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Lift a suspension',
+    description:
+      'The tenant returns to the state it had before (a Starter trial returns as the trial, a past-due tenant as past due).',
+  })
+  @ApiOkResponse({ type: SubscriptionCommandResult })
+  unsuspend(
+    @Param('id') id: string,
+    @Body() dto: UnsuspendTenantDto,
+    @CurrentPlatformAdmin() admin: PlatformUser,
+  ) {
+    return this.manual.unsuspend(id, admin.adminId, dto);
   }
 }

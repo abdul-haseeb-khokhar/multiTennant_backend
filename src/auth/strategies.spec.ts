@@ -23,6 +23,7 @@ describe('JwtStrategy (staff tokens)', () => {
     status: 'active',
     emailVerifiedAt: new Date('2026-01-01'),
     passwordChangedAt: null,
+    tokensValidAfter: null,
     ...over,
   });
   const payload = (over: Record<string, unknown> = {}) => ({
@@ -138,6 +139,75 @@ describe('JwtStrategy (staff tokens)', () => {
     });
   });
 
+  describe('tokensValidAfter (logout, J1)', () => {
+    const loggedOutAt = new Date('2026-10-11T10:00:30.500Z');
+    const loggedOutMs = loggedOutAt.getTime();
+    const loggedOutSec = Math.floor(loggedOutMs / 1000);
+
+    beforeEach(() => {
+      prisma.tenantUser.findUnique.mockResolvedValue(
+        dbUser({ tokensValidAfter: loggedOutAt }),
+      );
+    });
+
+    it('rejects a token issued before the logout', async () => {
+      await expect(
+        strategy.validate(
+          payload({ iat: loggedOutSec - 5, iatMs: loggedOutMs - 5000 }),
+        ),
+      ).rejects.toMatchObject({ status: 401 });
+    });
+
+    it('rejects an old token (no iatMs) from an earlier second, and one with no iat at all', async () => {
+      await expect(
+        strategy.validate(payload({ iat: loggedOutSec - 1 })),
+      ).rejects.toMatchObject({ status: 401 });
+      await expect(
+        strategy.validate(payload({ iat: undefined })),
+      ).rejects.toMatchObject({ status: 401 });
+    });
+
+    it('rejects a token from the same second that was issued before the logout', async () => {
+      await expect(
+        strategy.validate(
+          payload({ iat: loggedOutSec, iatMs: loggedOutMs - 300 }),
+        ),
+      ).rejects.toMatchObject({ status: 401 });
+    });
+
+    it('accepts a login in the same second, after the logout (second-resolution iat versus millisecond timestamps)', async () => {
+      await expect(
+        strategy.validate(
+          payload({ iat: loggedOutSec, iatMs: loggedOutMs + 250 }),
+        ),
+      ).resolves.toMatchObject({ userId: 'u1' });
+    });
+
+    it('accepts a later token, and any token when the user never logged out', async () => {
+      await expect(
+        strategy.validate(payload({ iat: loggedOutSec + 3600 })),
+      ).resolves.toMatchObject({ userId: 'u1' });
+      prisma.tenantUser.findUnique.mockResolvedValue(dbUser());
+      await expect(
+        strategy.validate(payload({ iat: 1 })),
+      ).resolves.toMatchObject({ userId: 'u1' });
+    });
+
+    it('applies together with the password change: the later of the two cut-offs wins', async () => {
+      prisma.tenantUser.findUnique.mockResolvedValue(
+        dbUser({
+          passwordChangedAt: new Date(loggedOutMs + 10_000),
+          tokensValidAfter: loggedOutAt,
+        }),
+      );
+      await expect(
+        strategy.validate(
+          payload({ iat: loggedOutSec + 2, iatMs: loggedOutMs + 2000 }),
+        ),
+      ).rejects.toMatchObject({ status: 401 });
+    });
+  });
+
   it('fails fast when JWT_SECRET is not configured', () => {
     expect(
       () => new JwtStrategy(config({}), prisma as unknown as PrismaService),
@@ -169,6 +239,33 @@ describe('PlatformJwtStrategy (platform-admin tokens)', () => {
       strategy.validate({ sub: 'u1', scope: 'tenant' }),
     ).rejects.toMatchObject({ status: 401 });
     expect(prisma.platformAdmin.findUnique).not.toHaveBeenCalled();
+  });
+
+  describe('tokensValidAfter (logout, J1)', () => {
+    const loggedOutAt = new Date('2026-10-11T10:00:30.500Z');
+
+    it('rejects a token issued before the logout and accepts one issued right after it', async () => {
+      prisma.platformAdmin.findUnique.mockResolvedValue({
+        id: 'a1',
+        tokensValidAfter: loggedOutAt,
+      });
+      await expect(
+        strategy.validate({
+          sub: 'a1',
+          scope: 'platform',
+          iat: 1_791_000_000,
+          iatMs: loggedOutAt.getTime() - 1000,
+        }),
+      ).rejects.toMatchObject({ status: 401 });
+      await expect(
+        strategy.validate({
+          sub: 'a1',
+          scope: 'platform',
+          iat: Math.floor(loggedOutAt.getTime() / 1000),
+          iatMs: loggedOutAt.getTime() + 200,
+        }),
+      ).resolves.toEqual({ adminId: 'a1' });
+    });
   });
 
   it('rejects a token whose admin was deleted', async () => {

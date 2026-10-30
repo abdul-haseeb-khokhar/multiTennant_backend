@@ -5,6 +5,7 @@ import { AppModule } from '../../src/app.module';
 import { configureApp, setupSwagger } from '../../src/app.setup';
 import { Clock, FakeClock } from '../../src/billing/clock';
 import { EngineClient } from '../../src/engine/engine-client';
+import { RateLimiter } from '../../src/common/throttle/rate-limiter';
 import { MockEngineClient } from '../../src/engine/mock-engine.client';
 import { PrismaService } from '../../src/prisma/prisma.service';
 import {
@@ -26,6 +27,7 @@ export interface StaffRecord {
   status?: string;
   emailVerified?: boolean;
   passwordChangedAt?: Date | null;
+  tokensValidAfter?: Date | null;
 }
 
 /**
@@ -75,7 +77,9 @@ export async function createTestApp(
       tenantId: user.tenantId,
       role: user.role,
       scope: 'tenant',
-      ...(issuedAt !== undefined && { iat: issuedAt }),
+      // Like the real tokens: milliseconds as well, unless a test pins an explicit `iat` (an old
+      // token that only has whole seconds).
+      ...(issuedAt !== undefined ? { iat: issuedAt } : { iatMs: Date.now() }),
     });
   };
 
@@ -104,12 +108,38 @@ export async function createTestApp(
             emailVerifiedAt:
               user.emailVerified === false ? null : new Date('2026-01-01'),
             passwordChangedAt: user.passwordChangedAt ?? null,
+            tokensValidAfter: user.tokensValidAfter ?? null,
           });
         },
       );
     },
+    /**
+     * Empties every in-memory rate limiter of the app (there is one instance per module that
+     * provides it: login, invites, billing, widget, ...), so a test starts with fresh counters.
+     */
+    resetRateLimits: () => {
+      const container = (
+        app as unknown as {
+          container: {
+            getModules(): Map<
+              string,
+              { providers: Map<unknown, { instance: unknown }> }
+            >;
+          };
+        }
+      ).container;
+      for (const module of container.getModules().values()) {
+        for (const provider of module.providers.values()) {
+          if (provider.instance instanceof RateLimiter) {
+            (
+              provider.instance as unknown as { windows: Map<string, unknown> }
+            ).windows.clear();
+          }
+        }
+      }
+    },
     /** A platform-admin token. */
     platformToken: (adminId = 'admin-1') =>
-      jwt.sign({ sub: adminId, scope: 'platform' }),
+      jwt.sign({ sub: adminId, scope: 'platform', iatMs: Date.now() }),
   };
 }

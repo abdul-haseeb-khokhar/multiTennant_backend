@@ -23,3 +23,5 @@ for (const name of [
 ]) {
   process.env[name] = '';
 }
+// Platform notifications (J5): a fixed test address, whatever a developer keeps in `.env`.
+process.env.PLATFORM_ADMIN_NOTIFY_EMAIL = 'ops@platform.test';

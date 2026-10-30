@@ -1,6 +1,4 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
-import { BillingEventType } from '../billing/billing.constants';
-import { SubscriptionService } from '../billing/subscriptions/subscription.service';
 import { ApiException } from '../common/errors/api.exception';
 import { ErrorCode } from '../common/errors/error-codes';
 import { isPrismaError } from '../common/errors/prisma-errors';
@@ -12,10 +10,7 @@ import { UpdateTenantDto } from './dto/update-tenant.dto';
 /** Cross-tenant operations for platform admins. Tenant creation lives in `AuthService.signup`. */
 @Injectable()
 export class TenantsService {
-  constructor(
-    private readonly prisma: PrismaService,
-    private readonly subscriptions: SubscriptionService,
-  ) {}
+  constructor(private readonly prisma: PrismaService) {}
 
   async findAll(query: QueryTenantDto) {
     const page = resolvePage(query);
@@ -39,33 +34,20 @@ export class TenantsService {
   }
 
   /**
-   * `adminId` is the platform admin making the change. `name` and `defaultLocale` are plain
-   * columns. `status` and `plan` belong to the subscription (the `tenants` columns are only its
-   * mirrors, written by SubscriptionService alone), so they are applied as billing events, which
-   * audit themselves: `suspended` suspends, `active`/`trial` lifts a suspension, `plan` changes
-   * the plan without a payment. Use the /subscription endpoints for anything richer.
+   * A platform admin renames a tenant or changes its default language. `plan` and `status` are no
+   * longer accepted here (J5): they belong to the subscription, so they are refused with 400
+   * `USE_SUBSCRIPTION_ROUTES` instead of being silently dropped. Use `/admin/tenants/:id/subscription`
+   * (`activate`, `change-plan`, `suspend`, `unsuspend`, ...).
    */
-  async update(id: string, dto: UpdateTenantDto, adminId: string) {
-    await this.findOne(id);
-    const actor = { userId: adminId, role: 'platform_admin' };
-    const base = { tenantId: id, source: 'manual' as const, actor };
-
-    // Subscription changes first: they can be refused (409/404) and must not leave a half update.
-    if (dto.status !== undefined) {
-      await this.subscriptions.applyEvent(
-        dto.status === 'suspended'
-          ? { ...base, type: BillingEventType.TENANT_SUSPENDED, payload: {} }
-          : { ...base, type: BillingEventType.TENANT_UNSUSPENDED, payload: {} },
+  async update(id: string, dto: UpdateTenantDto) {
+    if (dto.plan !== undefined || dto.status !== undefined) {
+      throw new ApiException(
+        HttpStatus.BAD_REQUEST,
+        ErrorCode.USE_SUBSCRIPTION_ROUTES,
+        'Plan and status are changed through /admin/tenants/:id/subscription, not through the tenant',
       );
     }
-    if (dto.plan !== undefined) {
-      await this.subscriptions.applyEvent({
-        ...base,
-        type: BillingEventType.PLAN_CHANGED,
-        payload: { planCode: dto.plan },
-      });
-    }
-
+    await this.findOne(id);
     if (dto.name !== undefined || dto.defaultLocale !== undefined) {
       try {
         await this.prisma.tenant.update({

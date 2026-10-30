@@ -5,9 +5,12 @@ import {
   PrismaMock,
   prismaError,
 } from '../../test/utils/prisma-mock';
+import { AuditService } from '../audit/audit.service';
 import { SubscriptionService } from '../billing/subscriptions/subscription.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { SlugService } from '../slugs/slug.service';
 import { AuthService } from './auth.service';
+import { LoginThrottleService } from './login-throttle.service';
 import { EmailVerificationService } from './email-verification.service';
 import { SessionTokenService } from './session-token.service';
 
@@ -16,12 +19,27 @@ jest.mock('bcrypt', () => {
   return { ...actual, compare: jest.fn(actual.compare) };
 });
 
+const IP = '203.0.113.7';
+
 describe('AuthService', () => {
   let service: AuthService;
   let prisma: PrismaMock;
   let sessionTokens: { sign: jest.Mock };
   let verification: { issue: jest.Mock };
   let subscriptions: { createStarter: jest.Mock };
+  let audit: { record: jest.Mock };
+  let throttle: {
+    assertAllowed: jest.Mock;
+    recordFailure: jest.Mock;
+    recordSuccess: jest.Mock;
+  };
+  let slugs: {
+    resolveTenant: jest.Mock;
+    isUsable: jest.Mock;
+    isAvailable: jest.Mock;
+    suggest: jest.Mock;
+    lock: jest.Mock;
+  };
   let passwordHash: string;
 
   beforeAll(() => {
@@ -36,6 +54,19 @@ describe('AuthService', () => {
     sessionTokens = { sign: jest.fn().mockReturnValue('signed.jwt.token') };
     verification = { issue: jest.fn().mockResolvedValue({}) };
     subscriptions = { createStarter: jest.fn().mockResolvedValue({}) };
+    audit = { record: jest.fn().mockResolvedValue(undefined) };
+    throttle = {
+      assertAllowed: jest.fn(),
+      recordFailure: jest.fn(),
+      recordSuccess: jest.fn(),
+    };
+    slugs = {
+      resolveTenant: jest.fn(),
+      isUsable: jest.fn((slug: string) => slug !== 'admin'),
+      isAvailable: jest.fn().mockResolvedValue(true),
+      suggest: jest.fn().mockResolvedValue(['acme-2']),
+      lock: jest.fn().mockResolvedValue(undefined),
+    };
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AuthService,
@@ -43,9 +74,52 @@ describe('AuthService', () => {
         { provide: SessionTokenService, useValue: sessionTokens },
         { provide: EmailVerificationService, useValue: verification },
         { provide: SubscriptionService, useValue: subscriptions },
+        { provide: AuditService, useValue: audit },
+        { provide: LoginThrottleService, useValue: throttle },
+        { provide: SlugService, useValue: slugs },
       ],
     }).compile();
     service = module.get(AuthService);
+  });
+
+  describe('logout (J1)', () => {
+    const actor = {
+      userId: 'u1',
+      tenantId: 't1',
+      role: 'agent' as const,
+      emailVerified: true,
+    };
+
+    it('stamps tokensValidAfter on the caller (scoped to the tenant) and audits it in the same transaction', async () => {
+      prisma.tenantUser.update.mockResolvedValue({});
+      const before = Date.now();
+      await service.logout(actor);
+      expect(prisma.tenantUser.update).toHaveBeenCalledWith({
+        where: { id: 'u1', tenantId: 't1' },
+        data: { tokensValidAfter: expect.any(Date) },
+      });
+      const stamp = prisma.tenantUser.update.mock.calls[0][0].data
+        .tokensValidAfter as Date;
+      expect(stamp.getTime()).toBeGreaterThanOrEqual(before);
+      expect(stamp.getTime()).toBeLessThanOrEqual(Date.now());
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+      expect(audit.record).toHaveBeenCalledWith(
+        {
+          tenantId: 't1',
+          actor: { userId: 'u1', role: 'agent' },
+          action: 'auth.logout',
+          targetType: 'user',
+          targetId: 'u1',
+        },
+        prisma,
+      );
+    });
+
+    it('records no audit entry when the stamp could not be written', async () => {
+      prisma.tenantUser.update.mockRejectedValue(new Error('db down'));
+      await expect(service.logout(actor)).rejects.toThrow('db down');
+      expect(audit.record).not.toHaveBeenCalled();
+    });
   });
 
   describe('login', () => {
@@ -56,7 +130,7 @@ describe('AuthService', () => {
     };
 
     beforeEach(() => {
-      prisma.tenant.findUnique.mockResolvedValue({
+      slugs.resolveTenant.mockResolvedValue({
         id: 't1',
         slug: 'acme',
         status: 'active',
@@ -71,12 +145,11 @@ describe('AuthService', () => {
     });
 
     it('resolves the tenant by slug, scopes the user lookup to it and signs a tenant-scoped token', async () => {
-      await expect(service.login(dto)).resolves.toEqual({
+      await expect(service.login(dto, IP)).resolves.toEqual({
         access_token: 'signed.jwt.token',
       });
-      expect(prisma.tenant.findUnique).toHaveBeenCalledWith({
-        where: { slug: 'acme' },
-      });
+      // The slug resolves through SlugService: the current slug or an alias of the last 30 days.
+      expect(slugs.resolveTenant).toHaveBeenCalledWith('acme');
       expect(prisma.tenantUser.findFirst).toHaveBeenCalledWith({
         where: { tenantId: 't1', email: 'owner@acme.com' },
       });
@@ -84,7 +157,7 @@ describe('AuthService', () => {
     });
 
     it('trims and lower-cases the email before looking the user up', async () => {
-      await service.login({ ...dto, email: '  Owner@ACME.com ' });
+      await service.login({ ...dto, email: '  Owner@ACME.com ' }, IP);
       expect(prisma.tenantUser.findFirst).toHaveBeenCalledWith({
         where: { tenantId: 't1', email: 'owner@acme.com' },
       });
@@ -98,12 +171,12 @@ describe('AuthService', () => {
         status: 'disabled',
         passwordHash,
       });
-      await expect(service.login(dto)).rejects.toMatchObject({
+      await expect(service.login(dto, IP)).rejects.toMatchObject({
         status: 403,
         response: { code: 'ACCOUNT_DISABLED' },
       });
       await expect(
-        service.login({ ...dto, password: 'wrong-pass' }),
+        service.login({ ...dto, password: 'wrong-pass' }, IP),
       ).rejects.toMatchObject({
         status: 401,
         response: { code: 'INVALID_CREDENTIALS' },
@@ -113,20 +186,20 @@ describe('AuthService', () => {
 
     it('fails with INVALID_CREDENTIALS for a wrong password, unknown user and unknown tenant alike', async () => {
       await expect(
-        service.login({ ...dto, password: 'nope-nope' }),
+        service.login({ ...dto, password: 'nope-nope' }, IP),
       ).rejects.toMatchObject({
         status: 401,
         response: { code: 'INVALID_CREDENTIALS' },
       });
 
       prisma.tenantUser.findFirst.mockResolvedValue(null);
-      await expect(service.login(dto)).rejects.toMatchObject({
+      await expect(service.login(dto, IP)).rejects.toMatchObject({
         status: 401,
         response: { code: 'INVALID_CREDENTIALS' },
       });
 
-      prisma.tenant.findUnique.mockResolvedValue(null);
-      await expect(service.login(dto)).rejects.toMatchObject({
+      slugs.resolveTenant.mockResolvedValue(null);
+      await expect(service.login(dto, IP)).rejects.toMatchObject({
         status: 401,
         response: { code: 'INVALID_CREDENTIALS' },
       });
@@ -136,35 +209,80 @@ describe('AuthService', () => {
     it('still compares a password when the tenant is unknown, to keep timing similar', async () => {
       const compare = bcrypt.compare as unknown as jest.Mock;
       compare.mockClear();
-      prisma.tenant.findUnique.mockResolvedValue(null);
-      await expect(service.login(dto)).rejects.toBeDefined();
+      slugs.resolveTenant.mockResolvedValue(null);
+      await expect(service.login(dto, IP)).rejects.toBeDefined();
       expect(compare).toHaveBeenCalledTimes(1);
       expect(prisma.tenantUser.findFirst).not.toHaveBeenCalled();
     });
 
     it('refuses a suspended tenant with 403 TENANT_SUSPENDED, but only after the password checked out', async () => {
-      prisma.tenant.findUnique.mockResolvedValue({
+      slugs.resolveTenant.mockResolvedValue({
         id: 't1',
         slug: 'acme',
         status: 'suspended',
       });
-      await expect(service.login(dto)).rejects.toMatchObject({
+      await expect(service.login(dto, IP)).rejects.toMatchObject({
         status: 403,
         response: { code: 'TENANT_SUSPENDED' },
       });
 
       await expect(
-        service.login({ ...dto, password: 'wrong-pass' }),
+        service.login({ ...dto, password: 'wrong-pass' }, IP),
       ).rejects.toMatchObject({ status: 401 });
     });
 
+    describe('throttling (known issue 1, J2)', () => {
+      it('asks the throttle first, with the normalised email, before any lookup or password check', async () => {
+        await service.login({ ...dto, email: '  Owner@ACME.com ' }, IP);
+        expect(throttle.assertAllowed).toHaveBeenCalledWith(
+          IP,
+          '  Owner@ACME.com ',
+        );
+        expect(throttle.assertAllowed.mock.invocationCallOrder[0]).toBeLessThan(
+          slugs.resolveTenant.mock.invocationCallOrder[0],
+        );
+      });
+
+      it('a blocked request is refused before anything else happens', async () => {
+        throttle.assertAllowed.mockImplementation(() => {
+          throw Object.assign(new Error('slow down'), { status: 429 });
+        });
+        const compare = bcrypt.compare as unknown as jest.Mock;
+        compare.mockClear();
+        await expect(service.login(dto, IP)).rejects.toMatchObject({
+          status: 429,
+        });
+        expect(slugs.resolveTenant).not.toHaveBeenCalled();
+        expect(compare).not.toHaveBeenCalled();
+      });
+
+      it('counts a wrong password, an unknown user and an unknown tenant as failures', async () => {
+        await expect(
+          service.login({ ...dto, password: 'wrong-pass' }, IP),
+        ).rejects.toBeDefined();
+        prisma.tenantUser.findFirst.mockResolvedValue(null);
+        await expect(service.login(dto, IP)).rejects.toBeDefined();
+        slugs.resolveTenant.mockResolvedValue(null);
+        await expect(service.login(dto, IP)).rejects.toBeDefined();
+        expect(throttle.recordFailure).toHaveBeenCalledTimes(3);
+        expect(throttle.recordFailure).toHaveBeenCalledWith(IP, dto.email);
+        expect(throttle.recordSuccess).not.toHaveBeenCalled();
+      });
+
+      it('a correct password clears the failures of that email at that address', async () => {
+        await service.login(dto, IP);
+        expect(throttle.recordSuccess).toHaveBeenCalledWith(IP, dto.email);
+        expect(throttle.recordFailure).not.toHaveBeenCalled();
+      });
+    });
+
     it('refuses a closed account with 403 TENANT_CLOSED', async () => {
-      prisma.tenant.findUnique.mockResolvedValue({
+      slugs.resolveTenant.mockResolvedValue({
         id: 't1',
         slug: 'acme',
         status: 'closed',
       });
-      await expect(service.login(dto)).rejects.toMatchObject({
+      await expect(service.login(dto, IP)).rejects.toMatchObject({
         status: 403,
         response: { code: 'TENANT_CLOSED' },
       });
@@ -269,6 +387,36 @@ describe('AuthService', () => {
       expect(prisma.tenant.create).toHaveBeenCalledWith({
         data: { name: 'Acme Support', slug: 'acme', defaultLocale: 'en' },
       });
+    });
+
+    it('checks availability inside the transaction, behind the slug lock', async () => {
+      await service.signup({ ...dto, tenantSlug: 'acme' });
+      expect(slugs.lock).toHaveBeenCalledWith(prisma);
+      expect(slugs.isAvailable).toHaveBeenCalledWith('acme', undefined, prisma);
+      expect(slugs.lock.mock.invocationCallOrder[0]).toBeLessThan(
+        prisma.tenant.create.mock.invocationCallOrder[0],
+      );
+    });
+
+    it('409 SLUG_TAKEN with suggestions for a slug an earlier tenant gave up less than 90 days ago', async () => {
+      slugs.isAvailable.mockResolvedValue(false);
+      await expect(
+        service.signup({ ...dto, tenantSlug: 'acme' }),
+      ).rejects.toMatchObject({
+        status: 409,
+        response: { code: 'SLUG_TAKEN', suggestions: ['acme-2'] },
+      });
+      expect(prisma.tenant.create).not.toHaveBeenCalled();
+      expect(slugs.suggest).toHaveBeenCalledWith('acme');
+    });
+
+    it('a derived slug that is reserved is retried with a random suffix', async () => {
+      slugs.isAvailable.mockResolvedValueOnce(false);
+      await service.signup(dto);
+      expect(prisma.tenant.create).toHaveBeenCalledTimes(1);
+      expect(prisma.tenant.create.mock.calls[0][0].data.slug).toMatch(
+        /^acme-support-[0-9a-f]{6}$/,
+      );
     });
 
     it('409 SLUG_TAKEN for a taken explicit slug (P2002), without retrying', async () => {

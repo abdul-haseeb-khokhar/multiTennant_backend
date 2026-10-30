@@ -35,6 +35,7 @@ export class MeService {
             plan: true,
             status: true,
             defaultLocale: true,
+            timezone: true,
           },
         },
       },

@@ -17,6 +17,16 @@ export function createPrismaMock() {
       'update',
       'delete',
     ),
+    upgradeRequest: model(
+      'create',
+      'findFirst',
+      'findUnique',
+      'findMany',
+      'count',
+      'update',
+      'updateMany',
+    ),
+    tenantSlugAlias: model('create', 'findFirst', 'findMany', 'deleteMany'),
     tenantUser: model(
       'create',
       'findFirst',
@@ -24,6 +34,7 @@ export function createPrismaMock() {
       'findMany',
       'count',
       'update',
+      'updateMany',
       'delete',
     ),
     endCustomer: model(
@@ -36,7 +47,7 @@ export function createPrismaMock() {
       'upsert',
       'delete',
     ),
-    platformAdmin: model('findUnique'),
+    platformAdmin: model('findUnique', 'update'),
     staffInvite: model(
       'create',
       'findFirst',

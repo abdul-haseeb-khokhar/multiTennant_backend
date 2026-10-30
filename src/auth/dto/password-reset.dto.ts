@@ -1,16 +1,21 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
-import { IsString, MaxLength, MinLength } from 'class-validator';
+import { IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 import { NormalizedEmailProperty } from '../../common/validation/email';
 import { NewPasswordProperty } from '../../common/validation/password-length';
 
 export class PasswordResetRequestDto {
-  @ApiProperty({ example: 'acme', description: 'The tenant slug' })
+  @ApiPropertyOptional({
+    example: 'acme',
+    description:
+      'The tenant slug. Leave it out (J2) and the reset covers EVERY workspace where this email exists: one email, one link, and the new password is set in all of them. With a slug (the original flow) only that workspace is reset.',
+  })
+  @IsOptional()
   @Transform(({ value }) =>
     typeof value === 'string' ? value.trim().toLowerCase() : value,
   )
   @IsString()
-  tenantSlug: string;
+  tenantSlug?: string;
 
   @NormalizedEmailProperty({ example: 'agent@acme.com' })
   email: string;

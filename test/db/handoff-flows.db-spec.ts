@@ -1011,9 +1011,11 @@ describe('Human hand-off flows (real database, mock engine)', () => {
     }
     const setStatus = (token: string, tenantId: string, status: string) =>
       http()
-        .patch(`/v1/admin/tenants/${tenantId}`)
+        .post(
+          `/v1/admin/tenants/${tenantId}/subscription/${status === 'suspended' ? 'suspend' : 'unsuspend'}`,
+        )
         .set('Authorization', bearer(token))
-        .send({ status })
+        .send({})
         .expect(200);
 
     it('a Starter trial comes back as the trial, with its period untouched', async () => {

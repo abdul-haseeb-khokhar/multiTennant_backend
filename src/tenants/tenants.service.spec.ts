@@ -5,27 +5,18 @@ import {
   PrismaMock,
   prismaError,
 } from '../../test/utils/prisma-mock';
-import { SubscriptionService } from '../billing/subscriptions/subscription.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { TenantsService } from './tenants.service';
 
 describe('TenantsService (platform admin)', () => {
   let service: TenantsService;
   let prisma: PrismaMock;
-  let subscriptions: { applyEvent: jest.Mock };
 
   beforeEach(async () => {
     prisma = createPrismaMock();
     mockTransaction(prisma);
-    subscriptions = {
-      applyEvent: jest.fn().mockResolvedValue({ applied: true }),
-    };
     const module: TestingModule = await Test.createTestingModule({
-      providers: [
-        TenantsService,
-        { provide: PrismaService, useValue: prisma },
-        { provide: SubscriptionService, useValue: subscriptions },
-      ],
+      providers: [TenantsService, { provide: PrismaService, useValue: prisma }],
     }).compile();
     service = module.get(TenantsService);
   });
@@ -89,98 +80,59 @@ describe('TenantsService (platform admin)', () => {
       plan: 'free',
       ...over,
     });
-    const actor = { userId: 'admin-1', role: 'platform_admin' };
 
     beforeEach(() => {
       prisma.tenant.findUnique.mockResolvedValue(tenantRow());
       prisma.tenant.update.mockResolvedValue(tenantRow());
     });
 
-    it('writes name and default language itself, and never writes plan or status (those are mirrors owned by the subscription)', async () => {
-      await service.update(
-        '1',
-        { name: 'New', defaultLocale: 'ur', plan: 'pro', status: 'suspended' },
-        'admin-1',
-      );
+    it('writes name and default language', async () => {
+      await service.update('1', { name: 'New', defaultLocale: 'ur' });
       expect(prisma.tenant.update).toHaveBeenCalledWith({
         where: { id: '1' },
         data: { name: 'New', defaultLocale: 'ur' },
       });
     });
 
-    it('turns status=suspended into a tenant.suspended billing event from the platform admin', async () => {
-      await service.update('1', { status: 'suspended' }, 'admin-1');
-      expect(subscriptions.applyEvent).toHaveBeenCalledWith({
-        tenantId: '1',
-        type: 'tenant.suspended',
-        payload: {},
-        source: 'manual',
-        actor,
-      });
-      expect(prisma.tenant.update).not.toHaveBeenCalled();
-    });
-
-    it('turns status=active or trial into tenant.unsuspended', async () => {
-      await service.update('1', { status: 'active' }, 'admin-1');
-      await service.update('1', { status: 'trial' }, 'admin-1');
-      expect(subscriptions.applyEvent).toHaveBeenCalledTimes(2);
-      for (const call of subscriptions.applyEvent.mock.calls) {
-        expect(call[0]).toMatchObject({
-          tenantId: '1',
-          type: 'tenant.unsuspended',
+    it.each([
+      ['plan', { plan: 'pro' }],
+      ['status', { status: 'suspended' }],
+      ['status active', { status: 'active' }],
+      [
+        'plan and status with a name',
+        { name: 'New', plan: 'pro', status: 'trial' },
+      ],
+    ])(
+      'J5: %s is refused with 400 USE_SUBSCRIPTION_ROUTES and nothing at all is written',
+      async (_name, dto) => {
+        await expect(service.update('1', dto)).rejects.toMatchObject({
+          status: 400,
+          response: { code: 'USE_SUBSCRIPTION_ROUTES' },
         });
-      }
-    });
+        expect(prisma.tenant.update).not.toHaveBeenCalled();
+        expect(prisma.tenant.findUnique).not.toHaveBeenCalled();
+      },
+    );
 
-    it('turns plan into a plan.changed event (no payment, no invoice)', async () => {
-      await service.update('1', { plan: 'pro' }, 'admin-1');
-      expect(subscriptions.applyEvent).toHaveBeenCalledWith({
-        tenantId: '1',
-        type: 'plan.changed',
-        payload: { planCode: 'pro' },
-        source: 'manual',
-        actor,
-      });
-    });
-
-    it('applies the subscription change first, so a refused change leaves the name untouched', async () => {
-      subscriptions.applyEvent.mockRejectedValue(
-        Object.assign(new Error('nope'), {
-          status: 409,
-          response: { code: 'INVALID_SUBSCRIPTION_STATE' },
-        }),
-      );
-      await expect(
-        service.update('1', { name: 'New', plan: 'pro' }, 'admin-1'),
-      ).rejects.toMatchObject({ status: 409 });
-      expect(prisma.tenant.update).not.toHaveBeenCalled();
-    });
-
-    it('touches nothing when only unrelated fields are absent', async () => {
-      await service.update('1', {}, 'admin-1');
-      expect(subscriptions.applyEvent).not.toHaveBeenCalled();
+    it('touches nothing when no field is sent', async () => {
+      await service.update('1', {});
       expect(prisma.tenant.update).not.toHaveBeenCalled();
     });
 
     it('404 TENANT_NOT_FOUND for an unknown tenant, and maps a P2025 race to 404', async () => {
       prisma.tenant.findUnique.mockResolvedValueOnce(null);
-      await expect(
-        service.update('x', { name: 'n' }, 'admin-1'),
-      ).rejects.toMatchObject({
+      await expect(service.update('x', { name: 'n' })).rejects.toMatchObject({
         status: 404,
         response: { code: 'TENANT_NOT_FOUND' },
       });
-      expect(subscriptions.applyEvent).not.toHaveBeenCalled();
 
       prisma.tenant.update.mockRejectedValueOnce(prismaError('P2025'));
-      await expect(
-        service.update('x', { name: 'n' }, 'admin-1'),
-      ).rejects.toMatchObject({ status: 404 });
+      await expect(service.update('x', { name: 'n' })).rejects.toMatchObject({
+        status: 404,
+      });
 
       prisma.tenant.update.mockRejectedValueOnce(new Error('boom'));
-      await expect(
-        service.update('x', { name: 'n' }, 'admin-1'),
-      ).rejects.toThrow('boom');
+      await expect(service.update('x', { name: 'n' })).rejects.toThrow('boom');
     });
   });
 

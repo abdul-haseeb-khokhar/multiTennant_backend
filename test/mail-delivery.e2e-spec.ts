@@ -141,6 +141,9 @@ describe('Mail delivery (e2e)', () => {
   describe('POST /v1/auth/signup', () => {
     beforeEach(() => {
       installBilling(prisma, clock, { subscription: null });
+      // No slug is taken or reserved (SlugService looks at both tables, J3).
+      prisma.tenant.findMany.mockResolvedValue([]);
+      prisma.tenantSlugAlias.findMany.mockResolvedValue([]);
       prisma.tenant.create.mockImplementation(({ data }) =>
         Promise.resolve({ id: 't1', plan: 'free', status: 'trial', ...data }),
       );
