@@ -3,6 +3,10 @@ import { EngineClient } from '../engine/engine-client';
 import { MockEngineClient } from '../engine/mock-engine.client';
 import { AgentConfigService } from './agent-config.service';
 import { AgentNumbersCheck, NoPhoneNumbersYet } from './agent-numbers.check';
+import {
+  AgentRequestsCheck,
+  PrismaAgentRequestsCheck,
+} from './agent-requests.check';
 import { AgentProvisioningService } from './agent-provisioning.service';
 import {
   AgentSettingsValidator,
@@ -30,12 +34,15 @@ import {
     },
     // Phase 5D replaces this with a count of the phone_numbers rows.
     { provide: AgentNumbersCheck, useClass: NoPhoneNumbersYet },
+    // Requests exist since Phase 5B-2: an agent that has any cannot be deleted (it can be disabled).
+    { provide: AgentRequestsCheck, useClass: PrismaAgentRequestsCheck },
   ],
   exports: [
     AgentProvisioningService,
     AgentConfigService,
     AgentSettingsValidator,
     AgentNumbersCheck,
+    AgentRequestsCheck,
   ],
 })
 export class AgentsCoreModule implements OnModuleInit {

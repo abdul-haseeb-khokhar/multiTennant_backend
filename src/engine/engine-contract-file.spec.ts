@@ -182,28 +182,36 @@ describe('docs/contracts/engine-internal.openapi.yaml after Phase 5A (what Abdul
   });
 });
 
-/** The one route of backend-internal.openapi.yaml that is built (Phase 5B-1). */
-const BUILT_BACKEND_ROUTE =
-  '/internal/tenants/{tenantId}/agents/{agentId}/config';
+/**
+ * The routes of backend-internal.openapi.yaml that are built: the agent config pull (Phase 5B-1) and
+ * the status check, the requests and the customer upsert (Phase 5B-2). They are built against this
+ * file and the mock engine; the engine owner has NOT confirmed them. Only the number lookup (Phase
+ * 5D, and only as a fallback) is still a draft.
+ */
+const BUILT_BACKEND_ROUTES = [
+  '/internal/tenants/{tenantId}/agents/{agentId}/config',
+  '/internal/tenants/{tenantId}/status',
+  '/internal/tenants/{tenantId}/requests',
+  '/internal/tenants/{tenantId}/requests/{reference}',
+  '/internal/tenants/{tenantId}/requests/{reference}/withdraw',
+  '/internal/tenants/{tenantId}/customers/by-phone',
+];
 
-describe('docs/contracts/backend-internal.openapi.yaml (DRAFT, except the agent config route)', () => {
-  it('describes exactly the routes planned for Phases 5B and 5D plus the built agent config route', () => {
-    expect(Object.keys(backendInternal.paths).sort()).toEqual([
-      '/internal/numbers/{e164}',
-      BUILT_BACKEND_ROUTE,
-      '/internal/tenants/{tenantId}/customers/by-phone',
-      '/internal/tenants/{tenantId}/requests',
-      '/internal/tenants/{tenantId}/requests/{reference}',
-      '/internal/tenants/{tenantId}/requests/{reference}/withdraw',
-      '/internal/tenants/{tenantId}/status',
-    ]);
+describe('docs/contracts/backend-internal.openapi.yaml (built through Phase 5B-2, the number lookup is still a draft)', () => {
+  it('describes exactly the built routes plus the number lookup of Phase 5D', () => {
+    expect(Object.keys(backendInternal.paths).sort()).toEqual(
+      [...BUILT_BACKEND_ROUTES, '/internal/numbers/{e164}'].sort(),
+    );
   });
 
-  it('marks every operation as a draft, so nobody mistakes it for a built route', () => {
+  it('marks every built operation IMPLEMENTED and unconfirmed by the engine owner, and the rest as a draft', () => {
     for (const [path, methods] of Object.entries(backendInternal.paths)) {
       for (const operation of Object.values(methods)) {
-        if (path === BUILT_BACKEND_ROUTE) {
-          expect(operation.summary).toContain('IMPLEMENTED');
+        if (BUILT_BACKEND_ROUTES.includes(path)) {
+          expect([path, operation.summary]).toEqual([
+            path,
+            expect.stringContaining('IMPLEMENTED'),
+          ]);
           continue;
         }
         expect([path, operation.summary]).toEqual([
@@ -214,17 +222,20 @@ describe('docs/contracts/backend-internal.openapi.yaml (DRAFT, except the agent 
     }
   });
 
-  it('is behind the service token and none of these routes exists in the backend yet', () => {
+  it('is behind the service token, and the number lookup is not built', () => {
     expect(backendInternal.security).toEqual([{ internalToken: [] }]);
-    // The built routes outside /v1 are the event receiver and health only (CLAUDE.md rule 12).
-    const builtInternal = ['/internal/events'];
-    for (const path of Object.keys(backendInternal.paths)) {
-      expect(builtInternal).not.toContain(path);
-    }
     // ... and the number lookup is not needed under backend-first routing (L8)
     expect(
       backendInternal.paths['/internal/numbers/{e164}'].get.summary,
     ).toContain('fallback');
+  });
+
+  it('every built route is outside /v1 in configureApp (a drift check against the real prefix exclusions)', () => {
+    const setup = readFileSync(join(__dirname, '..', 'app.setup.ts'), 'utf8');
+    for (const path of BUILT_BACKEND_ROUTES) {
+      const express = path.replace(/\{(\w+)\}/g, ':$1').replace(/^\//, '');
+      expect([path, setup.includes(`'${express}'`)]).toEqual([path, true]);
+    }
   });
 
   it('answers the status check with the reasons Abdullah named', () => {
@@ -276,7 +287,7 @@ describe('docs/contracts/backend-events.openapi.yaml', () => {
     );
   });
 
-  it('documents the voice-first events that are acknowledged until Phases 5B and 5E', () => {
+  it('documents the voice-first events (record.* are handled since Phase 5B-2, usage.call_minutes is acknowledged until 5E)', () => {
     const types = Object.keys(events.components.schemas.Events.properties);
     expect(types).toEqual(
       expect.arrayContaining([
@@ -288,11 +299,7 @@ describe('docs/contracts/backend-events.openapi.yaml', () => {
   });
 
   it('lists exactly the types the receiver acknowledges without handling', () => {
-    expect([...PENDING_EVENT_TYPES].sort()).toEqual([
-      'record.submitted',
-      'record.updated',
-      'usage.call_minutes',
-    ]);
+    expect([...PENDING_EVENT_TYPES].sort()).toEqual(['usage.call_minutes']);
   });
 });
 

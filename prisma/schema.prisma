@@ -51,6 +51,7 @@ model Tenant {
   slugAliases          TenantSlugAlias[]
   upgradeRequests      UpgradeRequest[]
   agents               Agent[]
+  customerRequests     CustomerRequest[]
 
   @@map("tenants")
   @@schema("tenant_core")
@@ -104,13 +105,73 @@ model Agent {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
 
-  tenant   Tenant          @relation(fields: [tenantId], references: [id])
+  tenant   Tenant            @relation(fields: [tenantId], references: [id])
   settings AgentSettings[]
+  requests CustomerRequest[]
 
   // Target of the composite key of agent_settings: a settings row cannot name another tenant's agent.
   @@unique([tenantId, id])
   @@index([tenantId, createdAt])
   @@map("agents")
+  @@schema("tenant_core")
+}
+
+/// A request the AI took on a call (appointment or call-back) that staff confirm (Phase 5B-2, his B4,
+/// L1: the AI never books anything, it saves a request as 'requested' and a person moves it on). The
+/// engine's word for it is a "record". Created through the engine's internal routes, idempotent by
+/// (tenant, submission_key); the reference (for example AP-4K7Q2) is drawn by the ENGINE and unique per
+/// tenant. The status workflow is the pure state machine in src/requests/state-machine.ts, applied with
+/// conditional updates (WHERE status = the one that was read). `details` is the engine's document
+/// (what the agent collected): opaque to the backend, size-capped, personal data, never logged and never
+/// copied into the audit log or a notification. The composite keys make it impossible to name another
+/// tenant's agent or customer. RESTRICT everywhere: an agent that has requests cannot be deleted.
+model CustomerRequest {
+  id              String    @id @default(uuid())
+  tenantId        String    @map("tenant_id")
+  agentId         String    @map("agent_id")
+  // Null only for a customer erased later (F1); the engine always names one.
+  endCustomerId   String?   @map("end_customer_id")
+  reference       String
+  // 'appointment' | 'callback' (CHECK in the migration)
+  type            String
+  // 'requested' | 'confirmed' | 'done' | 'cancelled' (CHECK in the migration)
+  status          String    @default("requested")
+  submissionKey   String    @map("submission_key")
+  // How it entered the backend: 'call' now (CHECK in the migration); room for staff-entered ones.
+  source          String    @default("call")
+  // The engine's channel: 'voice' | 'chat' (CHECK in the migration)
+  channel         String    @default("voice")
+  // The engine's id of the call or conversation, as text.
+  conversationId  String?   @map("conversation_id")
+  language        String?
+  summary         String    @default("")
+  // The business's wall-clock time as a string, on purpose (the engine does no time-zone arithmetic).
+  scheduledLocal  String?   @map("scheduled_local")
+  timezone        String?
+  // The version of the agent settings the engine used for the call.
+  configVersion   Int?      @map("config_version")
+  details         Json      @default("{}")
+  // The latest note a staff member left with a status change (<= 500 characters). Personal data.
+  note            String?
+  // 'caller' (withdrawn through the engine) | 'staff'; set while the status is 'cancelled'.
+  cancelledBy     String?   @map("cancelled_by")
+  statusChangedAt DateTime? @map("status_changed_at")
+  // The staff user who made the last status change; null for the engine. Plain column, no foreign key.
+  statusChangedBy String?   @map("status_changed_by")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @default(now()) @updatedAt @map("updated_at")
+
+  tenant   Tenant       @relation(fields: [tenantId], references: [id])
+  agent    Agent        @relation(fields: [tenantId, agentId], references: [tenantId, id], onDelete: Restrict)
+  customer EndCustomer? @relation(fields: [tenantId, endCustomerId], references: [tenantId, id], onDelete: Restrict)
+
+  @@unique([tenantId, reference])
+  @@unique([tenantId, submissionKey])
+  @@index([tenantId, status, createdAt(sort: Desc)])
+  @@index([tenantId, agentId, createdAt(sort: Desc)])
+  @@index([tenantId, createdAt(sort: Desc)])
+  @@index([tenantId, endCustomerId])
+  @@map("requests")
   @@schema("tenant_core")
 }
 
@@ -197,8 +258,11 @@ model EndCustomer {
 
   tenant               Tenant                @relation(fields: [tenantId], references: [id])
   gatewayConversations GatewayConversation[]
+  requests             CustomerRequest[]
 
   @@unique([tenantId, externalId])
+  // Target of the composite key of requests: a request cannot name another tenant's customer.
+  @@unique([tenantId, id])
   @@map("end_customers")
   @@schema("tenant_core")
 }

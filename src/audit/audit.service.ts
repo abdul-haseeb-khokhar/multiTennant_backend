@@ -51,6 +51,11 @@ export const AuditAction = {
   AGENT_ENABLED: 'agent.enabled',
   AGENT_DELETED: 'agent.deleted',
   AGENT_SETTINGS_UPDATED: 'agent.settings_updated',
+  // requests (Phase 5B-2); ids and statuses only, never what the caller said or their contact details
+  REQUEST_CONFIRMED: 'request.confirmed',
+  REQUEST_DONE: 'request.done',
+  REQUEST_CANCELLED: 'request.cancelled',
+  REQUEST_REOPENED: 'request.reopened',
 } as const;
 
 export interface AuditEntry {

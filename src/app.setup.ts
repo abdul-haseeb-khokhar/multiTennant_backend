@@ -29,14 +29,19 @@ export function configureApp(app: INestApplication) {
   }
   app.use(requestContextMiddleware);
   // The only routes outside /v1: the unversioned health checks, and the service-to-service routes
-  // the AI engine calls on the private network (the event receiver, the agent settings pull); they
-  // are not part of the public API.
+  // the AI engine calls on the private network (the event receiver, the agent settings pull, the
+  // tenant status check, the requests and the customer upsert); they are not part of the public API.
   app.setGlobalPrefix(API_PREFIX, {
     exclude: [
       'health',
       'health/ready',
       'internal/events',
       'internal/tenants/:tenantId/agents/:agentId/config',
+      'internal/tenants/:tenantId/status',
+      'internal/tenants/:tenantId/requests',
+      'internal/tenants/:tenantId/requests/:reference',
+      'internal/tenants/:tenantId/requests/:reference/withdraw',
+      'internal/tenants/:tenantId/customers/by-phone',
     ],
   });
   app.useGlobalPipes(

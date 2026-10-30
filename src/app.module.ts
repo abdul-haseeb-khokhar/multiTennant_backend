@@ -21,6 +21,8 @@ import { MailModule } from './mail/mail.module';
 import { MeModule } from './me/me.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { RealtimeModule } from './realtime/realtime.module';
+import { RequestsModule } from './requests/requests.module';
+import { TenantStatusModule } from './tenant-status/tenant-status.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { TenantUsersModule } from './tenant-users/tenant-users.module';
 import { TenantsModule } from './tenants/tenants.module';
@@ -46,6 +48,8 @@ import { WidgetModule } from './widget/widget.module';
     DataUseModule,
     ApiKeysModule,
     AgentsModule,
+    TenantStatusModule,
+    RequestsModule,
     UsageModule,
     RealtimeModule,
     NotificationsModule,

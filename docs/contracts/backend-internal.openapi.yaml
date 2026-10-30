@@ -9,13 +9,15 @@ info:
     [backend-events.openapi.yaml](backend-events.openapi.yaml) (`record.submitted`,
     `record.updated`, `usage.call_minutes` are acknowledged and ignored until the phases below).
 
-    **Status: DRAFT written in Phase 5A (2026-10-21), extended in Phase 5B-1 (2026-10-28).
-    Only `GET /internal/tenants/{tenantId}/agents/{agentId}/config` is implemented (Phase 5B-1);
-    everything else in this file is a proposal that is not built, and Abdullah has not seen the file.**
-    Every operation that is not built says so in its summary. The shapes
-    follow what he described in his handoff (his names where known: `serviceable`, `reason`,
-    `submissionKey`, `locked`) and are PROPOSALS where he did not say. Build order: the status
-    check and the requests in Phase 5B, the number lookup in Phase 5D. Questions for him are
+    **Status: drafted in Phase 5A (2026-10-21), extended in Phase 5B-1 (2026-10-28), BUILT in
+    Phases 5B-1 and 5B-2 (2026-10-29): the agent config pull, the tenant status check, the
+    requests (create, update, withdraw) and the customer upsert exist in the backend and are
+    tested against the mock engine and real Postgres. Abdullah has NOT seen this file and has
+    confirmed none of the shapes (Q28 to Q31), so every route below is a PROPOSAL that is built,
+    not an agreed contract.** Only the number lookup (`/internal/numbers/{e164}`, Phase 5D, and
+    only as a fallback) is still a draft and says so in its summary. The shapes follow what he
+    described in his handoff (his names where known: `serviceable`, `reason`, `submissionKey`,
+    `locked`, `record.submitted`) and are PROPOSALS where he did not say. Questions for him are
     collected under "Open questions" at the end of this description.
 
     Rules (the same as the engine contract, reversed):
@@ -44,7 +46,11 @@ info:
       they never travel in the ticket, a URL or through the provider. The signing is Phase 5D.
     * Commands carry `Idempotency-Key` where a repeat must be harmless; a request has its own
       `submissionKey` for that.
-    * Errors have the shape `{ statusCode, code, message }`; codes are stable upper-case words.
+    * Errors have the shape `{ statusCode, code, message }` (plus `requestId`, and `details` where
+      noted); codes are stable upper-case words. **This differs from the engine's own errors, which
+      are `{ "error": "<translated message>" }`**: the engine reads the status code and `code`, it
+      does not show `message` to a caller. His word `locked` is the code `REQUEST_LOCKED` here and
+      `reference_taken` is `REQUEST_REFERENCE_TAKEN`.
     * Ids are text UUIDs, timestamps ISO-8601 UTC, money integer minor units.
     * Nothing here carries what a caller said beyond the fields named below, and the backend never
       logs request details or phone numbers.
@@ -52,15 +58,34 @@ info:
     **Open questions for the engine owner (all proposals):**
     1. The status check: which `reason` should a tenant get whose plan has no voice (only possible
        through an override) or whose payment is overdue (`past_due` keeps serving within the plan,
-       like chat, I5)? Today: `quota_exceeded` only when the call minutes are used up and the owner
-       turned overage off; `unpaid` is reserved and never answered.
-    2. The status is cached by the engine for about 60 seconds, so calls that start inside that
-       window can overshoot the minute allowance a little. Acceptable (a soft limit)?
-    3. The request body: is `data` free-form JSON validated by the engine only? Should
-       `record.submitted` carry the details, or ids and the reference only (proposed)?
-    4. A caller's phone number as the identity of an end customer (privacy rules, F1): the backend
-       proposes to store it as the end customer's external id and show staff the number.
+       like chat, I5)? Built: `quota_exceeded` when the call minutes are used up and overage does
+       not apply (no price, the owner switched it off, or a payment is overdue) and also for a
+       plan without voice; `unpaid` is reserved and never answered.
+    2. The status check carries `Cache-Control: private, max-age=10`: the backend asks the engine to
+       keep an answer at most **10 seconds** (decided 2026-10-29 on our side; your handoff says
+       about 60). Calls that start inside the window can overshoot the minute allowance a little.
+       Acceptable (a soft limit)? And does the engine really call it per call, not per request?
+    3. The request body: is `data` free-form JSON validated by the engine only (built: any JSON
+       object up to 16 KB, stored as is)? Does `record.submitted` carry ids and the reference only
+       (built: the backend ignores any other field in it and reads the request it already holds)?
+    4. A caller's phone number as the identity of an end customer (privacy rules, F1): built as the
+       end customer's external id (`phone_+9230...`), shown to every staff role, never logged and
+       never put in a URL.
     5. Who calls the daily retention purge route of the engine (the backend's hourly job, proposed).
+    6. **New in 5B-2.** The status check answers two reasons that are not in your list:
+       `agent_disabled` and `unknown_agent` (an agent id that does not exist OR belongs to another
+       tenant: one answer, so nothing about other tenants leaks), and a field `overage` (true when
+       the call is served only because extra minutes are billed). Will the engine accept them (an
+       unknown reason treated as "not serviceable, 403")?
+    7. **New in 5B-2.** Reference collisions: the engine draws the reference (`AP-4K7Q2`), the
+       backend answers 409 `REQUEST_REFERENCE_TAKEN` when another request of the tenant already has
+       it, and the engine draws another and repeats the create with the SAME `submissionKey`. Is that
+       how the engine will behave? (At 5 characters from a 31-letter alphabet a collision is about
+       1 in 28 million per pair.)
+    8. **New in 5B-2.** Which is the source of truth for a request: these routes (built) or the
+       `record.*` events? Built: the routes. The events `record.submitted` and `record.updated` only
+       make sure the team was told (notification and live update are once-only), never create or
+       change a request.
 tags:
   - name: agents
   - name: status
@@ -170,29 +195,41 @@ paths:
   /internal/tenants/{tenantId}/status:
     get:
       tags: [status]
-      summary: '[DRAFT, not implemented] May this business and agent be served right now? (his B1; Phase 5B-2)'
+      summary: 'May this business and agent be served right now? (his B1; IMPLEMENTED in Phase 5B-2, not confirmed by the engine owner)'
       description: |
-        Asked by the engine before it serves a call for the tenant; it caches the answer for about
-        60 seconds and answers its own caller accordingly (403, 429 or 404). Derived by the backend
-        from the EFFECTIVE subscription and the entitlements (`callMinutes`, `voice`):
+        **Built (Phase 5B-2).** Asked by the engine before it serves a call for the tenant; the
+        engine may keep the answer for at most **10 seconds** (`Cache-Control: private,
+        max-age=10`) and answers its own caller accordingly (403, 429 or 404). The route itself
+        answers LIVE (it skips the backend's own 30 s entitlements cache). Derived by the backend
+        ONLY from the EFFECTIVE subscription (`SubscriptionService.getEffective`, through
+        `EntitlementsService`) and the agent's status; the denormalised `tenants.plan` and
+        `tenants.status` columns are never read to decide (CLAUDE.md rule 10).
 
-        | `reason` | When |
-        |---|---|
-        | `suspended` | the tenant is suspended or its account is closed |
-        | `quota_exceeded` | the plan's included call minutes are used up and overage does not apply (the plan has no minute price, the owner switched overage off, or a payment is overdue) |
-        | `unpaid` | reserved; never answered today (a tenant that does not renew falls to Free after the grace period, and during the grace period it is served within its plan) |
-        | `unknown_tenant` | no such tenant |
-        | `null` | `serviceable: true` |
+        * `Authorization: Bearer <INTERNAL_API_TOKEN>` (401 wrong or missing, 503 not configured).
+        * Rate limited per tenant (1,200 a minute): 429 with `Retry-After`.
+        * Nothing personal is read or logged.
 
-        `?agentId=` names the agent the call is for (default: the tenant's default agent). A
-        disabled agent is `serviceable: false` with `reason: agent_disabled`; an unknown agent, or
-        one that belongs to another tenant, is `reason: unknown_agent` (the same answer for both).
+        The checks run in this order and the first that fails decides:
 
-        An unknown tenant is a normal **200** with `reason: unknown_tenant` and `plan: null`: the
-        answer leaks nothing about other tenants and the engine can cache it like any other.
-        Whether one more minute may be served is `EntitlementsService.check(tenant, 'callMinutes')`:
-        a tenant that used exactly its included minutes is no longer serviceable (or, with overage
-        on, still serviceable and billed per extra minute).
+        | order | `reason` | When |
+        |---|---|---|
+        | 1 | `unknown_tenant` | no such tenant (`plan: null`, `agentId: null`) |
+        | 2 | `suspended` | the tenant is suspended or its account is closed (also, impossibly, a tenant without a subscription: fail closed) |
+        | 3 | `unknown_agent` | `?agentId=` names an agent that does not exist **or belongs to another tenant** (one answer for both; `agentId: null`), or the tenant has no default agent |
+        | 4 | `agent_disabled` | the agent exists in this tenant and is `disabled` (`agentId` is echoed) |
+        | 5 | `quota_exceeded` | the plan has no voice, or the included call minutes are used up and overage does not apply (the plan has no minute price, the owner switched overage off, or a payment is overdue) |
+        | - | `unpaid` | **reserved; never answered today** (a tenant that does not renew is served within its plan during the grace period and falls to Free afterwards) |
+        | - | `null` | `serviceable: true` |
+
+        `?agentId=` names the agent the call is for (default: the tenant's default agent, which is
+        returned in `agentId`). Whether one more minute may be served is
+        `EntitlementsService.check(tenant, 'callMinutes')`: a tenant that used exactly its included
+        minutes is no longer serviceable; with overage on (Pro, the owner's switch) it is still
+        serviceable and `overage: true` says the extra minutes are billed. A `past_due` tenant is
+        served within its allowance and never into overage.
+
+        An unknown tenant is a normal **200** with `reason: unknown_tenant`: the answer leaks
+        nothing about other tenants and the engine can cache it like any other.
       parameters:
         - $ref: '#/components/parameters/TenantId'
         - $ref: '#/components/parameters/AgentIdQuery'
@@ -200,37 +237,66 @@ paths:
       responses:
         '200':
           description: The answer (also for an unknown tenant)
+          headers:
+            Cache-Control: { schema: { type: string, example: 'private, max-age=10' } }
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/TenantStatus'
               examples:
                 serviceable:
-                  value: { tenantId: 2f1c0c3e-6f0b-4a35-9c58-1f3c8c1d0001, agentId: 8c1d2b6e-0a3f-4c44-8d5e-5d0f7a9b0002, serviceable: true, reason: null, plan: pro }
+                  value: { tenantId: 2f1c0c3e-6f0b-4a35-9c58-1f3c8c1d0001, agentId: 8c1d2b6e-0a3f-4c44-8d5e-5d0f7a9b0002, serviceable: true, reason: null, plan: pro, overage: false }
+                servedAsOverage:
+                  value: { tenantId: 2f1c0c3e-6f0b-4a35-9c58-1f3c8c1d0001, agentId: 8c1d2b6e-0a3f-4c44-8d5e-5d0f7a9b0002, serviceable: true, reason: null, plan: pro, overage: true }
                 outOfMinutes:
-                  value: { tenantId: 2f1c0c3e-6f0b-4a35-9c58-1f3c8c1d0001, agentId: 8c1d2b6e-0a3f-4c44-8d5e-5d0f7a9b0002, serviceable: false, reason: quota_exceeded, plan: free }
-                unknown:
-                  value: { tenantId: 00000000-0000-0000-0000-000000000000, agentId: null, serviceable: false, reason: unknown_tenant, plan: null }
+                  value: { tenantId: 2f1c0c3e-6f0b-4a35-9c58-1f3c8c1d0001, agentId: 8c1d2b6e-0a3f-4c44-8d5e-5d0f7a9b0002, serviceable: false, reason: quota_exceeded, plan: free, overage: false }
+                unknownAgent:
+                  value: { tenantId: 2f1c0c3e-6f0b-4a35-9c58-1f3c8c1d0001, agentId: null, serviceable: false, reason: unknown_agent, plan: pro, overage: false }
+                unknownTenant:
+                  value: { tenantId: 00000000-0000-0000-0000-000000000000, agentId: null, serviceable: false, reason: unknown_tenant, plan: null, overage: false }
         '401':
+          $ref: '#/components/responses/Error'
+        '429':
           $ref: '#/components/responses/Error'
         '503':
           $ref: '#/components/responses/Error'
   /internal/tenants/{tenantId}/requests:
     post:
       tags: [requests]
-      summary: '[DRAFT, not implemented] Save a request the agent took on a call (his B4; Phase 5B-2)'
+      summary: 'Save a request the agent took on a call (his B4; IMPLEMENTED in Phase 5B-2, not confirmed by the engine owner)'
       description: |
-        The AI never books, confirms or cancels anything (L1): it saves a request as `requested`
-        and a person confirms it on the staff screen.
+        **Built (Phase 5B-2).** The AI never books, confirms or cancels anything (L1): it saves a
+        request as `requested` and a person confirms it on the staff screen. This route is the
+        SOURCE OF TRUTH for a request (it carries the details); the `record.*` events only
+        confirm to the backend that the team was told.
 
         Idempotent by `(tenant, submissionKey)`: the first call answers **201** with `created: true`;
-        a repeat with the same key answers **200** with `created: false` and the stored request
-        (nothing is changed or duplicated). The `reference` (for example `AP-4K7Q2`) is made by the
-        engine, unique per tenant; a different request with a reference that is taken answers 409
-        `REQUEST_REFERENCE_TAKEN`. The caller is an end customer of this tenant (`endCustomerId`
-        from the customer upsert); one of another tenant answers 404 `CUSTOMER_NOT_FOUND`.
-        On success the backend creates a notification for the team and a live update on the
-        dashboard stream (Phase 5B); the engine also sends `record.submitted`.
+        a repeat with the same key answers **200** with `created: false` and the SAME stored request
+        (nothing is changed, duplicated or announced again; the body of the repeat is ignored,
+        so a retry may even carry a different reference). Ten parallel saves of one call are one
+        request.
+
+        The `reference` (for example `AP-4K7Q2`, trimmed and stored upper case, 3 to 40 letters,
+        digits and hyphens) is drawn by the engine and unique per tenant. If another request of the
+        tenant already has it the answer is **409 `REQUEST_REFERENCE_TAKEN`**: the engine draws
+        another reference and repeats the call with the SAME `submissionKey`.
+
+        The tenant is the path segment. The agent (default: the tenant's default agent) and the
+        caller (`endCustomerId` from the customer upsert) are looked up UNDER the tenant: an
+        agent of another tenant answers 404 `AGENT_NOT_FOUND`, a customer of another tenant 404
+        `CUSTOMER_NOT_FOUND`, an unknown tenant 404 `TENANT_NOT_FOUND` (the composite foreign keys
+        in the database are the second lock). A request is accepted for a DISABLED agent and for a
+        tenant that has since been suspended: the call already happened and the caller's request is
+        not thrown away.
+
+        `data` is any JSON object up to 16 KB, stored as is (the engine owns the field list; the
+        backend does not interpret it). The request's contents are personal data: the backend
+        never logs them, and its notification, live update and audit entries carry ids only.
+
+        On success, in one transaction, every ACTIVE staff member of the tenant gets a
+        `request.submitted` notification (once per request), and after the commit the dashboard
+        stream gets a `request.created` event (ids and status only). Rate limited per tenant (600
+        a minute): 429.
       parameters:
         - $ref: '#/components/parameters/TenantId'
         - $ref: '#/components/parameters/RequestId'
@@ -263,13 +329,18 @@ paths:
   /internal/tenants/{tenantId}/requests/{reference}:
     patch:
       tags: [requests]
-      summary: '[DRAFT, not implemented] Change the details of a saved request (his B4; Phase 5B)'
+      summary: 'Change the details of a saved request (his B4; IMPLEMENTED in Phase 5B-2, not confirmed by the engine owner)'
       description: |
-        The engine may change a request ONLY while it is `requested`. Once a person confirmed,
-        completed or cancelled it, the answer is **409 `REQUEST_LOCKED`** (his word: `locked`) and
-        nothing changes. The check is a conditional update on the status that was read, so a
-        confirmation that happens at the same moment wins and the engine's update is refused.
-        Emits `record.updated` (from the engine's side). A reference of another tenant answers 404.
+        **Built (Phase 5B-2).** The engine may change a request ONLY while it is `requested`. Once
+        a person confirmed, completed or cancelled it, the answer is **409 `REQUEST_LOCKED`** (his
+        word: `locked`) and nothing changes. The write is a conditional update (`WHERE tenant AND
+        reference AND status = 'requested'`), so a confirmation that happens at the same moment
+        wins and the engine's update is refused; it is never both. `summary` and
+        `scheduledLocal` replace the stored values, `data` replaces the stored document (like
+        his own update); at least one of the three is required (400 otherwise). The reference is
+        looked up under the tenant and in any letter case; an unknown one, or one of another
+        tenant, answers 404 `REQUEST_NOT_FOUND`. `Idempotency-Key` is accepted and ignored (the
+        same update twice has the same result). The engine also sends `record.updated`.
       parameters:
         - $ref: '#/components/parameters/TenantId'
         - $ref: '#/components/parameters/RequestId'
@@ -297,11 +368,13 @@ paths:
   /internal/tenants/{tenantId}/requests/{reference}/withdraw:
     post:
       tags: [requests]
-      summary: '[DRAFT, not implemented] The caller withdraws a request (his B4; Phase 5B)'
+      summary: 'The caller withdraws a request (his B4; IMPLEMENTED in Phase 5B-2, not confirmed by the engine owner)'
       description: |
-        Moves a `requested` request to `cancelled` (marked as withdrawn by the caller). Same
-        locking rule as the update: 409 `REQUEST_LOCKED` once a person acted on it. Repeating it on
-        a request that is already withdrawn answers 200 (idempotent).
+        **Built (Phase 5B-2).** Moves a `requested` request to `cancelled`, marked as cancelled by
+        the caller (the staff screen shows who cancelled it). Same locking rule as the update: 409
+        `REQUEST_LOCKED` once a person acted on it, including a request that a person cancelled.
+        Repeating it on a request that the caller already withdrew answers 200 (idempotent). The
+        optional `reason` is kept as the request's note for the staff screen.
       parameters:
         - $ref: '#/components/parameters/TenantId'
         - $ref: '#/components/parameters/RequestId'
@@ -332,13 +405,17 @@ paths:
   /internal/tenants/{tenantId}/customers/by-phone:
     put:
       tags: [customers]
-      summary: '[DRAFT, not implemented] Find or create the end customer for a caller number (his B4, L4.3; Phase 5B-2)'
+      summary: 'Find or create the end customer for a caller number (his B4, L4.3; IMPLEMENTED in Phase 5B-2, not confirmed by the engine owner)'
       description: |
-        The backend creates end customers (L4.3, M3.7). Upsert by the caller's number within the
-        tenant: the first call creates the customer, later calls return the same `endCustomerId`.
-        The name and language are only filled in when the customer has none yet. The number is
-        personal data (F1): it is stored as the customer's external id, shown to staff, never
-        logged and never put in a URL (it is in the body).
+        **Built (Phase 5B-2).** The backend creates end customers (L4.3, M3.7). Upsert by the
+        caller's number within the tenant: the first call creates the customer (**201**), later
+        calls return the same `endCustomerId` (**200**; ten parallel calls for one number make one
+        customer). The name and language are only filled in when the customer has none yet (a staff
+        member may have corrected them). The number must be E.164 (anything else is 400 and is not
+        echoed back). It is personal data (F1): it is stored as the customer's external id
+        (`phone_+923001234567`), shown to every staff role, never logged and never put in a URL (it
+        is in the body). An agent of another tenant answers 404 `AGENT_NOT_FOUND`, an unknown
+        tenant 404 `TENANT_NOT_FOUND`. The same number in two tenants is two customers.
       parameters:
         - $ref: '#/components/parameters/TenantId'
         - $ref: '#/components/parameters/RequestId'
@@ -480,13 +557,13 @@ components:
         message: { type: string }
     TenantStatus:
       type: object
-      required: [tenantId, agentId, serviceable, reason, plan]
+      required: [tenantId, agentId, serviceable, reason, plan, overage]
       properties:
         tenantId: { type: string }
         agentId:
           type: string
           nullable: true
-          description: The agent the answer is about (the default agent when none was asked for); null for an unknown tenant.
+          description: The agent the answer is about (the default agent when none was asked for); null for an unknown tenant, an unknown agent and a suspended tenant.
         serviceable: { type: boolean }
         reason:
           type: string
@@ -497,6 +574,9 @@ components:
           nullable: true
           example: pro
           description: The plan code (`starter`, `free`, `pro`, `enterprise`); null for an unknown tenant.
+        overage:
+          type: boolean
+          description: true when the call is served only because the included call minutes are used up and extra minutes are billed (Pro with the owner's switch on). Always false when not serviceable.
     AgentConfig:
       type: object
       required: [tenantId, agentId, version, status, config]
@@ -564,7 +644,11 @@ components:
       enum: [appointment, callback]
     RequestStatus:
       type: string
-      description: The workflow of Phase 5B. The engine only ever creates `requested`.
+      description: |
+        The workflow of Phase 5B-2 (src/requests/state-machine.ts). The engine only ever creates
+        `requested` and may only cancel (withdraw) while it is `requested`. People move it:
+        requested -> confirmed | cancelled; confirmed -> done | cancelled | requested; done ->
+        confirmed; cancelled -> requested.
       enum: [requested, confirmed, done, cancelled]
     CreateRequest:
       type: object
@@ -592,7 +676,7 @@ components:
           description: The engine's id of the call.
         channel:
           type: string
-          enum: [voice, widget]
+          enum: [voice, chat]
           default: voice
         language:
           type: string
@@ -644,8 +728,8 @@ components:
         created: { type: boolean }
     ErrorCodes:
       description: |
-        Proposed stable codes of this file (documentation only). They need en and ur texts in the
-        backend when they are built.
+        Stable codes of this file (documentation only). All except `NUMBER_NOT_FOUND` (Phase 5D) are
+        built and have en and ur texts in the backend.
       type: string
       enum:
         - TENANT_NOT_FOUND
@@ -658,3 +742,5 @@ components:
         - NUMBER_NOT_FOUND
         - VALIDATION_ERROR
         - UNAUTHORIZED
+        - SERVICE_UNAVAILABLE
+        - TOO_MANY_REQUESTS

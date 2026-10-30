@@ -96,7 +96,7 @@ export class AgentsController {
   @ApiOperation({
     summary: 'Delete an agent and its settings (owner/admin)',
     description:
-      'The default agent cannot be deleted (409 CANNOT_DELETE_DEFAULT_AGENT) and neither can an agent that has phone numbers (409 AGENT_HAS_NUMBERS). The deleted agent is returned.',
+      'The default agent cannot be deleted (409 CANNOT_DELETE_DEFAULT_AGENT) and neither can an agent that has phone numbers (409 AGENT_HAS_NUMBERS) or requests from callers (409 AGENT_HAS_REQUESTS; disable it instead). The deleted agent is returned.',
   })
   @ApiOkResponse({ type: Agent })
   remove(

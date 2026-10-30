@@ -9,6 +9,11 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { StaffEvent, WidgetEvent } from '../realtime/realtime.constants';
 import {
+  createdKey,
+  requestSubmittedNotification,
+  updatedKey,
+} from '../requests/request-views';
+import {
   RealtimeHub,
   staffChannel,
   widgetChannel,
@@ -42,20 +47,18 @@ export const HANDLED_EVENT_TYPES = [
   'message.created',
   'usage.recorded',
   'action.proposed',
+  'record.submitted',
+  'record.updated',
 ] as const;
 
 /**
- * Voice-first event types the engine reports (M2.4, L4) that no phase handles yet: a request was
- * saved or changed (`record.submitted`, `record.updated`: Phase 5B-2) and a call ended
+ * Voice-first event types the engine reports (M2.4, L4) that no phase handles yet: a call ended
  * (`usage.call_minutes`: Phase 5E). They are ACKNOWLEDGED (200 `ignored`) after the usual tenant
  * check, and not written to the inbox, so that once the phase that handles them exists a re-delivery
- * of the engine outbox is still processed instead of being answered `duplicate`.
+ * of the engine outbox is still processed instead of being answered `duplicate`. (`record.submitted`
+ * and `record.updated` are handled since Phase 5B-2.)
  */
-export const PENDING_EVENT_TYPES = [
-  'record.submitted',
-  'record.updated',
-  'usage.call_minutes',
-] as const;
+export const PENDING_EVENT_TYPES = ['usage.call_minutes'] as const;
 
 /**
  * Applies the events the AI engine pushes (D5): usage into `usage_daily`, notifications for the
@@ -343,9 +346,106 @@ export class EngineEventsService {
         return;
       }
 
+      // A request was saved or changed (Phase 5B-2). The request ITSELF arrives through the internal
+      // routes (the source of truth: they carry the details and answer `locked` / `reference_taken`);
+      // the event only carries ids and the reference. So it never creates or changes a request: it looks
+      // the request up under the envelope's tenant and makes sure the team has been told (notification
+      // and live update are once-only through their dedupe keys, so the route and the event never
+      // double up). An event for a request this backend does not have is processed without effect.
+      case 'record.submitted': {
+        const request = await this.requestOf(tx, tenantId, data);
+        if (!request) return;
+        const recipients = await this.notifications.activeStaffIds(
+          tenantId,
+          undefined,
+          tx,
+        );
+        effects.notified.push(
+          ...(await this.notifications.create(
+            tenantId,
+            recipients,
+            requestSubmittedNotification({
+              id: request.id,
+              reference: request.reference,
+              type: request.type,
+              agentId: request.agentId,
+              agentName: request.agent.name,
+            }),
+            tx,
+          )),
+        );
+        effects.staff.push({
+          event: StaffEvent.REQUEST_CREATED,
+          data: {
+            requestId: request.id,
+            status: request.status,
+            agentId: request.agentId,
+          },
+          dedupeKey: createdKey(request.id),
+        });
+        return;
+      }
+
+      case 'record.updated': {
+        const request = await this.requestOf(tx, tenantId, data);
+        if (!request) return;
+        effects.staff.push({
+          event: StaffEvent.REQUEST_UPDATED,
+          data: { requestId: request.id, status: request.status },
+          dedupeKey: updatedKey(request.id, request.updatedAt),
+        });
+        return;
+      }
+
       default:
         effects.known = false;
     }
+  }
+
+  /**
+   * The request an event is about: by the backend's id (`recordId`, which the engine got from the
+   * create call) or else by the reference, ALWAYS under the envelope's tenant. Nothing else about the
+   * request is read (no details, no customer).
+   */
+  private async requestOf(
+    tx: Tx,
+    tenantId: string,
+    data: Record<string, unknown>,
+  ) {
+    const recordId = optionalString(data, 'recordId');
+    const reference = optionalString(data, 'reference');
+    if (!recordId && !reference) {
+      throw new ApiException(
+        HttpStatus.BAD_REQUEST,
+        ErrorCode.VALIDATION_ERROR,
+        'data.recordId or data.reference is required',
+      );
+    }
+    const request = await tx.customerRequest.findFirst({
+      where: {
+        tenantId,
+        ...(recordId
+          ? { id: recordId }
+          : { reference: reference?.toUpperCase() }),
+      },
+      select: {
+        id: true,
+        reference: true,
+        type: true,
+        status: true,
+        agentId: true,
+        updatedAt: true,
+        agent: { select: { name: true } },
+      },
+    });
+    if (!request) {
+      // Type and tenant only (the reference is what the caller was told; keep it out of the log).
+      this.logger.warn({
+        message: 'Engine event about a request this backend does not have',
+        tenantId,
+      });
+    }
+    return request;
   }
 
   private status(

@@ -2,10 +2,12 @@ import {
   DEFAULT_MOCK_OPTIONS,
   MOCK_COMMANDS,
   MockAgentUnavailableError,
+  MockCallRefusedError,
   MockEngineClient,
 } from './mock-engine.client';
 import {
   AgentConfigSource,
+  EngineBackendPort,
   EngineEventEnvelope,
   EngineStreamEvent,
 } from './engine.types';
@@ -136,7 +138,7 @@ describe('MockEngineClient: a simulated phone call', () => {
       expect(engine.inspectRecord('tenant-b', a.reference)).toBeNull();
       expect(engine.recordsOf('tenant-b')).toEqual([]);
       expect(
-        engine.simulateRequestUpdate('tenant-b', a.reference, {
+        await engine.simulateRequestUpdate('tenant-b', a.reference, {
           summary: 'x',
         }),
       ).toBe(false);
@@ -159,7 +161,7 @@ describe('MockEngineClient: a simulated phone call', () => {
     it('changes the details, counts the revision and emits record.updated with ids and the reference only', async () => {
       const call = await engine.simulateCall('tenant-a');
       expect(
-        engine.simulateRequestUpdate('tenant-a', call.reference, {
+        await engine.simulateRequestUpdate('tenant-a', call.reference, {
           summary: 'Moved to Friday',
           scheduledLocal: '2026-11-06 10:00',
         }),
@@ -190,7 +192,7 @@ describe('MockEngineClient: a simulated phone call', () => {
       await engine.flushEvents();
       const before = delivered.length;
       expect(
-        engine.simulateRequestUpdate('tenant-a', call.reference, {
+        await engine.simulateRequestUpdate('tenant-a', call.reference, {
           summary: 'too late',
         }),
       ).toBe(false);
@@ -202,8 +204,10 @@ describe('MockEngineClient: a simulated phone call', () => {
       });
     });
 
-    it('an unknown reference is simply false', () => {
-      expect(engine.simulateRequestUpdate('tenant-a', 'AP-NOPE0')).toBe(false);
+    it('an unknown reference is simply false', async () => {
+      expect(await engine.simulateRequestUpdate('tenant-a', 'AP-NOPE0')).toBe(
+        false,
+      );
     });
   });
 
@@ -386,6 +390,217 @@ describe('MockEngineClient: a simulated phone call', () => {
         .join('');
       expect(reply).toContain('not available');
       expect(engine.recordsOf('tenant-a')).toHaveLength(1);
+    });
+  });
+
+  /**
+   * With the backend connected (Phase 5B-2) a simulated call asks the status check first, upserts
+   * the caller by phone, saves its request in the BACKEND under a reference the engine draws, and
+   * lets the backend say `locked`.
+   */
+  describe('with the backend connected', () => {
+    let backend: jest.Mocked<EngineBackendPort>;
+    beforeEach(() => {
+      backend = {
+        tenantStatus: jest.fn().mockResolvedValue({
+          serviceable: true,
+          reason: null,
+          agentId: 'ag1',
+          plan: 'pro',
+          overage: false,
+        }),
+        upsertCustomer: jest
+          .fn()
+          .mockResolvedValue({ endCustomerId: 'ec-9', created: true }),
+        createRequest: jest.fn().mockImplementation(async (_t, input) => ({
+          ok: true,
+          id: 'backend-id',
+          agentId: 'ag1',
+          reference: input.reference,
+          created: true,
+        })),
+        updateRequest: jest.fn().mockResolvedValue({ ok: true }),
+        withdrawRequest: jest.fn().mockResolvedValue({ ok: true }),
+      };
+      engine.setBackend(backend);
+    });
+
+    it('asks the status check first, then the customer, then saves the request in the backend', async () => {
+      const call = await engine.simulateCall('tenant-a', {
+        agentId: 'ag1',
+        phone: '+923001234567',
+        name: 'Ahmed',
+      });
+      expect(backend.tenantStatus).toHaveBeenCalledWith('tenant-a', 'ag1');
+      expect(backend.upsertCustomer).toHaveBeenCalledWith('tenant-a', {
+        agentId: 'ag1',
+        phone: '+923001234567',
+        name: 'Ahmed',
+      });
+      expect(backend.createRequest).toHaveBeenCalledTimes(1);
+      expect(backend.createRequest.mock.calls[0][1]).toMatchObject({
+        endCustomerId: 'ec-9',
+        type: 'appointment',
+        channel: 'voice',
+        submissionKey: expect.stringMatching(/^mock-call-/),
+        reference: expect.stringMatching(REFERENCE),
+      });
+      // The ids in the events and the result are the BACKEND's.
+      expect(call).toMatchObject({
+        recordId: 'backend-id',
+        endCustomerId: 'ec-9',
+        agentId: 'ag1',
+      });
+      await engine.flushEvents();
+      expect(
+        delivered.find((e) => e.type === 'record.submitted')?.data,
+      ).toMatchObject({ recordId: 'backend-id', agentId: 'ag1' });
+    });
+
+    it('invents a made-up caller number when none is given (never a real one)', async () => {
+      await engine.simulateCall('tenant-a');
+      expect(backend.upsertCustomer.mock.calls[0][1].phone).toMatch(
+        /^\+92\d{10}$/,
+      );
+    });
+
+    it.each([
+      ['suspended'],
+      ['quota_exceeded'],
+      ['unknown_agent'],
+      ['unknown_tenant'],
+    ])(
+      'a call the status check refuses (%s) is not taken: nothing is saved or emitted',
+      async (reason) => {
+        backend.tenantStatus.mockResolvedValue({
+          serviceable: false,
+          reason,
+          agentId: null,
+          plan: 'pro',
+          overage: false,
+        });
+        await expect(engine.simulateCall('tenant-a')).rejects.toMatchObject({
+          name: 'MockCallRefusedError',
+          reason,
+        });
+        expect(backend.upsertCustomer).not.toHaveBeenCalled();
+        expect(backend.createRequest).not.toHaveBeenCalled();
+        await engine.flushEvents();
+        expect(delivered).toEqual([]);
+      },
+    );
+
+    it('a disabled agent is reported the old way', async () => {
+      backend.tenantStatus.mockResolvedValue({
+        serviceable: false,
+        reason: 'agent_disabled',
+        agentId: 'ag1',
+        plan: 'pro',
+        overage: false,
+      });
+      await expect(engine.simulateCall('tenant-a')).rejects.toBeInstanceOf(
+        MockAgentUnavailableError,
+      );
+    });
+
+    it('draws another reference when the backend says it is taken', async () => {
+      backend.createRequest
+        .mockResolvedValueOnce({ ok: false, reason: 'reference_taken' })
+        .mockResolvedValueOnce({ ok: false, reason: 'reference_taken' })
+        .mockImplementation(async (_t, input) => ({
+          ok: true,
+          id: 'backend-id',
+          agentId: 'ag1',
+          reference: input.reference,
+          created: true,
+        }));
+      const call = await engine.simulateCall('tenant-a');
+      expect(backend.createRequest).toHaveBeenCalledTimes(3);
+      const references = backend.createRequest.mock.calls.map(
+        (c) => c[1].reference,
+      );
+      expect(new Set(references).size).toBe(3);
+      expect(call.reference).toBe(references[2]);
+    });
+
+    it("an update is the backend's call: locked means false and nothing is emitted", async () => {
+      const call = await engine.simulateCall('tenant-a');
+      await engine.flushEvents();
+      const before = delivered.length;
+      backend.updateRequest.mockResolvedValue({ ok: false, reason: 'locked' });
+      await expect(
+        engine.simulateRequestUpdate('tenant-a', call.reference, {
+          summary: 'too late',
+        }),
+      ).resolves.toBe(false);
+      await engine.flushEvents();
+      expect(delivered).toHaveLength(before);
+      expect(engine.inspectRecord('tenant-a', call.reference)?.revision).toBe(
+        0,
+      );
+      backend.updateRequest.mockResolvedValue({ ok: true });
+      await expect(
+        engine.simulateRequestUpdate('tenant-a', call.reference, {
+          summary: 'fine',
+        }),
+      ).resolves.toBe(true);
+      expect(backend.updateRequest).toHaveBeenLastCalledWith(
+        'tenant-a',
+        call.reference,
+        { summary: 'fine' },
+      );
+    });
+
+    it('withdrawing goes through the backend and emits record.updated with the status cancelled', async () => {
+      const call = await engine.simulateCall('tenant-a');
+      await expect(
+        engine.simulateRequestWithdraw('tenant-a', call.reference),
+      ).resolves.toBe(true);
+      expect(backend.withdrawRequest).toHaveBeenCalledWith(
+        'tenant-a',
+        call.reference,
+      );
+      await engine.flushEvents();
+      expect(
+        delivered.filter((e) => e.type === 'record.updated').pop()?.data,
+      ).toMatchObject({ status: 'cancelled', reference: call.reference });
+      backend.withdrawRequest.mockResolvedValue({
+        ok: false,
+        reason: 'locked',
+      });
+      const second = await engine.simulateCall('tenant-a');
+      await expect(
+        engine.simulateRequestWithdraw('tenant-a', second.reference),
+      ).resolves.toBe(false);
+    });
+
+    it('/call in a chat says why when the business cannot be served', async () => {
+      backend.tenantStatus.mockResolvedValue({
+        serviceable: false,
+        reason: 'suspended',
+        agentId: null,
+        plan: 'pro',
+        overage: false,
+      });
+      const { id } = await engine.createConversation(ctx, {
+        channel: 'widget',
+        endCustomerId: 'ec-1',
+      });
+      const events = await collect(
+        engine.sendMessage(ctx, id, { content: '/call' }),
+      );
+      const reply = events
+        .filter((e) => e.type === 'token')
+        .map((e) => (e as { text: string }).text)
+        .join('');
+      expect(reply).toContain('suspended');
+      expect(backend.createRequest).not.toHaveBeenCalled();
+    });
+
+    it('a refusal is a MockCallRefusedError carrying the reason', () => {
+      const error = new MockCallRefusedError('quota_exceeded');
+      expect(error.reason).toBe('quota_exceeded');
+      expect(error.message).toContain('quota_exceeded');
     });
   });
 });

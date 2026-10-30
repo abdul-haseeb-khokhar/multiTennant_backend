@@ -190,6 +190,78 @@ export type AgentConfigSource = (
   agentId?: string,
 ) => Promise<PulledAgentSettings | null>;
 
+/** The tenant status check the engine asks before it serves a call (his B1; the same service as `GET /internal/tenants/{tenantId}/status`). */
+export interface BackendTenantStatus {
+  serviceable: boolean;
+  /** `suspended`, `unpaid`, `quota_exceeded`, `agent_disabled`, `unknown_agent`, `unknown_tenant` or null. */
+  reason: string | null;
+  agentId: string | null;
+  plan: string | null;
+  overage: boolean;
+}
+
+export interface BackendRequestInput {
+  agentId?: string;
+  reference: string;
+  type: 'appointment' | 'callback';
+  submissionKey: string;
+  endCustomerId: string;
+  conversationId?: string;
+  channel?: 'voice' | 'chat';
+  language?: string;
+  summary: string;
+  scheduledLocal?: string | null;
+  timezone?: string;
+  configVersion?: number;
+  data?: Record<string, unknown>;
+}
+
+/**
+ * The routes the real engine calls on the backend (status check, customer upsert, requests), as the
+ * mock engine uses them: the backend hands the mock these functions, which run the very same services
+ * as the internal routes, so a simulated call proves what the routes do (Phase 5B-2). Without it the
+ * mock keeps its own in-memory requests only (unit tests of the mock itself).
+ */
+export interface EngineBackendPort {
+  tenantStatus(
+    tenantId: string,
+    agentId?: string,
+  ): Promise<BackendTenantStatus>;
+  upsertCustomer(
+    tenantId: string,
+    input: { agentId?: string; phone: string; name?: string; locale?: string },
+  ): Promise<{ endCustomerId: string; created: boolean }>;
+  /** `reference_taken`: the engine draws another reference and tries again. */
+  createRequest(
+    tenantId: string,
+    input: BackendRequestInput,
+  ): Promise<
+    | {
+        ok: true;
+        id: string;
+        agentId: string;
+        reference: string;
+        created: boolean;
+      }
+    | { ok: false; reason: 'reference_taken' }
+  >;
+  /** `locked`: a person acted on it, the engine may not change it any more. */
+  updateRequest(
+    tenantId: string,
+    reference: string,
+    change: {
+      summary?: string;
+      scheduledLocal?: string | null;
+      data?: Record<string, unknown>;
+    },
+  ): Promise<{ ok: true } | { ok: false; reason: 'locked' | 'not_found' }>;
+  withdrawRequest(
+    tenantId: string,
+    reference: string,
+    reason?: string,
+  ): Promise<{ ok: true } | { ok: false; reason: 'locked' | 'not_found' }>;
+}
+
 /** Events of the message stream, in the order the engine sends them. */
 export type EngineStreamEvent =
   | {
